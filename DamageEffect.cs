@@ -10,6 +10,11 @@ public class DamageEffect : IAbilityEffect
     public enum DamageType { Physical, Magical }
     public DamageType damageType = DamageType.Physical;
 
+    // --- NEW SETTING ---
+    [Tooltip("If true, adds the caster's global damage multiplier (e.g. Strength) to this attack. Uncheck this for small attacks like Punch.")]
+    public bool useGlobalStatBonus = true;
+    // -------------------
+
     [Header("Stat Scaling")]
     [Tooltip("How the damage scales with the caster's primary stats.")]
     public List<StatScaling> scalingFactors;
@@ -19,7 +24,7 @@ public class DamageEffect : IAbilityEffect
     public float splashRadius = 3f;
     public float splashDamageMultiplier = 0.5f;
 
-    // --- NEW: Static buffer for Non-Allocating Physics ---
+    // Static buffer for Non-Allocating Physics
     private static Collider[] _splashBuffer = new Collider[50];
 
     public void Apply(GameObject caster, GameObject target)
@@ -43,13 +48,25 @@ public class DamageEffect : IAbilityEffect
                 {
                     equipment.equippedItems.TryGetValue(EquipmentType.RightHand, out ItemStack rightHandItem);
                     equipment.equippedItems.TryGetValue(EquipmentType.LeftHand, out ItemStack leftHandItem);
+
                     ItemWeaponStats weaponStats = null;
-                    if (rightHandItem != null && rightHandItem.itemData.stats is ItemWeaponStats) weaponStats = rightHandItem.itemData.stats as ItemWeaponStats;
-                    else if (leftHandItem != null && leftHandItem.itemData.stats is ItemWeaponStats) weaponStats = leftHandItem.itemData.stats as ItemWeaponStats;
-                    if (weaponStats != null) weaponDamage = Random.Range(weaponStats.DamageLow, weaponStats.DamageHigh + 1);
+                    if (rightHandItem != null && rightHandItem.itemData.stats is ItemWeaponStats)
+                        weaponStats = rightHandItem.itemData.stats as ItemWeaponStats;
+                    else if (leftHandItem != null && leftHandItem.itemData.stats is ItemWeaponStats)
+                        weaponStats = leftHandItem.itemData.stats as ItemWeaponStats;
+
+                    if (weaponStats != null)
+                        weaponDamage = Random.Range(weaponStats.DamageLow, weaponStats.DamageHigh + 1);
                 }
+
                 finalDamage = weaponDamage;
-                finalDamage += casterStats.secondaryStats.damageMultiplier;
+
+                // --- FIX: Only add global stats if the box is checked ---
+                if (useGlobalStatBonus)
+                {
+                    finalDamage += casterStats.secondaryStats.damageMultiplier;
+                }
+                // --------------------------------------------------------
 
                 foreach (var scaling in scalingFactors)
                 {
@@ -70,7 +87,9 @@ public class DamageEffect : IAbilityEffect
             }
             else // Magical Damage
             {
+                // Magic usually uses percentage multipliers, so we keep this logic standard
                 finalDamage *= (1 + casterStats.secondaryStats.magicAttackDamage / 100f);
+
                 foreach (var scaling in scalingFactors)
                 {
                     switch (scaling.stat)
@@ -94,7 +113,6 @@ public class DamageEffect : IAbilityEffect
 
         if (isSplash)
         {
-            // --- MODIFIED: Use Non-Allocating version ---
             int hitCount = Physics.OverlapSphereNonAlloc(target.transform.position, splashRadius, _splashBuffer);
             int splashDamage = Mathf.FloorToInt(finalDamageInt * splashDamageMultiplier);
 

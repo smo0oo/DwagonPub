@@ -20,6 +20,12 @@ public class DomeWaveSpawner : MonoBehaviour
     [Header("Spawn Locations")]
     public List<Transform> spawnPoints;
 
+    [Header("Siege Settings")]
+    [Tooltip("Overrides the enemy's detection range so they can see the dome from spawn.")]
+    public float siegeDetectionRadius = 500f;
+    [Tooltip("Overrides the enemy's leash distance so they don't retreat.")]
+    public float siegeLeashRadius = 500f;
+
     private int currentWaveIndex = 0;
     private int enemiesAlive = 0;
 
@@ -30,7 +36,6 @@ public class DomeWaveSpawner : MonoBehaviour
     {
         if (waves.Count == 0) return;
 
-        // --- FIX: Prevent double-start ---
         if (isSpawning) return;
         isSpawning = true;
 
@@ -55,12 +60,14 @@ public class DomeWaveSpawner : MonoBehaviour
             // 1. Spawn Enemies
             for (int i = 0; i < currentWave.count; i++)
             {
-                SpawnEnemy(currentWave.enemyPrefabs[Random.Range(0, currentWave.enemyPrefabs.Count)]);
+                if (currentWave.enemyPrefabs.Count > 0)
+                {
+                    SpawnEnemy(currentWave.enemyPrefabs[Random.Range(0, currentWave.enemyPrefabs.Count)]);
+                }
                 yield return new WaitForSeconds(currentWave.spawnInterval);
             }
 
             // 2. Wait for clear
-            // We wait until all enemies are dead.
             yield return new WaitUntil(() => enemiesAlive <= 0);
 
             Debug.Log($"{currentWave.waveName} Cleared!");
@@ -87,8 +94,24 @@ public class DomeWaveSpawner : MonoBehaviour
 
         Transform spawnPoint = spawnPoints[Random.Range(0, spawnPoints.Count)];
 
-        // You can swap Instantiate for ObjectPooler.instance.Get(...) if you have pooling setup for enemies
         GameObject enemy = Instantiate(prefab, spawnPoint.position, spawnPoint.rotation);
+
+        // --- NEW: SIEGE CONFIGURATION ---
+        // 1. Wake up the AI
+        EnemyAI ai = enemy.GetComponent<EnemyAI>();
+        if (ai != null)
+        {
+            ai.ActivateAI();
+            ai.chaseLeashRadius = siegeLeashRadius; // Infinite Leash
+        }
+
+        // 2. Expand Sensors
+        AITargeting targeting = enemy.GetComponent<AITargeting>();
+        if (targeting != null)
+        {
+            targeting.detectionRadius = siegeDetectionRadius; // Infinite Sight
+        }
+        // --------------------------------
 
         // Add tracker
         EnemyHealthTracker tracker = enemy.AddComponent<EnemyHealthTracker>();
@@ -131,7 +154,6 @@ public class EnemyHealthTracker : MonoBehaviour
 
     void OnDestroy()
     {
-        // Failsafe in case enemy is destroyed without health hitting 0 (e.g. Despawned)
         if (health != null) health.OnHealthChanged -= CheckDeath;
     }
 }
