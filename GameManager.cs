@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine.AI;
 using Cinemachine;
+using UnityEngine.Splines; // Required for Spline positioning
 
 public class GameManager : MonoBehaviour
 {
@@ -25,6 +26,14 @@ public class GameManager : MonoBehaviour
     [Header("State Tracking")]
     [Tooltip("The ID of the spawn point used to enter the current scene. Read by level managers to determine context (e.g. Ambush vs Camp).")]
     public string lastSpawnPointID;
+
+    // --- NEW: Precise Positioning Tracking ---
+    [Header("Travel State")]
+    public string lastKnownLocationNodeID; // Legacy/Fallback
+    public string lastSplineContainerName; // Name of the spline object
+    public float lastSplineProgress;       // 0.0 to 1.0
+    public bool lastSplineReverse;         // Was traveling in reverse?
+    // -----------------------------------------
 
     [Header("Persistent Objects")]
     public GameObject playerPartyObject;
@@ -45,7 +54,7 @@ public class GameManager : MonoBehaviour
     public string coreSceneName = "CoreScene";
     public SceneType currentSceneType { get; private set; }
     private string currentLevelScene;
-    public string lastKnownLocationNodeID { get; private set; }
+
     private bool isTransitioning;
     public bool IsTransitioning => isTransitioning;
 
@@ -61,6 +70,28 @@ public class GameManager : MonoBehaviour
         coreSceneName = NormalizeSceneName(coreSceneName);
         currentLevelScene = NormalizeSceneName(SceneManager.GetActiveScene().name);
     }
+
+    // --- NEW: Helper to Capture State ---
+    public void CaptureWagonState()
+    {
+        WagonController wagon = FindAnyObjectByType<WagonController>();
+        if (wagon != null && wagon.CurrentSpline != null)
+        {
+            lastSplineContainerName = wagon.CurrentSpline.gameObject.name;
+            lastSplineProgress = wagon.TravelProgress;
+            lastSplineReverse = wagon.IsReversing;
+
+            // Clear the node ID so we favor the spline restore logic
+            lastKnownLocationNodeID = null;
+        }
+        else
+        {
+            // If no spline is active, we might be at a node or stopped.
+            // We clear the spline name so fallback logic works.
+            lastSplineContainerName = null;
+        }
+    }
+    // ------------------------------------
 
     public void ReturnToWorldMap()
     {
@@ -83,7 +114,38 @@ public class GameManager : MonoBehaviour
         yield return null;
 
         WorldMapManager wmm = FindAnyObjectByType<WorldMapManager>();
-        if (wmm != null && !string.IsNullOrEmpty(lastKnownLocationNodeID))
+        WagonController wagon = FindAnyObjectByType<WagonController>();
+
+        // --- NEW: Restore Logic ---
+        bool positionRestored = false;
+
+        // 1. Try to restore precise spline position via Manager
+        if (wagon != null && !string.IsNullOrEmpty(lastSplineContainerName))
+        {
+            // Find the spline object by name in the newly loaded scene
+            GameObject splineObj = GameObject.Find(lastSplineContainerName);
+            if (splineObj != null && splineObj.TryGetComponent<SplineContainer>(out var spline))
+            {
+                if (wmm != null)
+                {
+                    // This sets up UI and connection logic correctly
+                    wmm.RestoreJourneyState(spline, lastSplineProgress, lastSplineReverse);
+                }
+                else
+                {
+                    // Fallback visual restore only
+                    wagon.RestorePosition(spline, lastSplineProgress, lastSplineReverse);
+                }
+                positionRestored = true;
+            }
+            else
+            {
+                Debug.LogWarning($"GameManager: Could not find SplineContainer named '{lastSplineContainerName}' to restore position.");
+            }
+        }
+
+        // 2. Fallback to Location Node if Spline failed or wasn't set
+        if (!positionRestored && wmm != null && !string.IsNullOrEmpty(lastKnownLocationNodeID))
         {
             LocationNode targetNode = FindObjectsByType<LocationNode>(FindObjectsSortMode.None)
                 .FirstOrDefault(n => n.locationName == lastKnownLocationNodeID);
@@ -97,8 +159,8 @@ public class GameManager : MonoBehaviour
                 Debug.LogWarning($"Could not find location node with ID '{lastKnownLocationNodeID}' to return to.");
             }
         }
+        // --------------------------
 
-        // Restored Method Call
         SetUIVisibility("WorldMap");
         SetPlayerModelsActive(false);
         SetPlayerMovementComponentsActive(false);
@@ -150,6 +212,13 @@ public class GameManager : MonoBehaviour
         if (isTransitioning) yield break;
         isTransitioning = true;
 
+        // --- NEW: Capture Wagon State before leaving World Map ---
+        if (currentSceneType == SceneType.WorldMap)
+        {
+            CaptureWagonState();
+        }
+        // ---------------------------------------------------------
+
         float startTime = Time.realtimeSinceStartup;
         yield return LoadingScreenManager.instance.ShowLoadingScreen(fadeDuration);
 
@@ -187,7 +256,6 @@ public class GameManager : MonoBehaviour
             SetPlayerModelsActive(true);
             SetPlayerMovementComponentsActive(true);
 
-            // Restored Method Call
             MovePartyToSpawnPoint(spawnPointID);
 
             if (InventoryUIController.instance != null)
@@ -441,7 +509,6 @@ public class GameManager : MonoBehaviour
         return s;
     }
 
-    // --- RESTORED HELPER METHOD: SetUIVisibility ---
     private void SetUIVisibility(string sceneType)
     {
         switch (sceneType)
@@ -480,7 +547,6 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    // --- RESTORED HELPER METHOD: MovePartyToSpawnPoint ---
     private void MovePartyToSpawnPoint(string spawnPointID)
     {
         if (string.IsNullOrEmpty(spawnPointID)) return;

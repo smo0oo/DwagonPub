@@ -10,8 +10,10 @@ public class DoorController : MonoBehaviour
     [Tooltip("The ID of the PlayerSpawnPoint in the target scene where the player should appear.")]
     public string targetSpawnPointId;
 
-    // --- NEW FIELD ---
     [Header("Interaction")]
+    [Tooltip("How close (in meters) the player needs to be to use the door. Default is 4m.")]
+    public float activationDistance = 4.0f;
+
     [Tooltip("The specific spot the player should walk to in order to use this door. If null, the door's pivot point is used.")]
     public Transform interactionPoint;
 

@@ -60,16 +60,44 @@ public class LoadingScreenManager : MonoBehaviour
         }
 
         // Activate and fade in
-        loadingScreenPanel.SetActive(true);
-        canvasGroup.alpha = 0f;
-        yield return canvasGroup.DOFade(1f, duration).WaitForCompletion();
+        if (loadingScreenPanel != null)
+        {
+            loadingScreenPanel.SetActive(true);
+        }
+
+        if (canvasGroup != null)
+        {
+            // --- FIX: Ensure we block raycasts again when showing ---
+            canvasGroup.blocksRaycasts = true;
+            // -------------------------------------------------------
+
+            canvasGroup.alpha = 0f;
+            yield return canvasGroup.DOFade(1f, duration).WaitForCompletion();
+        }
+        else
+        {
+            yield return new WaitForSeconds(duration);
+        }
     }
 
     public void HideLoadingScreen(float duration)
     {
+        if (canvasGroup == null)
+        {
+            if (loadingScreenPanel != null) loadingScreenPanel.SetActive(false);
+            return;
+        }
+
+        // --- FIX: Block raycasts immediately so players can click buttons while it fades ---
+        canvasGroup.blocksRaycasts = false;
+        // ---------------------------------------------------------------------------------
+
         // Fade out and deactivate
         canvasGroup.DOFade(0f, duration).OnComplete(() => {
-            loadingScreenPanel.SetActive(false);
+            if (loadingScreenPanel != null)
+            {
+                loadingScreenPanel.SetActive(false);
+            }
         });
     }
 }

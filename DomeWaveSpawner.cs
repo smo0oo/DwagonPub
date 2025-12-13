@@ -96,22 +96,27 @@ public class DomeWaveSpawner : MonoBehaviour
 
         GameObject enemy = Instantiate(prefab, spawnPoint.position, spawnPoint.rotation);
 
-        // --- NEW: SIEGE CONFIGURATION ---
-        // 1. Wake up the AI
+        // --- FIXED: Apply Siege Settings ---
+
+        // 1. Configure AI (Leash & Activation)
         EnemyAI ai = enemy.GetComponent<EnemyAI>();
         if (ai != null)
         {
             ai.ActivateAI();
-            ai.chaseLeashRadius = siegeLeashRadius; // Infinite Leash
+            // This prevents them from turning back when walking from spawn to the dome
+            ai.chaseLeashRadius = siegeLeashRadius;
         }
 
-        // 2. Expand Sensors
+        // 2. Configure Targeting (Vision)
         AITargeting targeting = enemy.GetComponent<AITargeting>();
         if (targeting != null)
         {
-            targeting.detectionRadius = siegeDetectionRadius; // Infinite Sight
+            targeting.detectionRadius = siegeDetectionRadius;
+
+            // Give them X-Ray vision so they don't get stuck searching behind walls
+            targeting.checkLineOfSight = false;
         }
-        // --------------------------------
+        // -----------------------------------
 
         // Add tracker
         EnemyHealthTracker tracker = enemy.AddComponent<EnemyHealthTracker>();

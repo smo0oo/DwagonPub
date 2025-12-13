@@ -295,7 +295,67 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     private IEnumerator FollowAndUseAbility() { if (TargetObject == null) yield break; IsMovingToAttack = true; if (TargetObject.TryGetComponent<NPCInteraction>(out var npc)) { interactionCoroutine = StartCoroutine(MoveToInteract(TargetObject)); yield return interactionCoroutine; IsMovingToAttack = false; TargetObject = null; yield break; } Ability abilityToUse = queuedAbility != null ? queuedAbility : defaultAttackAbility; if (abilityToUse == null) { IsMovingToAttack = false; yield break; } navMeshAgent.stoppingDistance = abilityToUse.range; while (Vector3.Distance(transform.position, TargetObject.transform.position) > abilityToUse.range) { if (TargetObject == null || (TargetObject.GetComponent<Health>() != null && TargetObject.GetComponent<Health>().currentHealth <= 0)) { TargetObject = null; queuedAbility = null; IsMovingToAttack = false; isFacingLocked = false; yield break; } navMeshAgent.SetDestination(TargetObject.transform.position); yield return null; } navMeshAgent.ResetPath(); if (abilityHolder != null) { abilityHolder.UseAbility(abilityToUse, TargetObject); isFacingLocked = true; if (queuedAbility != null) { queuedAbility = null; } } IsMovingToAttack = false; }
     private void HandleRotation() { if (isFacingLocked && TargetObject != null) { transform.LookAt(new Vector3(TargetObject.transform.position.x, transform.position.y, TargetObject.transform.position.z)); } else if (IsMovingToAttack && TargetObject != null) { transform.LookAt(new Vector3(TargetObject.transform.position.x, transform.position.y, TargetObject.transform.position.z)); } else { RotateTowardsMouse(); } }
     public void StartFollowingTarget(GameObject newTarget, Ability abilityToQueue = null) { if (newTarget == null) return; TargetObject = newTarget; queuedAbility = abilityToQueue; if (interactionCoroutine != null) StopCoroutine(interactionCoroutine); StartCoroutine(FollowAndUseAbility()); }
-    private IEnumerator MoveToInteract(GameObject targetObject) { if (targetObject == null) yield break; Vector3 destination = targetObject.transform.position; if (targetObject.TryGetComponent<DoorController>(out var door) && door.interactionPoint != null) { destination = door.interactionPoint.position; } else if (targetObject.TryGetComponent<WorldMapExit>(out var exit) && exit.interactionPoint != null) { destination = exit.interactionPoint.position; } navMeshAgent.stoppingDistance = interactionRange; navMeshAgent.SetDestination(destination); while (Vector3.Distance(transform.position, destination) > interactionRange) { if (targetObject == null) { navMeshAgent.ResetPath(); yield break; } yield return null; } navMeshAgent.ResetPath(); if (targetObject.TryGetComponent<IInteractable>(out var interactable)) { interactable.Interact(this.gameObject); } else if (targetObject.TryGetComponent<DoorController>(out var doorComponent)) { doorComponent.UseDoor(); } interactionCoroutine = null; }
+
+    // --- UPDATED METHOD ---
+    private IEnumerator MoveToInteract(GameObject targetObject)
+    {
+        if (targetObject == null) yield break;
+
+        Vector3 destination = targetObject.transform.position;
+        float currentInteractionRange = interactionRange; // Default global range
+
+        // Check for interaction overrides
+        if (targetObject.TryGetComponent<DoorController>(out var door))
+        {
+            // If the door has a specific interaction point, use it
+            if (door.interactionPoint != null)
+            {
+                destination = door.interactionPoint.position;
+            }
+            // Use the specific activation distance from the door script
+            currentInteractionRange = door.activationDistance;
+        }
+        else if (targetObject.TryGetComponent<WorldMapExit>(out var exit))
+        {
+            // If the exit has a specific interaction point, use it
+            if (exit.interactionPoint != null)
+            {
+                destination = exit.interactionPoint.position;
+            }
+            // Use the specific activation distance from the exit script
+            currentInteractionRange = exit.activationDistance;
+        }
+
+        navMeshAgent.stoppingDistance = currentInteractionRange;
+        navMeshAgent.SetDestination(destination);
+
+        // Wait until we are close enough
+        while (Vector3.Distance(transform.position, destination) > currentInteractionRange)
+        {
+            if (targetObject == null)
+            {
+                navMeshAgent.ResetPath();
+                yield break;
+            }
+            yield return null;
+        }
+
+        // We arrived!
+        navMeshAgent.ResetPath();
+
+        if (targetObject.TryGetComponent<IInteractable>(out var interactable))
+        {
+            interactable.Interact(this.gameObject);
+        }
+        else if (targetObject.TryGetComponent<DoorController>(out var doorComponent))
+        {
+            doorComponent.UseDoor();
+        }
+
+        interactionCoroutine = null;
+    }
+    // ---------------------
+
     private void HandleEquipmentChanged(EquipmentType slotType) { if (slotType == EquipmentType.LeftHand || slotType == EquipmentType.RightHand) UpdateWeaponTypeParameter(); }
     public void UpdateWeaponTypeParameter() { if (animator == null || playerEquipment == null) return; int weaponType = 0; playerEquipment.equippedItems.TryGetValue(EquipmentType.RightHand, out var rightHandItem); playerEquipment.equippedItems.TryGetValue(EquipmentType.LeftHand, out var leftHandItem); var rightWeaponStats = rightHandItem?.itemData.stats as ItemWeaponStats; var leftWeaponStats = leftHandItem?.itemData.stats as ItemWeaponStats; if ((rightWeaponStats != null && rightWeaponStats.handed == ItemWeaponStats.Handed.TwoHanded) || (leftWeaponStats != null && leftWeaponStats.handed == ItemWeaponStats.Handed.TwoHanded)) { weaponType = 2; } else if (rightWeaponStats != null || leftWeaponStats != null) { weaponType = 1; } animator.SetInteger(weaponTypeHash, weaponType); }
     private bool IsUIDragInProgress() { if (uiManagerObject != null && Variables.Object(uiManagerObject).IsDefined(dragInProgressVariableName)) { return Variables.Object(uiManagerObject).Get<bool>(dragInProgressVariableName); } return false; }

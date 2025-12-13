@@ -1,11 +1,14 @@
 using UnityEngine;
 
-// --- MODIFIED: Now implements the IInteractable interface ---
+// --- MODIFIED: Implements IInteractable with a custom distance property ---
 [RequireComponent(typeof(Collider))]
 public class WorldMapExit : MonoBehaviour, IInteractable
 {
-    [Header("Interaction")]
-    [Tooltip("The specific spot the player should walk to in order to use this exit. If null, the object's pivot point is used.")]
+    [Header("Interaction Settings")]
+    [Tooltip("How close (in meters) the player needs to be to activate the exit. Default is 4m.")]
+    public float activationDistance = 4.0f;
+
+    [Tooltip("OPTIONAL: A specific spot to walk to. If null, the player walks to this object's center.")]
     public Transform interactionPoint;
 
     // --- MODIFIED: Method renamed from PlayerInteract to Interact ---

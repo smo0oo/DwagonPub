@@ -17,6 +17,10 @@ public class DomeBattleManager : MonoBehaviour
     [Header("References")]
     public DomeWaveSpawner waveSpawner;
 
+    [Header("Victory & Exit")]
+    [Tooltip("The WorldMapExit object (or the zone containing it) to enable when the battle is won.")]
+    public GameObject exitZoneObject;
+
     // This is found automatically, but kept exposed for debug
     public WagonResourceManager resourceManager;
 
@@ -48,7 +52,13 @@ public class DomeBattleManager : MonoBehaviour
             Debug.LogError("DomeBattleManager: Critical Error - Could not find WagonResourceManager.");
         }
 
-        // 2. Determine State based on how we loaded in
+        // 2. Ensure Exit is HIDDEN at start
+        if (exitZoneObject != null)
+        {
+            exitZoneObject.SetActive(false);
+        }
+
+        // 3. Determine State based on how we loaded in
         string spawnID = GetCurrentSpawnID();
 
         if (spawnID == "AmbushSpawn")
@@ -124,11 +134,23 @@ public class DomeBattleManager : MonoBehaviour
         IsBattleActive = false;
         if (waveStatusText != null) waveStatusText.text = "<color=gold>VICTORY</color>";
 
-        // Show "Return to Map" button logic here (e.g., enable the WorldMapExit)
-        // For now, we just log it.
         Debug.Log("Night Survived. Looting phase begins.");
 
-        // Optional: If you want to auto-leave after 5 seconds:
-        // StartCoroutine(AutoExitRoutine());
+        // --- NEW: Activate the Exit ---
+        if (exitZoneObject != null)
+        {
+            exitZoneObject.SetActive(true);
+
+            // Optional visual feedback
+            if (FloatingTextManager.instance != null)
+            {
+                FloatingTextManager.instance.ShowAIStatus("Road Open!", exitZoneObject.transform.position + Vector3.up * 2);
+            }
+        }
+        else
+        {
+            Debug.LogWarning("DomeBattleManager: No 'ExitZoneObject' assigned! Player cannot leave.");
+        }
+        // ------------------------------
     }
 }

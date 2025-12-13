@@ -21,14 +21,9 @@ public class WorldMapManager : MonoBehaviour
     public float wagonTravelSpeed = 20f;
     public string defaultDomeBattleScene = "DomeBattle";
 
-    // --- NEW: World Dimensions Configuration ---
     [Header("World Dimensions")]
-    [Tooltip("The total size of your playable world area in meters (X, Z). If your map is 4km x 4km, set this to 4000, 4000.")]
     public Vector2 worldSize = new Vector2(2000, 2000);
-
-    [Tooltip("The center point of your map in world coordinates. If your terrain is centered at (0,0,0), leave this as (0,0).")]
     public Vector2 worldCenter = Vector2.zero;
-    // -------------------------------------------
 
     [Header("Raycasting")]
     public LayerMask locationNodeLayer;
@@ -77,13 +72,11 @@ public class WorldMapManager : MonoBehaviour
         mainCamera = Camera.main;
         baseWagonSpeed = wagonTravelSpeed;
 
-        // UI Initialization
         if (travelConfirmationPanel != null) travelConfirmationPanel.SetActive(false);
         if (arrivalPanel != null) arrivalPanel.SetActive(false);
         if (roadsidePanel != null) roadsidePanel.SetActive(false);
         if (haltButton != null) haltButton.gameObject.SetActive(false);
 
-        // Buttons
         if (confirmTravelButton != null) confirmTravelButton.onClick.AddListener(OnConfirmTravel);
         if (cancelTravelButton != null) cancelTravelButton.onClick.AddListener(OnCancelTravel);
         if (enterButton != null) enterButton.onClick.AddListener(OnEnterLocation);
@@ -98,22 +91,62 @@ public class WorldMapManager : MonoBehaviour
         if (resourceManager == null) resourceManager = FindAnyObjectByType<WagonResourceManager>();
     }
 
-    // --- Helper for UI to calculate positions ---
+    public void RestoreJourneyState(SplineContainer spline, float progress, bool reverse)
+    {
+        // 1. Clear any stale path data so the arrival logic triggers correctly
+        currentPlannedPath = null;
+
+        if (wagonController != null)
+        {
+            wagonController.RestorePosition(spline, progress, reverse);
+        }
+
+        LocationNode originNode = null;
+        RoadConnection connection = null;
+
+        var allNodes = FindObjectsByType<LocationNode>(FindObjectsSortMode.None);
+        foreach (var node in allNodes)
+        {
+            foreach (var conn in node.connections)
+            {
+                if (conn.roadSpline == spline && conn.reverseSpline == reverse)
+                {
+                    originNode = node;
+                    connection = conn;
+                    break;
+                }
+            }
+            if (originNode != null) break;
+        }
+
+        if (originNode != null && connection != null)
+        {
+            currentLocation = originNode;
+            currentActiveConnection = connection;
+
+            ShowRoadsidePanel();
+
+            // Ensure other panels are hidden
+            if (arrivalPanel != null) arrivalPanel.SetActive(false);
+            if (haltButton != null) haltButton.gameObject.SetActive(false);
+
+            originNode.SetRoadsVisibilityExcept(spline, false);
+        }
+        else
+        {
+            Debug.LogWarning("WorldMapManager: Could not find matching RoadConnection for restored spline.");
+        }
+    }
+
     public Vector2 GetNormalizedPosition(Vector3 worldPos)
     {
-        // 1. Offset position relative to world center
         float offsetX = worldPos.x - (worldCenter.x - worldSize.x / 2f);
-        float offsetY = worldPos.z - (worldCenter.y - worldSize.y / 2f); // Z is Y in 2D
-
-        // 2. Normalize to 0-1 range
+        float offsetY = worldPos.z - (worldCenter.y - worldSize.y / 2f);
         float x = offsetX / worldSize.x;
         float y = offsetY / worldSize.y;
-
         return new Vector2(x, y);
     }
-    // --------------------------------------------
 
-    // --- GPS Logic ---
     public void SetLongTermDestination(LocationNode target)
     {
         longTermDestination = target;
@@ -138,8 +171,6 @@ public class WorldMapManager : MonoBehaviour
         }
     }
 
-    // --- Roadside Logic ---
-
     private void OnHaltClicked()
     {
         if (wagonController != null && wagonController.IsTraveling)
@@ -153,7 +184,30 @@ public class WorldMapManager : MonoBehaviour
     private void OnResumeClicked()
     {
         if (roadsidePanel != null) roadsidePanel.SetActive(false);
-        if (wagonController != null) wagonController.ResumeJourney();
+
+        if (wagonController != null)
+        {
+            if (wagonController.IsTraveling)
+            {
+                wagonController.ResumeJourney();
+            }
+            else if (currentActiveConnection != null && currentActiveConnection.destinationNode != null)
+            {
+                // Check if we are already practically there (handling instant arrival)
+                float progress = Mathf.Clamp(wagonController.TravelProgress, 0f, 1f);
+                if (progress > 0.99f)
+                {
+                    Debug.Log("Resume: Already at destination. Triggering Arrival.");
+                    SetCurrentLocation(currentActiveConnection.destinationNode, true);
+                    ShowArrivalPanel();
+                }
+                else
+                {
+                    StartCoroutine(TravelToNode(currentActiveConnection.destinationNode, progress));
+                }
+            }
+        }
+
         if (haltButton != null) haltButton.gameObject.SetActive(true);
     }
 
@@ -207,8 +261,6 @@ public class WorldMapManager : MonoBehaviour
         if (roadsidePanel != null) roadsidePanel.SetActive(true);
         if (roadsideInfoText != null) roadsideInfoText.text = "The wagon is stopped. What is your command?";
     }
-
-    // --- Travel Logic ---
 
     void OnLocationClicked(LocationNode destinationNode)
     {
@@ -287,11 +339,14 @@ public class WorldMapManager : MonoBehaviour
         }
     }
 
-    private IEnumerator TravelToNode(LocationNode destination)
+    private IEnumerator TravelToNode(LocationNode destination, float startProgress = 0f)
     {
         isUiBusy = true;
 
-        currentActiveConnection = currentLocation.connections.FirstOrDefault(c => c.destinationNode != null && c.destinationNode.locationName == destination.locationName);
+        if (currentActiveConnection == null)
+        {
+            currentActiveConnection = currentLocation.connections.FirstOrDefault(c => c.destinationNode != null && c.destinationNode.locationName == destination.locationName);
+        }
 
         if (currentActiveConnection == null) { isUiBusy = false; yield break; }
 
@@ -302,18 +357,23 @@ public class WorldMapManager : MonoBehaviour
         if (wagonController != null && currentActiveConnection.roadSpline != null)
         {
             float splineLength = currentActiveConnection.roadSpline.CalculateLength();
-            float travelDuration = (wagonTravelSpeed > 0) ? splineLength / wagonTravelSpeed : 5f;
+            float fullDuration = (wagonTravelSpeed > 0) ? splineLength / wagonTravelSpeed : 5f;
 
             wagonController.StartJourney(
                 currentActiveConnection.roadSpline,
-                travelDuration,
+                fullDuration,
                 currentActiveConnection.reverseSpline,
-                currentActiveConnection.manualYRotation
+                currentActiveConnection.manualYRotation,
+                startProgress
             );
         }
 
+        float safeStart = Mathf.Clamp(startProgress, 0f, 0.999f);
+        float remainingPercent = 1f - safeStart;
+        float remainingHours = currentActiveConnection.travelTimeHours * remainingPercent;
+
         float journeyStartTime = timeOfDay;
-        float journeyEndTime = journeyStartTime + currentActiveConnection.travelTimeHours;
+        float journeyEndTime = journeyStartTime + remainingHours;
         float previousTime = journeyStartTime;
         int dayOfLastAmbush = -1;
 
@@ -325,7 +385,19 @@ public class WorldMapManager : MonoBehaviour
                 continue;
             }
 
-            timeOfDay = Mathf.Lerp(journeyStartTime, journeyEndTime, wagonController.TravelProgress);
+            float currentProg = wagonController.TravelProgress;
+            float relativeProgress = 0f;
+
+            if (remainingPercent > 0.001f)
+            {
+                relativeProgress = (currentProg - safeStart) / remainingPercent;
+            }
+            else
+            {
+                relativeProgress = 1f;
+            }
+
+            timeOfDay = Mathf.Lerp(journeyStartTime, journeyEndTime, relativeProgress);
 
             float deltaTimeHours = timeOfDay - previousTime;
             if (deltaTimeHours < 0) deltaTimeHours += 24f;
@@ -365,11 +437,18 @@ public class WorldMapManager : MonoBehaviour
 
         currentActiveConnection = null;
         timeOfDay = journeyEndTime % 24;
-        SetCurrentLocation(destination, true);
 
-        if (currentPlannedPath == null || destination == currentPlannedPath.Last())
+        if (destination != null)
         {
-            ShowArrivalPanel();
+            SetCurrentLocation(destination, true);
+
+            // --- FIXED: Treat as final if planned path is null (resumed journey) ---
+            bool isFinalDestination = (currentPlannedPath == null || currentPlannedPath.Count == 0 || destination == currentPlannedPath.Last());
+
+            if (isFinalDestination)
+            {
+                ShowArrivalPanel();
+            }
         }
     }
 

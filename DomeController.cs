@@ -66,6 +66,7 @@ public class DomeController : MonoBehaviour
 
     void Start()
     {
+        // Set the Dome's layer
         gameObject.layer = LayerMask.NameToLayer("Dome");
         SpawnEdgeMarkers();
 
@@ -83,13 +84,12 @@ public class DomeController : MonoBehaviour
     {
         if (currentRadius <= 0.1f) return;
 
-        // --- NEW: Tick Timer Logic ---
+        // Tick Timer Logic
         burnTimer += Time.deltaTime;
         if (burnTimer < burnTickRate) return;
 
         // Reset timer
         burnTimer = 0f;
-        // -----------------------------
 
         // Check for enemies inside the dome radius
         int hitCount = Physics.OverlapSphereNonAlloc(transform.position, currentRadius, burnBuffer, enemyLayer);
@@ -239,6 +239,10 @@ public class DomeController : MonoBehaviour
             Vector3 position = Quaternion.Euler(0, angle, 0) * Vector3.forward;
 
             GameObject marker = Instantiate(edgeMarkerPrefab, transform.position + position, Quaternion.identity, this.transform);
+
+            // --- NEW: Force the layer to match the Dome (for AI targeting) ---
+            marker.layer = this.gameObject.layer;
+            // -----------------------------------------------------------------
 
             Health markerHealth = marker.GetComponent<Health>();
             if (markerHealth != null)
