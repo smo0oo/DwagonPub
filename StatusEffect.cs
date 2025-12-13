@@ -17,6 +17,12 @@ public class StatusEffect : ScriptableObject
     [Tooltip("Is this a helpful effect (buff) or a harmful one (debuff)? This can be used for UI color and dispel logic.")]
     public bool isBuff;
 
+    // --- NEW: Invulnerability Flag ---
+    [Header("Special Properties")]
+    [Tooltip("If true, the target will take 0 damage from all sources while this effect is active.")]
+    public bool grantsInvulnerability = false;
+    // --------------------------------
+
     [Header("Duration")]
     public DurationType durationType;
     [Tooltip("Duration in seconds (only if Timed).")]

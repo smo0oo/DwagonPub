@@ -5,16 +5,31 @@ using System;
 
 public class StatusEffectHolder : MonoBehaviour
 {
-    // --- NEW: Event for status effect changes ---
     public static event Action<StatusEffectInfo> OnStatusEffectChanged;
-
     public event Action<StatusEffectHolder> OnEffectsChanged;
 
     private List<ActiveStatusEffect> activeEffects = new List<ActiveStatusEffect>();
     private PlayerStats playerStats;
+    private Health health; // Added ref to Health
 
-    private void Awake() { playerStats = GetComponentInParent<PlayerStats>(); }
-    private void Update() { for (int i = activeEffects.Count - 1; i >= 0; i--) { ActiveStatusEffect effect = activeEffects[i]; effect.Update(Time.deltaTime); if (effect.IsFinished) { RemoveStatusEffect(effect); } } }
+    private void Awake()
+    {
+        playerStats = GetComponentInParent<PlayerStats>();
+        health = GetComponentInParent<Health>(); // Get health to toggle invulnerability
+    }
+
+    private void Update()
+    {
+        for (int i = activeEffects.Count - 1; i >= 0; i--)
+        {
+            ActiveStatusEffect effect = activeEffects[i];
+            effect.Update(Time.deltaTime);
+            if (effect.IsFinished)
+            {
+                RemoveStatusEffect(effect);
+            }
+        }
+    }
 
     public void AddStatusEffect(StatusEffect effectData, GameObject caster)
     {
@@ -28,9 +43,11 @@ public class StatusEffectHolder : MonoBehaviour
         activeEffects.Add(newEffect);
         ApplyStatModifiers(newEffect, true);
 
-        // --- NEW: Announce that the effect was applied ---
-        OnStatusEffectChanged?.Invoke(new StatusEffectInfo { Target = this.gameObject, Effect = effectData, IsApplied = true });
+        // --- NEW: Update Invulnerability ---
+        CheckInvulnerability();
+        // -----------------------------------
 
+        OnStatusEffectChanged?.Invoke(new StatusEffectInfo { Target = this.gameObject, Effect = effectData, IsApplied = true });
         OnEffectsChanged?.Invoke(this);
     }
 
@@ -39,11 +56,23 @@ public class StatusEffectHolder : MonoBehaviour
         ApplyStatModifiers(effectToRemove, false);
         activeEffects.Remove(effectToRemove);
 
-        // --- NEW: Announce that the effect has faded ---
-        OnStatusEffectChanged?.Invoke(new StatusEffectInfo { Target = this.gameObject, Effect = effectToRemove.EffectData, IsApplied = false });
+        // --- NEW: Update Invulnerability ---
+        CheckInvulnerability();
+        // -----------------------------------
 
+        OnStatusEffectChanged?.Invoke(new StatusEffectInfo { Target = this.gameObject, Effect = effectToRemove.EffectData, IsApplied = false });
         OnEffectsChanged?.Invoke(this);
     }
+
+    // --- NEW HELPER METHOD ---
+    private void CheckInvulnerability()
+    {
+        if (health == null) return;
+
+        bool shouldBeInvulnerable = activeEffects.Any(e => e.EffectData.grantsInvulnerability);
+        health.isInvulnerable = shouldBeInvulnerable;
+    }
+    // -------------------------
 
     public List<ActiveStatusEffect> GetActiveEffects() { return activeEffects; }
     private void ApplyStatModifiers(ActiveStatusEffect activeEffect, bool apply) { if (playerStats == null || activeEffect.EffectData.statModifiers.Count == 0) return; int multiplier = apply ? 1 : -1; foreach (var modifier in activeEffect.EffectData.statModifiers) { switch (modifier.stat) { case StatType.Strength: playerStats.bonusStrength += modifier.value * multiplier; break; case StatType.Agility: playerStats.bonusAgility += modifier.value * multiplier; break; case StatType.Intelligence: playerStats.bonusIntelligence += modifier.value * multiplier; break; case StatType.Faith: playerStats.bonusFaith += modifier.value * multiplier; break; } } playerStats.CalculateFinalStats(); }
