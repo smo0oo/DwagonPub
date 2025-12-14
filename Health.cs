@@ -25,7 +25,7 @@ public class Health : MonoBehaviour
     public bool isDowned { get; private set; } = false;
 
     [Header("AI Settings")]
-    [Tooltip("If this character is an NUC, it will call for help if its health drops below this percentage (0-1).")]
+    [Tooltip("If this character is an NPC, it will call for help if its health drops below this percentage (0-1).")]
     public float callForHelpThreshold = 0.4f;
 
     [HideInInspector]
@@ -39,6 +39,9 @@ public class Health : MonoBehaviour
     private PlayerStats playerStats;
     private CharacterRoot root;
 
+    // --- Layer Tracking ---
+    private int originalLayer;
+
     void Awake()
     {
         lootGenerator = GetComponent<LootGenerator>();
@@ -49,6 +52,9 @@ public class Health : MonoBehaviour
             playerStats = root.PlayerStats;
         }
         currentHealth = maxHealth;
+
+        // Capture original layer so we can restore it after being revived
+        originalLayer = gameObject.layer;
     }
 
     void Start()
@@ -120,7 +126,7 @@ public class Health : MonoBehaviour
 
         ToggleCombatCapability(false);
 
-        // --- NEW: Force Agent Stop ---
+        // Force Agent Stop
         if (root != null)
         {
             var agent = root.GetComponent<UnityEngine.AI.NavMeshAgent>();
@@ -130,6 +136,10 @@ public class Health : MonoBehaviour
                 agent.ResetPath();
             }
         }
+
+        // --- Change Layer to Ignore Raycast ---
+        gameObject.layer = LayerMask.NameToLayer("Ignore Raycast");
+        // -------------------------------------
 
         OnDowned?.Invoke();
         OnHealthChanged?.Invoke();
@@ -154,10 +164,9 @@ public class Health : MonoBehaviour
             root.Animator.Play("Idle", 0);
         }
 
-        // Re-enable capabilities
         ToggleCombatCapability(true);
 
-        // --- NEW: Force Agent Enable ---
+        // Force Agent Enable
         if (root != null)
         {
             var agent = root.GetComponent<UnityEngine.AI.NavMeshAgent>();
@@ -168,16 +177,48 @@ public class Health : MonoBehaviour
             }
         }
 
+        // --- Restore Original Layer ---
+        gameObject.layer = originalLayer;
+        // ------------------------------
+
         OnRevived?.Invoke();
         OnHealthChanged?.Invoke();
     }
+
+    // --- Force Downed State (for Rescue Mission initialization) ---
+    public void ForceDownedState()
+    {
+        isDowned = true;
+        currentHealth = 0;
+
+        ToggleCombatCapability(false);
+
+        if (root != null)
+        {
+            var agent = root.GetComponent<UnityEngine.AI.NavMeshAgent>();
+            if (agent != null)
+            {
+                agent.isStopped = true;
+                agent.ResetPath();
+            }
+        }
+
+        // CRITICAL: Hide layer immediately
+        gameObject.layer = LayerMask.NameToLayer("Ignore Raycast");
+
+        if (root != null && root.Animator != null)
+        {
+            root.Animator.SetBool("IsDowned", true);
+        }
+
+        Debug.Log($"{name} forcibly set to DOWNED state.");
+    }
+    // ------------------------------------------------------------
 
     private void ToggleCombatCapability(bool canFight)
     {
         if (root != null)
         {
-            // Do NOT toggle NavMeshAgent.enabled here repeatedly as it resets pathing; 
-            // handled explicitly in BecomeDowned/Revive for safety.
             if (root.PlayerMovement != null) root.PlayerMovement.enabled = canFight;
             if (root.PartyMemberAI != null) root.PartyMemberAI.enabled = canFight;
         }

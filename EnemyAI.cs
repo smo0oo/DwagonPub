@@ -171,7 +171,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     private void UpdateCombatState()
     {
-        // 1. Check if target still exists or has become invalid (Downed)
         if (currentTarget == null || Vector3.Distance(transform.position, combatStartPosition) > chaseLeashRadius)
         {
             ResetCombatState();
@@ -180,17 +179,27 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             return;
         }
 
-        // --- NEW: Drop aggro if target is downed ---
-        Health targetHealth = currentTarget.GetComponent<Health>();
-        if (targetHealth != null && targetHealth.isDowned)
+        // --- Aggro Validation (CharacterRoot + Fallback) ---
+        Health targetHealth = null;
+        CharacterRoot root = currentTarget.GetComponentInParent<CharacterRoot>();
+
+        if (root != null)
+        {
+            targetHealth = root.Health;
+        }
+        else
+        {
+            targetHealth = currentTarget.GetComponent<Health>() ?? currentTarget.GetComponentInParent<Health>();
+        }
+
+        // Drop target if dead/downed
+        if (targetHealth != null && (targetHealth.isDowned || targetHealth.currentHealth <= 0))
         {
             ResetCombatState();
-            // We don't necessarily return immediately; the next update loop will see if there are other valid targets in Idle state.
-            // But to be safe and prevent jitter, let's go to Returning or Idle.
-            currentState = AIState.Idle; // Try to find a new target immediately
+            currentState = AIState.Idle;
             return;
         }
-        // -------------------------------------------
+        // ---------------------------------------------------
 
         if (health.currentHealth / (float)health.maxHealth < retreatHealthThreshold)
         {

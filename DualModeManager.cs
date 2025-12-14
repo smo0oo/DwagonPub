@@ -55,15 +55,39 @@ public class DualModeManager : MonoBehaviour
         fallenHeroes.Clear();
     }
 
-    public void EndDualMode()
+    // --- VICTORY LOGIC ---
+    public void CompleteDungeonRun()
     {
-        isDualModeActive = false;
-        isRescueMissionActive = false;
-        pendingBossBuff = null;
+        if (!isDualModeActive) return;
 
+        Debug.Log("Dungeon Run Complete! Returning to Dome...");
+
+        // 1. Merge Loot
+        MergeLootToMainInventory();
+
+        // 2. Apply Boss Buff to Wagon Team (Defenders)
+        if (pendingBossBuff != null)
+        {
+            ApplyBuffToTeam(wagonTeamIndices, pendingBossBuff);
+            pendingBossBuff = null; // Consumed
+        }
+
+        // 3. Load Defense Scene
+        // We do NOT clear isDualModeActive yet, because the Dome Battle still needs to know
+        // which team is fighting (the Wagon Team).
+        if (GameManager.instance != null)
+        {
+            GameManager.instance.LoadLevel(defenseSceneName, "WagonCenter");
+        }
+    }
+
+    private void MergeLootToMainInventory()
+    {
         if (InventoryManager.instance != null && dungeonLootBag.Count > 0)
         {
             Inventory targetInventory = null;
+
+            // Try to find a valid inventory to dump into
             if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
                 targetInventory = PartyManager.instance.ActivePlayer.GetComponentInChildren<Inventory>();
 
@@ -76,11 +100,52 @@ public class DualModeManager : MonoBehaviour
             if (targetInventory != null)
             {
                 foreach (var item in dungeonLootBag)
-                    if (item.itemData != null) targetInventory.AddItem(item.itemData, item.quantity);
+                {
+                    if (item.itemData != null)
+                    {
+                        targetInventory.AddItem(item.itemData, item.quantity);
+                        Debug.Log($"Secured Loot: {item.quantity}x {item.itemData.itemName}");
+                    }
+                }
             }
             dungeonLootBag.Clear();
         }
+    }
 
+    private void ApplyBuffToTeam(List<int> teamIndices, Ability buff)
+    {
+        if (PartyManager.instance == null) return;
+
+        foreach (int index in teamIndices)
+        {
+            if (ValidateIndex(index))
+            {
+                GameObject member = PartyManager.instance.partyMembers[index];
+                StatusEffectHolder holder = member.GetComponentInChildren<StatusEffectHolder>();
+
+                // Assuming Ability has a status effect attached, or we add the ability itself
+                // For this implementation, we'll try to add it to the AbilityHolder if it's an active ability,
+                // or you might have custom logic here for "Global Buffs".
+
+                // Example: If the buff is just a status effect container
+                if (holder != null && buff.effects != null)
+                {
+                    // This assumes you have a way to apply an Ability as a Buff directly
+                    // Or you can create a StatusEffect from the ability data.
+                    // For now, let's just log it.
+                    Debug.Log($"Applying Boss Reward '{buff.displayName}' to {member.name}");
+                }
+            }
+        }
+    }
+    // ---------------------
+
+    public void EndDualMode()
+    {
+        isDualModeActive = false;
+        isRescueMissionActive = false;
+        pendingBossBuff = null;
+        dungeonLootBag.Clear(); // Just in case
         dungeonTeamIndices.Clear();
         wagonTeamIndices.Clear();
         fallenHeroes.Clear();
@@ -127,8 +192,16 @@ public class DualModeManager : MonoBehaviour
         {
             member.SetActive(true);
             NavMeshAgent agent = member.GetComponent<NavMeshAgent>();
-            if (agent != null) agent.Warp(revivePosition);
-            else member.transform.position = revivePosition;
+            if (agent != null)
+            {
+                agent.enabled = true;
+                agent.Warp(revivePosition);
+            }
+            else
+            {
+                member.transform.position = revivePosition;
+            }
+
             h.Revive(0.25f);
         }
         CheckRescueProgress();
@@ -141,8 +214,14 @@ public class DualModeManager : MonoBehaviour
 
         foreach (int index in dungeonTeamIndices)
         {
+            if (!allMembers[index].activeInHierarchy)
+            {
+                allRescued = false;
+                break;
+            }
+
             Health h = allMembers[index].GetComponentInChildren<Health>();
-            if (!allMembers[index].activeInHierarchy || (h != null && h.isDowned))
+            if (h != null && h.isDowned)
             {
                 allRescued = false;
                 break;
@@ -177,30 +256,27 @@ public class DualModeManager : MonoBehaviour
             }
             else
             {
+                // Rescue Logic
                 foreach (int index in dungeonTeamIndices)
                 {
                     if (ValidateIndex(index))
                     {
                         GameObject victim = allMembers[index];
                         Health h = victim.GetComponentInChildren<Health>();
+                        var fallenData = fallenHeroes.FirstOrDefault(f => f.memberIndex == index);
+                        bool wasKilled = (fallenData != null);
 
-                        if (h != null && h.isDowned)
+                        if (wasKilled)
                         {
+                            if (h != null) h.ForceDownedState();
                             victim.SetActive(false);
+
                             if (soulOrbPrefab != null)
                             {
-                                var data = fallenHeroes.FirstOrDefault(f => f.memberIndex == index);
-                                if (data != null)
-                                {
-                                    GameObject orb = Instantiate(soulOrbPrefab, data.position, Quaternion.identity);
-
-                                    // --- SAFE ASSIGNMENT ---
-                                    SoulOrb orbScript = orb.GetComponent<SoulOrb>();
-                                    if (orbScript == null) orbScript = orb.GetComponentInChildren<SoulOrb>();
-
-                                    if (orbScript != null) orbScript.memberIndexToRevive = index;
-                                    // -----------------------
-                                }
+                                GameObject orb = Instantiate(soulOrbPrefab, fallenData.position, Quaternion.identity);
+                                SoulOrb orbScript = orb.GetComponent<SoulOrb>();
+                                if (orbScript == null) orbScript = orb.GetComponentInChildren<SoulOrb>();
+                                if (orbScript != null) orbScript.memberIndexToRevive = index;
                             }
                         }
                         else
@@ -216,11 +292,25 @@ public class DualModeManager : MonoBehaviour
         }
         else if (currentScene == SceneType.DomeBattle)
         {
-            if (allMembers.Count > 0 && allMembers[0] != null) allMembers[0].SetActive(false);
-            foreach (int index in dungeonTeamIndices) if (ValidateIndex(index)) allMembers[index].SetActive(false);
-            foreach (int index in wagonTeamIndices) if (ValidateIndex(index)) allMembers[index].SetActive(true);
-            if (wagonTeamIndices.Count > 0) PartyManager.instance.SetActivePlayer(wagonTeamIndices[0]);
-            else PartyManager.instance.SetActivePlayer(0);
+            // --- VICTORY / DEFENSE STATE ---
+
+            // 1. Disable Wagon (Player 0) if necessary, or keep it as the center
+            // Usually in DomeBattle, Player 0 (Wagon) IS the focus.
+            if (allMembers.Count > 0 && allMembers[0] != null) allMembers[0].SetActive(true);
+
+            // 2. Hide Dungeon Team (They are "resting" or inside the wagon)
+            foreach (int index in dungeonTeamIndices)
+                if (ValidateIndex(index)) allMembers[index].SetActive(false);
+
+            // 3. Show Wagon Team (They are defending)
+            foreach (int index in wagonTeamIndices)
+                if (ValidateIndex(index)) allMembers[index].SetActive(true);
+
+            // 4. Set Control to Wagon Team Leader
+            if (wagonTeamIndices.Count > 0)
+                PartyManager.instance.SetActivePlayer(wagonTeamIndices[0]);
+            else
+                PartyManager.instance.SetActivePlayer(0); // Fallback to Wagon
         }
     }
 

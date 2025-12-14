@@ -29,13 +29,27 @@ public class AITargeting : MonoBehaviour
         {
             var targetCollider = _targetBuffer[i];
 
-            // --- FIX: Robust Health Check for Downed State ---
-            Health targetHealth = targetCollider.GetComponent<Health>();
-            if (targetHealth == null) targetHealth = targetCollider.GetComponentInParent<Health>();
+            // 1. Resolve Health Component (Optimized with Fallback)
+            Health targetHealth = null;
+            CharacterRoot root = targetCollider.GetComponentInParent<CharacterRoot>();
 
-            if (targetHealth != null && targetHealth.isDowned) continue; // IGNORE DEAD
-            // -------------------------------------------------
+            if (root != null)
+            {
+                targetHealth = root.Health;
+            }
+            else
+            {
+                // Fallback for markers or destructibles without a Root
+                targetHealth = targetCollider.GetComponent<Health>() ?? targetCollider.GetComponentInParent<Health>();
+            }
 
+            // 2. Dead/Downed Check
+            if (targetHealth != null && (targetHealth.isDowned || targetHealth.currentHealth <= 0))
+            {
+                continue; // Ignore this target
+            }
+
+            // 3. Line of Sight Check
             if (checkLineOfSight)
             {
                 Vector3 origin = transform.position + Vector3.up;
@@ -44,10 +58,11 @@ public class AITargeting : MonoBehaviour
 
                 if (Physics.Raycast(origin, direction.normalized, direction.magnitude, obstacleLayers))
                 {
-                    continue;
+                    continue; // Blocked
                 }
             }
 
+            // 4. Scoring
             float score = 1.0f / (1.0f + Vector3.Distance(transform.position, targetCollider.transform.position));
             if (targetCollider.CompareTag("DomeMarker")) score *= domePriorityMultiplier;
 
