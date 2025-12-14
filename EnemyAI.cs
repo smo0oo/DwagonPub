@@ -171,6 +171,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     private void UpdateCombatState()
     {
+        // 1. Check if target still exists or has become invalid (Downed)
         if (currentTarget == null || Vector3.Distance(transform.position, combatStartPosition) > chaseLeashRadius)
         {
             ResetCombatState();
@@ -178,6 +179,18 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             navMeshAgent.SetDestination(startPosition);
             return;
         }
+
+        // --- NEW: Drop aggro if target is downed ---
+        Health targetHealth = currentTarget.GetComponent<Health>();
+        if (targetHealth != null && targetHealth.isDowned)
+        {
+            ResetCombatState();
+            // We don't necessarily return immediately; the next update loop will see if there are other valid targets in Idle state.
+            // But to be safe and prevent jitter, let's go to Returning or Idle.
+            currentState = AIState.Idle; // Try to find a new target immediately
+            return;
+        }
+        // -------------------------------------------
 
         if (health.currentHealth / (float)health.maxHealth < retreatHealthThreshold)
         {
@@ -220,23 +233,18 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             }
             else
             {
-                // --- RESTORED LOGIC PRIORITY ---
-
                 bool isTargetDomeMarker = currentTarget.CompareTag("DomeMarker");
 
                 if (isTargetDomeMarker)
                 {
-                    // Priority 1: If it's the Dome, just go for it.
                     ExecuteDirectMovement();
                 }
                 else if (isReady && archetype == AIArchetype.Melee)
                 {
-                    // Priority 2: If we have a melee attack ready, close the gap immediately.
                     ExecuteClosingMovement(abilityToUse);
                 }
                 else
                 {
-                    // Priority 3: Fallback (Wait, Surround, Kite).
                     switch (archetype)
                     {
                         case AIArchetype.Melee:
@@ -286,13 +294,11 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         Ability ability = abilitySelector.SelectBestAbility(currentTarget, hasUsedInitialAbilities) ?? abilitySelector.abilities.FirstOrDefault();
         float range = (ability != null) ? ability.range : meleeAttackRange;
 
-        // Use 0.8f here too, to match the physics hitbox fix
         navMeshAgent.stoppingDistance = range * 0.8f;
         navMeshAgent.SetDestination(currentTarget.position);
         SetAIStatus("Combat", "Advancing on Dome");
     }
 
-    // --- Standard Methods ---
     private void ExecuteMeleeMovement() { navMeshAgent.speed = originalSpeed; if (assignedSurroundPoint == null) assignedSurroundPoint = SurroundPointManager.instance.RequestPoint(this, currentTarget); Vector3 destination = assignedSurroundPoint != null ? assignedSurroundPoint.position : currentTarget.position; navMeshAgent.stoppingDistance = 0.5f; navMeshAgent.SetDestination(destination); SetAIStatus("Combat", assignedSurroundPoint != null ? "Circling" : "Waiting"); }
     private void UpdateIdleState() { currentTarget = targeting.FindBestTarget(); if (currentTarget != null) { hasUsedInitialAbilities = false; currentState = AIState.Combat; combatStartPosition = transform.position; if (navMeshAgent.hasPath) navMeshAgent.ResetPath(); return; } if (collectedPatrolPoints == null || collectedPatrolPoints.Length == 0) { SetAIStatus("Idle", "Searching..."); return; } if (isWaitingAtPatrolPoint) { SetAIStatus("Idle", "Waiting"); waitTimer -= Time.deltaTime; if (waitTimer <= 0) { isWaitingAtPatrolPoint = false; PatrolPoint lastPoint = collectedPatrolPoints[currentPatrolIndex]; if (lastPoint.nextPointOverride != null) { int nextIndex = Array.IndexOf(collectedPatrolPoints, lastPoint.nextPointOverride); currentPatrolIndex = (nextIndex >= 0) ? nextIndex : 0; } else if (lastPoint.jumpToRandomPoint) { currentPatrolIndex = UnityEngine.Random.Range(0, collectedPatrolPoints.Length); } else { currentPatrolIndex = (currentPatrolIndex + 1) % collectedPatrolPoints.Length; } navMeshAgent.SetDestination(collectedPatrolPoints[currentPatrolIndex].transform.position); } } else if (!navMeshAgent.pathPending && navMeshAgent.remainingDistance < 0.5f) { PatrolPoint currentPoint = collectedPatrolPoints[currentPatrolIndex]; float waitTime = UnityEngine.Random.Range(currentPoint.minWaitTime, currentPoint.maxWaitTime); if (waitTime > 0) { isWaitingAtPatrolPoint = true; waitTimer = waitTime; } else { if (currentPoint.nextPointOverride != null) { int nextIndex = Array.IndexOf(collectedPatrolPoints, currentPoint.nextPointOverride); currentPatrolIndex = (nextIndex >= 0) ? nextIndex : 0; } else if (currentPoint.jumpToRandomPoint) { currentPatrolIndex = UnityEngine.Random.Range(0, collectedPatrolPoints.Length); } else { currentPatrolIndex = (currentPatrolIndex + 1) % collectedPatrolPoints.Length; } navMeshAgent.SetDestination(collectedPatrolPoints[currentPatrolIndex].transform.position); } } else { SetAIStatus("Idle", "Patrolling"); } }
     private void UpdateReturningState() { navMeshAgent.speed = originalSpeed; SetAIStatus("Returning", "Leashing"); currentTarget = targeting.FindBestTarget(); if (currentTarget != null) { currentState = AIState.Combat; combatStartPosition = transform.position; return; } if (!navMeshAgent.pathPending && navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance) { navMeshAgent.ResetPath(); currentState = AIState.Idle; } }

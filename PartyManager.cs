@@ -2,11 +2,11 @@ using UnityEngine;
 using System;
 using System.Collections.Generic;
 using UnityEngine.AI;
+using System.Collections;
 
 public class PartyManager : MonoBehaviour
 {
     public static PartyManager instance;
-
     public static event Action<GameObject> OnActivePlayerChanged;
 
     [Header("Party Members")]
@@ -22,11 +22,9 @@ public class PartyManager : MonoBehaviour
     [Header("Dome Battle Settings")]
     public int domeBasePower = 100;
 
-    // --- NEW ---
     [Header("Movement Settings")]
     [Tooltip("The current movement mode for the active player.")]
     public PlayerMovement.MovementMode currentMovementMode = PlayerMovement.MovementMode.PointAndClick;
-    // --- END NEW ---
 
     #region Leveling & Stats
     public event Action OnLevelUp;
@@ -42,6 +40,7 @@ public class PartyManager : MonoBehaviour
     [Header("Stat Scaling Settings")]
     public float ratingToPercentDivisor = 50f;
     public float directDamageLevelRoot = 2f;
+
     [Header("Primary to Secondary Stat Conversion")]
     public float strengthConversionRate = 1.0f;
     public float agilityConversionRate = 1.0f;
@@ -77,61 +76,132 @@ public class PartyManager : MonoBehaviour
         if (Input.GetKeyDown(KeyCode.Tab))
         {
             int nextIndex = (activePlayerIndex + 1) % partyMembers.Count;
+            int loopCount = 0;
 
-            while (nextIndex != activePlayerIndex)
+            // Loop until we find a living member or check everyone
+            while (loopCount < partyMembers.Count)
             {
-                if (partyMembers[nextIndex] != null && partyMembers[nextIndex].activeInHierarchy)
+                GameObject candidate = partyMembers[nextIndex];
+                if (candidate != null && candidate.activeInHierarchy)
                 {
+                    Health h = candidate.GetComponentInChildren<Health>();
+                    if (h != null && !h.isDowned && h.currentHealth > 0)
+                    {
+                        SetActivePlayer(nextIndex);
+                        return;
+                    }
+                }
+                nextIndex = (nextIndex + 1) % partyMembers.Count;
+                loopCount++;
+            }
+        }
+    }
+
+    public void CheckPartyStatus()
+    {
+        if (GameManager.instance != null && (GameManager.instance.currentSceneType == SceneType.Town || GameManager.instance.currentSceneType == SceneType.MainMenu)) return;
+
+        bool anySurvivor = false;
+        bool activePlayerJustDied = false;
+
+        if (ActivePlayer != null)
+        {
+            Health activeH = ActivePlayer.GetComponentInChildren<Health>();
+            if (activeH != null && activeH.isDowned) activePlayerJustDied = true;
+        }
+
+        foreach (GameObject member in partyMembers)
+        {
+            if (member == null || !member.activeInHierarchy) continue;
+            Health h = member.GetComponentInChildren<Health>();
+            if (h != null && !h.isDowned && h.currentHealth > 0)
+            {
+                anySurvivor = true;
+                break;
+            }
+        }
+
+        if (!anySurvivor)
+        {
+            Debug.Log("PARTY WIPE DETECTED! Initiating failure sequence...");
+            StartCoroutine(HandlePartyWipe());
+        }
+        else if (activePlayerJustDied && playerSwitchingEnabled)
+        {
+            SwitchToNextLivingMember();
+        }
+    }
+
+    private void SwitchToNextLivingMember()
+    {
+        int startIndex = activePlayerIndex;
+        int nextIndex = (activePlayerIndex + 1) % partyMembers.Count;
+
+        while (nextIndex != startIndex)
+        {
+            GameObject candidate = partyMembers[nextIndex];
+            if (candidate != null && candidate.activeInHierarchy)
+            {
+                Health h = candidate.GetComponentInChildren<Health>();
+                if (h != null && !h.isDowned && h.currentHealth > 0)
+                {
+                    Debug.Log($"Active player down! Auto-switching to {candidate.name}");
                     SetActivePlayer(nextIndex);
                     return;
                 }
-                nextIndex = (nextIndex + 1) % partyMembers.Count;
             }
+            nextIndex = (nextIndex + 1) % partyMembers.Count;
         }
     }
 
-    // --- NEW METHOD ---
-    /// <summary>
-    /// Toggles the global movement mode and notifies the active player's movement script.
-    /// </summary>
-    public void ToggleMovementMode()
+    private IEnumerator HandlePartyWipe()
     {
-        if (currentMovementMode == PlayerMovement.MovementMode.PointAndClick)
+        yield return new WaitForSeconds(2.0f);
+        if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
         {
-            currentMovementMode = PlayerMovement.MovementMode.WASD;
+            Debug.Log("Dual Mode Wipe Detected. Initiating Rescue Logic...");
+            DualModeManager.instance.StartRescueMission();
         }
         else
         {
-            currentMovementMode = PlayerMovement.MovementMode.PointAndClick;
+            Debug.Log("Standard Party Wipe. Reloading last save...");
+            if (SaveManager.instance != null) SaveManager.instance.LoadGame();
+            else UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
         }
+    }
 
-        // Notify the *currently active* player's movement script of the change
+    public void ToggleMovementMode()
+    {
+        if (currentMovementMode == PlayerMovement.MovementMode.PointAndClick) currentMovementMode = PlayerMovement.MovementMode.WASD;
+        else currentMovementMode = PlayerMovement.MovementMode.PointAndClick;
         if (ActivePlayer != null)
         {
             PlayerMovement pm = ActivePlayer.GetComponent<PlayerMovement>();
-            if (pm != null && pm.enabled)
-            {
-                pm.OnMovementModeChanged(currentMovementMode);
-            }
+            if (pm != null && pm.enabled) pm.OnMovementModeChanged(currentMovementMode);
         }
     }
-    // --- END NEW METHOD ---
-
 
     public void PrepareForCombatScene()
     {
         if (activePlayerIndex == 0 && playerSwitchingEnabled)
         {
-            if (partyMembers.Count > 1)
-            {
-                SetActivePlayer(1);
-            }
+            if (partyMembers.Count > 1) SetActivePlayer(1);
         }
     }
 
     public void SetActivePlayer(int index)
     {
         if (index < 0 || index >= partyMembers.Count) return;
+
+        GameObject candidate = partyMembers[index];
+        if (candidate != null)
+        {
+            Health h = candidate.GetComponentInChildren<Health>();
+            if (h != null && h.isDowned)
+            {
+                return;
+            }
+        }
 
         activePlayerIndex = index;
         ActivePlayer = partyMembers[activePlayerIndex];
@@ -141,10 +211,7 @@ public class PartyManager : MonoBehaviour
     public void SetPlayerSwitching(bool isEnabled)
     {
         playerSwitchingEnabled = isEnabled;
-        if (!isEnabled && activePlayerIndex != 0)
-        {
-            SetActivePlayer(0);
-        }
+        if (!isEnabled && activePlayerIndex != 0) SetActivePlayer(0);
     }
 
     #region Leveling Methods

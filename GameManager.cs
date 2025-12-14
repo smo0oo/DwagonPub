@@ -265,6 +265,14 @@ public class GameManager : MonoBehaviour
         }
 
         ApplySceneRules();
+
+        // --- NEW HOOK FOR DUAL MODE ---
+        if (DualModeManager.instance != null)
+        {
+            DualModeManager.instance.ApplyTeamState(currentSceneType);
+        }
+        // ------------------------------
+
         FindAnyObjectByType<UIPartyPortraitsManager>()?.RefreshAllPortraits();
 
         float elapsedTime = Time.realtimeSinceStartup - startTime;
@@ -453,6 +461,18 @@ public class GameManager : MonoBehaviour
         if (alreadyLoaded && currentLevelScene == sceneName && SceneManager.GetActiveScene().name == sceneName) return;
         StartCoroutine(TransitionLevel(sceneName, spawnPointID, fromNodeID));
     }
+    
+    // --- NEW METHOD ---
+    public void ReloadCurrentLevel(string spawnPointID = null)
+    {
+        if (isTransitioning) return;
+
+        // We use the internal TransitionLevel coroutine directly, 
+        // bypassing the "already loaded" check in LoadLevel.
+        lastSpawnPointID = spawnPointID;
+        StartCoroutine(TransitionLevel(currentLevelScene, spawnPointID));
+    }
+    // ------------------
 
     public void StartNewGame() { LoadLevel(startingSceneName); }
 
