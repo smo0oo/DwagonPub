@@ -18,16 +18,16 @@ public class ItemData : ScriptableObject
 {
     [Header("Item Information")]
     public string id = "Item";
+    // This is the field DualModeManager was looking for
+    public string itemName = "New Item";
     public string displayName = "New Item";
     [TextArea(4, 10)]
     public string description = "Item Description";
     public Sprite icon;
 
-    // --- NEW FIELD ---
     [Header("Visuals")]
     [Tooltip("The 3D prefab to instantiate when this item is equipped.")]
     public GameObject equippedPrefab;
-    // -----------------
 
     [Header("Item Properties")]
     public ItemType itemType = ItemType.Junk;

@@ -10,8 +10,8 @@ public class SaveManager : MonoBehaviour
 
     private PartyManager partyManager;
     private WorldMapManager worldMapManager;
-    // --- NEW REFERENCE ---
     private WagonResourceManager wagonResourceManager;
+    private DualModeManager dualModeManager; // Reference to Dual Mode
     private List<GameObject> partyMembers;
 
     void Awake()
@@ -29,8 +29,8 @@ public class SaveManager : MonoBehaviour
     {
         partyManager = PartyManager.instance;
         worldMapManager = FindAnyObjectByType<WorldMapManager>();
-        // --- NEW FIND ---
         wagonResourceManager = FindAnyObjectByType<WagonResourceManager>();
+        dualModeManager = DualModeManager.instance; // Find the singleton
 
         if (partyManager != null)
         {
@@ -68,6 +68,30 @@ public class SaveManager : MonoBehaviour
         {
             data.currentLocationNodeID = GameManager.instance.lastKnownLocationNodeID;
         }
+
+        // --- Save Dual Mode Data ---
+        if (dualModeManager != null)
+        {
+            data.dualModeData.isDualModeActive = dualModeManager.isDualModeActive;
+            data.dualModeData.isRescueMissionActive = dualModeManager.isRescueMissionActive;
+            data.dualModeData.dungeonTeamIndices = new List<int>(dualModeManager.dungeonTeamIndices);
+            data.dualModeData.wagonTeamIndices = new List<int>(dualModeManager.wagonTeamIndices);
+
+            // Save Loot Bag
+            data.dualModeData.dungeonLootBag = new List<ItemStackSaveData>();
+            foreach (var stack in dualModeManager.dungeonLootBag)
+            {
+                if (stack.itemData != null)
+                    data.dualModeData.dungeonLootBag.Add(new ItemStackSaveData(stack.itemData.id, stack.quantity));
+            }
+
+            // Save Boss Buff Name
+            if (dualModeManager.pendingBossBuff != null)
+            {
+                data.dualModeData.pendingBossBuffName = dualModeManager.pendingBossBuff.abilityName;
+            }
+        }
+        // ---------------------------
 
         // --- Save Party Data ---
         data.partyLevel = partyManager.partyLevel;
@@ -128,5 +152,48 @@ public class SaveManager : MonoBehaviour
         {
             GameManager.instance.LoadSavedGame();
         }
+    }
+
+    // --- NEW HELPER: Called by GameManager or DualModeManager after loading the file ---
+    public void RestoreDualModeState(SaveData data)
+    {
+        if (DualModeManager.instance == null || data.dualModeData == null) return;
+
+        var dmm = DualModeManager.instance;
+        var saved = data.dualModeData;
+
+        dmm.isDualModeActive = saved.isDualModeActive;
+        dmm.isRescueMissionActive = saved.isRescueMissionActive;
+        dmm.dungeonTeamIndices = new List<int>(saved.dungeonTeamIndices);
+        dmm.wagonTeamIndices = new List<int>(saved.wagonTeamIndices);
+
+        // Restore Loot Bag
+        dmm.dungeonLootBag.Clear();
+        if (InventoryManager.instance != null)
+        {
+            foreach (var savedStack in saved.dungeonLootBag)
+            {
+                ItemData item = InventoryManager.instance.GetItemByID(savedStack.itemID);
+                if (item != null)
+                {
+                    dmm.dungeonLootBag.Add(new ItemStack(item, savedStack.quantity));
+                }
+            }
+        }
+
+        // Restore Boss Buff
+        if (!string.IsNullOrEmpty(saved.pendingBossBuffName))
+        {
+            dmm.pendingBossBuff = LoadBuffByName(saved.pendingBossBuffName);
+        }
+
+        Debug.Log("Dual Mode State Restored.");
+    }
+
+    private Ability LoadBuffByName(string abilityName)
+    {
+        // ASSUMPTION: Abilities are in a Resources folder. 
+        // Adjust path if your abilities are stored differently (e.g. ScriptableObject database).
+        return Resources.Load<Ability>("Abilities/" + abilityName);
     }
 }

@@ -30,6 +30,10 @@ public class InventoryManager : MonoBehaviour
     [Header("External References")]
     public EquipmentManager equipmentManager;
 
+    [Header("Item Database (For Save/Load)")]
+    [Tooltip("Drag all valid ItemData assets here so the Save System can find them by ID.")]
+    public List<ItemData> itemDatabase = new List<ItemData>();
+
     private Inventory currentlyDisplayedInventory;
     private GameObject currentPlayerObject;
     private List<InventorySlot> uiSlots = new List<InventorySlot>();
@@ -52,19 +56,19 @@ public class InventoryManager : MonoBehaviour
         if (stackSplitter != null) { stackSplitter.gameObject.SetActive(false); }
     }
 
-    // --- NEW: Centralized Loot Handler ---
+    // --- CENTRALIZED LOOT HANDLER ---
     /// <summary>
-    /// Checks the item type. If it's a Resource, sends it to the Wagon.
-    /// If it's a normal item, tries to add it to the active player's inventory.
-    /// Returns TRUE if the item was successfully taken (so WorldItem can destroy itself).
+    /// Checks the item type. 
+    /// 1. If Resource -> Wagon.
+    /// 2. If Dual Mode Active -> Loot Bag.
+    /// 3. If Standard -> Active Player Inventory.
+    /// Returns TRUE if the item was successfully taken.
     /// </summary>
     public bool HandleLoot(ItemData item, int quantity)
     {
-        // 1. Check for Resource Item
+        // 1. Check for Resource Item (Wagon Logic)
         if (item is ResourceItemData resourceItem)
         {
-            // Only consume if we have a resource manager (e.g., we are near the wagon or it's global)
-            // Note: If you want resources to be collected even in dungeons, WagonResourceManager should persist or be a Singleton.
             if (WagonResourceManager.instance != null)
             {
                 WagonResourceManager.instance.AddResource(
@@ -72,19 +76,21 @@ public class InventoryManager : MonoBehaviour
                     resourceItem.restoreAmount * quantity
                 );
 
-                if (FloatingTextManager.instance != null && PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
-                {
-                    string text = $"+{resourceItem.restoreAmount * quantity} {resourceItem.resourceType}";
-                    FloatingTextManager.instance.ShowEvent(text, PartyManager.instance.ActivePlayer.transform.position + Vector3.up * 2f);
-                }
+                ShowFloatingText($"+{resourceItem.restoreAmount * quantity} {resourceItem.resourceType}", Color.cyan);
                 return true;
             }
-            // If no WagonResourceManager found, maybe fall through to inventory? 
-            // Or just fail. For now, let's treat it as consumed.
         }
 
-        // 2. Standard Inventory Logic
-        // Find active player's inventory
+        // 2. DUAL MODE CHECK (Interception)
+        // If we are in a dungeon run, items go to the shared bag, NOT the player inventory.
+        if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
+        {
+            DualModeManager.instance.AddItemToLootBag(item, quantity);
+            ShowFloatingText($"+{quantity} {item.itemName} (Bag)", Color.yellow);
+            return true;
+        }
+
+        // 3. Standard Inventory Logic
         if (currentPlayerObject == null && PartyManager.instance != null)
         {
             currentPlayerObject = PartyManager.instance.ActivePlayer;
@@ -95,11 +101,50 @@ public class InventoryManager : MonoBehaviour
         Inventory targetInventory = currentPlayerObject.GetComponentInChildren<Inventory>();
         if (targetInventory == null) return false;
 
-        return targetInventory.AddItem(item, quantity);
+        bool added = targetInventory.AddItem(item, quantity);
+
+        // Optional feedback for normal items (if Inventory doesn't handle it internally)
+        if (added)
+        {
+            // You can uncomment this if your Inventory.AddItem doesn't already show text
+            // ShowFloatingText($"+{quantity} {item.itemName}", Color.white);
+        }
+
+        return added;
+    }
+
+    private void ShowFloatingText(string text, Color color)
+    {
+        if (FloatingTextManager.instance != null && PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
+        {
+            FloatingTextManager.instance.ShowEvent(text, PartyManager.instance.ActivePlayer.transform.position + Vector3.up * 2f);
+        }
     }
     // -------------------------------------
 
-    // ... (All other existing methods remain unchanged) ...
+    // --- Item Lookup for Save System ---
+    public ItemData GetItemByID(string targetID)
+    {
+        // 1. Check Manual List
+        if (itemDatabase != null)
+        {
+            foreach (var item in itemDatabase)
+            {
+                if (item != null && item.id == targetID) return item;
+            }
+        }
+
+        // 2. Fallback: Resources/Items
+        ItemData resItem = Resources.Load<ItemData>($"Items/{targetID}");
+        if (resItem != null) return resItem;
+
+        // 3. Fallback: Resources root
+        resItem = Resources.Load<ItemData>(targetID);
+
+        return resItem;
+    }
+    // -----------------------------------
+
     public void ShowTooltip(InventorySlot slot) { if (slot.parentInventory == null) return; CharacterRoot root = slot.parentInventory.GetComponentInParent<CharacterRoot>(); if (root == null) return; PlayerStats viewerStats = root.PlayerStats; if (viewerStats == null) return; ItemStack itemStack = slot.parentInventory.items[slot.slotIndex]; bool requirementsMet = CheckRequirements(itemStack, viewerStats); if (TooltipManager.instance != null) { TooltipManager.instance.ShowItemTooltip(itemStack, requirementsMet, viewerStats); } }
     public void UseItem(InventorySlot slot) { if (currentlyDisplayedInventory == null || currentPlayerObject == null) return; ItemStack item = GetItemStackInSlot(slot.slotIndex); if (item == null || item.itemData == null) return; if (item.itemData.stats is ItemAbilityScrollStats scrollStats) { if (scrollStats.abilityToTeach == null) { Debug.LogError("Ability Scroll has no ability assigned to teach.", item.itemData); return; } if (DomeController.instance == null) { Debug.LogWarning("Cannot use Dome ability scroll: Dome instance not found."); return; } DomeAI domeAI = DomeController.instance.GetComponent<DomeAI>(); if (domeAI != null && !domeAI.defaultAbilities.Contains(scrollStats.abilityToTeach)) { domeAI.defaultAbilities.Add(scrollStats.abilityToTeach); Debug.Log($"Dome has learned a new ability: {scrollStats.abilityToTeach.name}"); currentlyDisplayedInventory.RemoveItem(slot.slotIndex, 1); } else { Debug.Log("Dome already knows this ability."); } } else if (item.itemData.stats is ItemConsumableStats consumableStats) { PlayerAbilityHolder abilityHolder = currentPlayerObject.GetComponentInChildren<PlayerAbilityHolder>(); if (abilityHolder != null && consumableStats.usageAbility != null) { abilityHolder.UseAbility(consumableStats.usageAbility, currentPlayerObject); currentlyDisplayedInventory.RemoveItem(slot.slotIndex, 1); } } }
     private void RefreshUI() { if (currentlyDisplayedInventory == null) { for (int i = 0; i < uiSlots.Count; i++) uiSlots[i].UpdateSlot(null); if (playerCurrencyText != null) playerCurrencyText.text = ""; } else { for (int i = 0; i < uiSlots.Count; i++) { if (i < currentlyDisplayedInventory.items.Count) { uiSlots[i].Initialize(this, i, currentlyDisplayedInventory); uiSlots[i].UpdateSlot(currentlyDisplayedInventory.items[i]); } else { uiSlots[i].UpdateSlot(null); } } if (playerCurrencyText != null && PartyManager.instance != null) { playerCurrencyText.text = $"Gold: {PartyManager.instance.currencyGold}"; } } }

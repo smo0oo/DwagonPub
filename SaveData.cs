@@ -9,23 +9,38 @@ public class SaveData
     public float timeOfDay;
     public string currentLocationNodeID;
 
-    // --- NEW: Wagon Resources ---
+    // Wagon Resources
     public float wagonFuel;
     public float wagonRations;
     public float wagonIntegrity;
+
+    // --- NEW: Dual Mode State ---
+    public DualModeSaveData dualModeData = new DualModeSaveData();
     // ----------------------------
 
     // Party
     public int partyLevel;
     public int currentXP;
     public int xpToNextLevel;
-    public int currencyGold; // Ensure Gold is saved here too
+    public int currencyGold;
 
     // Characters
     public List<CharacterSaveData> characterData = new();
 }
 
-// ... (CharacterSaveData and ItemStackSaveData remain the same) ...
+[Serializable]
+public class DualModeSaveData
+{
+    public bool isDualModeActive;
+    public bool isRescueMissionActive;
+    public List<int> dungeonTeamIndices = new List<int>();
+    public List<int> wagonTeamIndices = new List<int>();
+    public List<ItemStackSaveData> dungeonLootBag = new List<ItemStackSaveData>();
+
+    // We store the Ability Name to reload it later (requires Resources or a Lookup)
+    public string pendingBossBuffName;
+}
+
 [Serializable]
 public class CharacterSaveData
 {

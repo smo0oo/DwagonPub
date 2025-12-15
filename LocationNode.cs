@@ -2,7 +2,9 @@ using UnityEngine;
 using System.Collections.Generic;
 using UnityEngine.Splines;
 
-public enum NodeType { Scene, Event, Waypoint }
+// --- UPDATED: Added DualModeLocation ---
+public enum NodeType { Scene, Event, Waypoint, DualModeLocation }
+// ---------------------------------------
 
 [System.Serializable]
 public class RoadConnection
@@ -25,7 +27,6 @@ public class LocationNode : MonoBehaviour
     public string locationName;
     public NodeType nodeType = NodeType.Scene;
 
-    // --- NEW: Map Positioning ---
     [Header("Paper Map Mapping")]
     [Tooltip("If true, the icon position is calculated from the node's World Position relative to the World Map Bounds.")]
     public bool useAutoPosition = true;

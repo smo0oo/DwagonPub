@@ -93,7 +93,6 @@ public class WorldMapManager : MonoBehaviour
 
     public void RestoreJourneyState(SplineContainer spline, float progress, bool reverse)
     {
-        // 1. Clear any stale path data so the arrival logic triggers correctly
         currentPlannedPath = null;
 
         if (wagonController != null)
@@ -126,7 +125,6 @@ public class WorldMapManager : MonoBehaviour
 
             ShowRoadsidePanel();
 
-            // Ensure other panels are hidden
             if (arrivalPanel != null) arrivalPanel.SetActive(false);
             if (haltButton != null) haltButton.gameObject.SetActive(false);
 
@@ -193,7 +191,6 @@ public class WorldMapManager : MonoBehaviour
             }
             else if (currentActiveConnection != null && currentActiveConnection.destinationNode != null)
             {
-                // Check if we are already practically there (handling instant arrival)
                 float progress = Mathf.Clamp(wagonController.TravelProgress, 0f, 1f);
                 if (progress > 0.99f)
                 {
@@ -442,7 +439,6 @@ public class WorldMapManager : MonoBehaviour
         {
             SetCurrentLocation(destination, true);
 
-            // --- FIXED: Treat as final if planned path is null (resumed journey) ---
             bool isFinalDestination = (currentPlannedPath == null || currentPlannedPath.Count == 0 || destination == currentPlannedPath.Last());
 
             if (isFinalDestination)
@@ -525,7 +521,9 @@ public class WorldMapManager : MonoBehaviour
         arrivalText.text = $"You have arrived at {currentLocation.locationName}.\nTime is {Mathf.Floor(timeOfDay)}:00.";
         arrivalPanel.SetActive(true);
 
-        if (currentLocation.nodeType == NodeType.Scene)
+        // --- UPDATED: Allow entry for Dual Mode too ---
+        if (currentLocation.nodeType == NodeType.Scene ||
+            currentLocation.nodeType == NodeType.DualModeLocation)
         {
             if (enterButton != null) enterButton.gameObject.SetActive(true);
         }
@@ -535,7 +533,28 @@ public class WorldMapManager : MonoBehaviour
         }
     }
 
-    public void OnEnterLocation() { arrivalPanel.SetActive(false); isUiBusy = false; if (GameManager.instance != null && currentLocation != null) { string spawnPointID = "WorldMapArrival"; var originNode = FindObjectsByType<LocationNode>(FindObjectsSortMode.None).FirstOrDefault(n => n.connections.Any(c => c.destinationNode.locationName == currentLocation.locationName)); if (originNode != null) { var connectionData = originNode.connections.FirstOrDefault(c => c.destinationNode.locationName == currentLocation.locationName); if (connectionData != null) spawnPointID = connectionData.destinationSpawnPointID; } GameManager.instance.LoadLevel(currentLocation.sceneToLoad, spawnPointID, currentLocation.locationName); } }
+    public void OnEnterLocation()
+    {
+        arrivalPanel.SetActive(false);
+        isUiBusy = false;
+
+        if (GameManager.instance != null && currentLocation != null)
+        {
+            // --- NEW: Pass Node Type to GameManager before Loading ---
+            GameManager.instance.SetLocationType(currentLocation.nodeType);
+            // ---------------------------------------------------------
+
+            string spawnPointID = "WorldMapArrival";
+            var originNode = FindObjectsByType<LocationNode>(FindObjectsSortMode.None).FirstOrDefault(n => n.connections.Any(c => c.destinationNode.locationName == currentLocation.locationName));
+            if (originNode != null)
+            {
+                var connectionData = originNode.connections.FirstOrDefault(c => c.destinationNode.locationName == currentLocation.locationName);
+                if (connectionData != null) spawnPointID = connectionData.destinationSpawnPointID;
+            }
+            GameManager.instance.LoadLevel(currentLocation.sceneToLoad, spawnPointID, currentLocation.locationName);
+        }
+    }
+
     public void OnContinueJourney() { arrivalPanel.SetActive(false); isUiBusy = false; }
     public void OnWait() { timeOfDay += 1; if (timeOfDay >= 24) timeOfDay -= 24; if (resourceManager != null) resourceManager.ConsumeForTime(1f); ShowArrivalPanel(); }
 }

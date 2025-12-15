@@ -3,10 +3,15 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine.SceneManagement;
 using UnityEngine.AI;
+using System; // Required for Action
 
 public class DualModeManager : MonoBehaviour
 {
     public static DualModeManager instance;
+
+    // --- EVENT FOR UI UPDATES ---
+    public event Action OnLootBagChanged;
+    // ----------------------------
 
     [Header("State")]
     public bool isDualModeActive = false;
@@ -53,9 +58,42 @@ public class DualModeManager : MonoBehaviour
         pendingBossBuff = null;
         dungeonLootBag.Clear();
         fallenHeroes.Clear();
+
+        OnLootBagChanged?.Invoke();
     }
 
-    // --- VICTORY LOGIC ---
+    // --- MISSING METHOD FIX ---
+    public void AddItemToLootBag(ItemData item, int quantity)
+    {
+        if (item == null || quantity <= 0) return;
+
+        // Try to stack existing items
+        if (item.isStackable)
+        {
+            foreach (var stack in dungeonLootBag)
+            {
+                if (stack.itemData == item && stack.quantity < item.maxStackSize)
+                {
+                    int space = item.maxStackSize - stack.quantity;
+                    int add = Mathf.Min(space, quantity);
+                    stack.quantity += add;
+                    quantity -= add;
+                    if (quantity <= 0) break;
+                }
+            }
+        }
+
+        // Add remaining as new stack
+        if (quantity > 0)
+        {
+            dungeonLootBag.Add(new ItemStack(item, quantity));
+        }
+
+        Debug.Log($"Added {item.itemName} to Dungeon Loot Bag.");
+        OnLootBagChanged?.Invoke();
+    }
+    // --------------------------
+
     public void CompleteDungeonRun()
     {
         if (!isDualModeActive) return;
@@ -65,20 +103,34 @@ public class DualModeManager : MonoBehaviour
         // 1. Merge Loot
         MergeLootToMainInventory();
 
-        // 2. Apply Boss Buff to Wagon Team (Defenders)
+        // 2. Apply Boss Buff
         if (pendingBossBuff != null)
         {
             ApplyBuffToTeam(wagonTeamIndices, pendingBossBuff);
-            pendingBossBuff = null; // Consumed
+            pendingBossBuff = null;
         }
 
-        // 3. Load Defense Scene
-        // We do NOT clear isDualModeActive yet, because the Dome Battle still needs to know
-        // which team is fighting (the Wagon Team).
+        // 3. Reunite Teams
+        ReuniteTeams();
+
+        // 4. Load Defense Scene
         if (GameManager.instance != null)
         {
             GameManager.instance.LoadLevel(defenseSceneName, "WagonCenter");
         }
+    }
+
+    private void ReuniteTeams()
+    {
+        foreach (int index in dungeonTeamIndices)
+        {
+            if (!wagonTeamIndices.Contains(index))
+            {
+                wagonTeamIndices.Add(index);
+            }
+        }
+        dungeonTeamIndices.Clear();
+        fallenHeroes.Clear();
     }
 
     private void MergeLootToMainInventory()
@@ -87,7 +139,6 @@ public class DualModeManager : MonoBehaviour
         {
             Inventory targetInventory = null;
 
-            // Try to find a valid inventory to dump into
             if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
                 targetInventory = PartyManager.instance.ActivePlayer.GetComponentInChildren<Inventory>();
 
@@ -109,6 +160,7 @@ public class DualModeManager : MonoBehaviour
                 }
             }
             dungeonLootBag.Clear();
+            OnLootBagChanged?.Invoke();
         }
     }
 
@@ -121,34 +173,29 @@ public class DualModeManager : MonoBehaviour
             if (ValidateIndex(index))
             {
                 GameObject member = PartyManager.instance.partyMembers[index];
-                StatusEffectHolder holder = member.GetComponentInChildren<StatusEffectHolder>();
 
-                // Assuming Ability has a status effect attached, or we add the ability itself
-                // For this implementation, we'll try to add it to the AbilityHolder if it's an active ability,
-                // or you might have custom logic here for "Global Buffs".
-
-                // Example: If the buff is just a status effect container
-                if (holder != null && buff.effects != null)
+                if (buff.friendlyEffects != null && buff.friendlyEffects.Count > 0)
                 {
-                    // This assumes you have a way to apply an Ability as a Buff directly
-                    // Or you can create a StatusEffect from the ability data.
-                    // For now, let's just log it.
                     Debug.Log($"Applying Boss Reward '{buff.displayName}' to {member.name}");
+                    foreach (var effect in buff.friendlyEffects)
+                    {
+                        effect.Apply(member, member);
+                    }
                 }
             }
         }
     }
-    // ---------------------
 
     public void EndDualMode()
     {
         isDualModeActive = false;
         isRescueMissionActive = false;
         pendingBossBuff = null;
-        dungeonLootBag.Clear(); // Just in case
+        dungeonLootBag.Clear();
         dungeonTeamIndices.Clear();
         wagonTeamIndices.Clear();
         fallenHeroes.Clear();
+        OnLootBagChanged?.Invoke();
     }
 
     public void StartRescueMission()
@@ -256,7 +303,6 @@ public class DualModeManager : MonoBehaviour
             }
             else
             {
-                // Rescue Logic
                 foreach (int index in dungeonTeamIndices)
                 {
                     if (ValidateIndex(index))
@@ -292,25 +338,18 @@ public class DualModeManager : MonoBehaviour
         }
         else if (currentScene == SceneType.DomeBattle)
         {
-            // --- VICTORY / DEFENSE STATE ---
+            if (allMembers.Count > 0 && allMembers[0] != null) allMembers[0].SetActive(false);
 
-            // 1. Disable Wagon (Player 0) if necessary, or keep it as the center
-            // Usually in DomeBattle, Player 0 (Wagon) IS the focus.
-            if (allMembers.Count > 0 && allMembers[0] != null) allMembers[0].SetActive(true);
-
-            // 2. Hide Dungeon Team (They are "resting" or inside the wagon)
             foreach (int index in dungeonTeamIndices)
                 if (ValidateIndex(index)) allMembers[index].SetActive(false);
 
-            // 3. Show Wagon Team (They are defending)
             foreach (int index in wagonTeamIndices)
                 if (ValidateIndex(index)) allMembers[index].SetActive(true);
 
-            // 4. Set Control to Wagon Team Leader
             if (wagonTeamIndices.Count > 0)
                 PartyManager.instance.SetActivePlayer(wagonTeamIndices[0]);
             else
-                PartyManager.instance.SetActivePlayer(0); // Fallback to Wagon
+                PartyManager.instance.SetActivePlayer(0);
         }
     }
 

@@ -21,8 +21,6 @@ public class DualModeSetupUI : MonoBehaviour
     [Tooltip("The name of the Dome Battle scene to load when switching to Group B (e.g. 'DomeBattle_Forest').")]
     public string domeDefenseSceneName = "DomeBattle";
 
-    // Track where each member is currently assigned
-    // Key: Party Member Index, Value: Is in Dungeon Team? (True=Dungeon, False=Wagon)
     private Dictionary<int, bool> assignments = new Dictionary<int, bool>();
 
     void Start()
@@ -30,8 +28,16 @@ public class DualModeSetupUI : MonoBehaviour
         if (startOperationButton != null)
             startOperationButton.onClick.AddListener(OnStartClicked);
 
-        // Start hidden
         if (panelRoot != null) panelRoot.SetActive(false);
+
+        // --- NEW: Auto-open using global NodeType enum ---
+        if (GameManager.instance != null &&
+            GameManager.instance.lastLocationType == NodeType.DualModeLocation)
+        {
+            Debug.Log("Dual Mode Location Detected: Auto-opening Setup UI.");
+            OpenSetup();
+        }
+        // -------------------------------------------------
     }
 
     public void OpenSetup()
@@ -47,21 +53,19 @@ public class DualModeSetupUI : MonoBehaviour
         }
 
         RefreshUI();
-        panelRoot.SetActive(true);
+        if (panelRoot != null) panelRoot.SetActive(true);
     }
 
     public void CloseSetup()
     {
-        panelRoot.SetActive(false);
+        if (panelRoot != null) panelRoot.SetActive(false);
     }
 
     private void RefreshUI()
     {
-        // Clear containers
         foreach (Transform child in dungeonTeamContainer) Destroy(child.gameObject);
         foreach (Transform child in wagonTeamContainer) Destroy(child.gameObject);
 
-        // Rebuild lists
         foreach (var kvp in assignments)
         {
             int memberIndex = kvp.Key;
@@ -70,15 +74,12 @@ public class DualModeSetupUI : MonoBehaviour
             GameObject memberObj = PartyManager.instance.partyMembers[memberIndex];
             if (memberObj == null) continue;
 
-            // Create button
             Transform parent = isDungeon ? dungeonTeamContainer : wagonTeamContainer;
             GameObject btnObj = Instantiate(memberButtonPrefab, parent);
 
-            // Setup visual text
             TextMeshProUGUI text = btnObj.GetComponentInChildren<TextMeshProUGUI>();
             if (text != null) text.text = memberObj.name;
 
-            // Setup click event to swap teams
             Button btn = btnObj.GetComponent<Button>();
             btn.onClick.AddListener(() => ToggleTeam(memberIndex));
         }
@@ -90,14 +91,13 @@ public class DualModeSetupUI : MonoBehaviour
     {
         if (assignments.ContainsKey(index))
         {
-            assignments[index] = !assignments[index]; // Flip boolean
+            assignments[index] = !assignments[index];
             RefreshUI();
         }
     }
 
     private void ValidateStart()
     {
-        // Require at least 1 person in Dungeon Team
         bool hasDungeonMember = false;
         foreach (var kvp in assignments)
         {
@@ -108,7 +108,8 @@ public class DualModeSetupUI : MonoBehaviour
             }
         }
 
-        startOperationButton.interactable = hasDungeonMember;
+        if (startOperationButton != null)
+            startOperationButton.interactable = hasDungeonMember;
     }
 
     private void OnStartClicked()
@@ -122,13 +123,11 @@ public class DualModeSetupUI : MonoBehaviour
             else groupB.Add(kvp.Key);
         }
 
-        // Initialize the Manager with the specific dome scene
         if (DualModeManager.instance != null)
         {
             DualModeManager.instance.InitializeSplit(groupA, groupB, domeDefenseSceneName);
         }
 
-        // Trigger the transition logic
         if (GameManager.instance != null)
         {
             GameManager.instance.LoadLevel(firstDungeonSceneName, dungeonSpawnPointID);

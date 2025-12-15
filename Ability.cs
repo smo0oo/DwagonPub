@@ -76,10 +76,8 @@ public class Ability : ScriptableObject
     [Tooltip("If set, this string will trigger a specific parameter in the Animator (e.g., 'Kick'), bypassing the standard weapon attack logic.")]
     public string overrideTriggerName;
 
-    // --- FIX: This is the missing field causing your error ---
     [Tooltip("How many seconds the player is rooted in place when using this ability. Set to 0 for no lock.")]
     public float movementLockDuration = 0f;
-    // --------------------------------------------------------
 
     [Header("Behavior Type")]
     [Tooltip("The core logic this ability follows (e.g., fires a projectile, hits in melee, places on ground).")]
@@ -135,6 +133,12 @@ public class Ability : ScriptableObject
     public GameObject hitVFX;
     [Tooltip("The sound effect to play when the ability is executed.")]
     public AudioClip castSound;
+
+    // --- NEW FIELD ---
+    [Header("Legacy / Simple Effects")]
+    [Tooltip("List of simple effect IDs (referenced by DualModeManager).")]
+    public List<string> effects = new List<string>();
+    // -----------------
 
     [Header("Effects Applied to Allies")]
     [SerializeReference]

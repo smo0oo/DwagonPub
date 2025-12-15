@@ -7,7 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine.AI;
 using Cinemachine;
-using UnityEngine.Splines; // Required for Spline positioning
+using UnityEngine.Splines;
 
 public class GameManager : MonoBehaviour
 {
@@ -24,16 +24,24 @@ public class GameManager : MonoBehaviour
     public List<ItemData> allItemsDatabase;
 
     [Header("State Tracking")]
-    [Tooltip("The ID of the spawn point used to enter the current scene. Read by level managers to determine context (e.g. Ambush vs Camp).")]
+    [Tooltip("The ID of the spawn point used to enter the current scene.")]
     public string lastSpawnPointID;
 
-    // --- NEW: Precise Positioning Tracking ---
+    // --- REQUIRED FOR DUNGEON EXIT ---
+    [Tooltip("The scene we came from. Used by Dungeon Exits to return to the correct Hub (Town/Dome).")]
+    public string previousSceneName;
+    // ---------------------------------
+
+    // --- REQUIRED FOR DUAL MODE SETUP ---
+    [Tooltip("The type of the Location Node we most recently entered.")]
+    public NodeType lastLocationType;
+    // ------------------------------------
+
     [Header("Travel State")]
-    public string lastKnownLocationNodeID; // Legacy/Fallback
-    public string lastSplineContainerName; // Name of the spline object
-    public float lastSplineProgress;       // 0.0 to 1.0
-    public bool lastSplineReverse;         // Was traveling in reverse?
-    // -----------------------------------------
+    public string lastKnownLocationNodeID;
+    public string lastSplineContainerName;
+    public float lastSplineProgress;
+    public bool lastSplineReverse;
 
     [Header("Persistent Objects")]
     public GameObject playerPartyObject;
@@ -50,13 +58,48 @@ public class GameManager : MonoBehaviour
     [Header("UI Element Visibility")]
     public List<GameObject> worldMapHiddenElements;
 
-    [Header("Core Scene (optional)")]
+    [Header("Core Scene")]
     public string coreSceneName = "CoreScene";
     public SceneType currentSceneType { get; private set; }
     private string currentLevelScene;
 
     private bool isTransitioning;
     public bool IsTransitioning => isTransitioning;
+
+    // --- DEBUG GUI ---
+    void OnGUI()
+    {
+        if (!Debug.isDebugBuild) return;
+
+        GUILayout.BeginArea(new Rect(10, 10, 350, 250));
+        GUILayout.Box("Game State Debugger");
+
+        GUILayout.Label($"Scene: {currentLevelScene} ({currentSceneType})");
+        GUILayout.Label($"Return Point: {previousSceneName}");
+        GUILayout.Label($"Last Loc Type: {lastLocationType}");
+
+        if (DualModeManager.instance != null)
+        {
+            var dmm = DualModeManager.instance;
+            string activeColor = dmm.isDualModeActive ? "green" : "grey";
+            GUILayout.Label($"Dual Mode: <color={activeColor}>{dmm.isDualModeActive}</color>");
+
+            if (dmm.isDualModeActive)
+            {
+                GUILayout.Label($"Rescue: {dmm.isRescueMissionActive}");
+                GUILayout.Label($"Bag: {dmm.dungeonLootBag.Count} items");
+                GUILayout.Label($"Dungeon Team: {dmm.dungeonTeamIndices.Count}");
+                GUILayout.Label($"Wagon Team: {dmm.wagonTeamIndices.Count}");
+            }
+        }
+        else
+        {
+            GUILayout.Label("DualModeManager: <color=red>MISSING</color>");
+        }
+
+        GUILayout.EndArea();
+    }
+    // -----------------
 
     void Awake()
     {
@@ -71,7 +114,13 @@ public class GameManager : MonoBehaviour
         currentLevelScene = NormalizeSceneName(SceneManager.GetActiveScene().name);
     }
 
-    // --- NEW: Helper to Capture State ---
+    // --- NEW HELPER METHOD (Fixes Error) ---
+    public void SetLocationType(NodeType type)
+    {
+        lastLocationType = type;
+    }
+    // ---------------------------------------
+
     public void CaptureWagonState()
     {
         WagonController wagon = FindAnyObjectByType<WagonController>();
@@ -80,18 +129,13 @@ public class GameManager : MonoBehaviour
             lastSplineContainerName = wagon.CurrentSpline.gameObject.name;
             lastSplineProgress = wagon.TravelProgress;
             lastSplineReverse = wagon.IsReversing;
-
-            // Clear the node ID so we favor the spline restore logic
             lastKnownLocationNodeID = null;
         }
         else
         {
-            // If no spline is active, we might be at a node or stopped.
-            // We clear the spline name so fallback logic works.
             lastSplineContainerName = null;
         }
     }
-    // ------------------------------------
 
     public void ReturnToWorldMap()
     {
@@ -110,56 +154,32 @@ public class GameManager : MonoBehaviour
             SceneStateManager.instance.CaptureSceneState(currentLevelScene, FindAnyObjectByType<InventoryManager>().worldItemPrefab);
         }
 
+        previousSceneName = currentLevelScene;
+
         yield return SwitchToSceneExact(worldMapSceneName);
         yield return null;
 
         WorldMapManager wmm = FindAnyObjectByType<WorldMapManager>();
         WagonController wagon = FindAnyObjectByType<WagonController>();
-
-        // --- NEW: Restore Logic ---
         bool positionRestored = false;
 
-        // 1. Try to restore precise spline position via Manager
         if (wagon != null && !string.IsNullOrEmpty(lastSplineContainerName))
         {
-            // Find the spline object by name in the newly loaded scene
             GameObject splineObj = GameObject.Find(lastSplineContainerName);
             if (splineObj != null && splineObj.TryGetComponent<SplineContainer>(out var spline))
             {
-                if (wmm != null)
-                {
-                    // This sets up UI and connection logic correctly
-                    wmm.RestoreJourneyState(spline, lastSplineProgress, lastSplineReverse);
-                }
-                else
-                {
-                    // Fallback visual restore only
-                    wagon.RestorePosition(spline, lastSplineProgress, lastSplineReverse);
-                }
+                if (wmm != null) wmm.RestoreJourneyState(spline, lastSplineProgress, lastSplineReverse);
+                else wagon.RestorePosition(spline, lastSplineProgress, lastSplineReverse);
                 positionRestored = true;
-            }
-            else
-            {
-                Debug.LogWarning($"GameManager: Could not find SplineContainer named '{lastSplineContainerName}' to restore position.");
             }
         }
 
-        // 2. Fallback to Location Node if Spline failed or wasn't set
         if (!positionRestored && wmm != null && !string.IsNullOrEmpty(lastKnownLocationNodeID))
         {
             LocationNode targetNode = FindObjectsByType<LocationNode>(FindObjectsSortMode.None)
                 .FirstOrDefault(n => n.locationName == lastKnownLocationNodeID);
-
-            if (targetNode != null)
-            {
-                wmm.SetCurrentLocation(targetNode, true);
-            }
-            else
-            {
-                Debug.LogWarning($"Could not find location node with ID '{lastKnownLocationNodeID}' to return to.");
-            }
+            if (targetNode != null) wmm.SetCurrentLocation(targetNode, true);
         }
-        // --------------------------
 
         SetUIVisibility("WorldMap");
         SetPlayerModelsActive(false);
@@ -168,10 +188,7 @@ public class GameManager : MonoBehaviour
         FindAnyObjectByType<UIPartyPortraitsManager>()?.RefreshAllPortraits();
 
         float elapsedTime = Time.realtimeSinceStartup - startTime;
-        if (elapsedTime < minimumLoadingScreenTime)
-        {
-            yield return new WaitForSeconds(minimumLoadingScreenTime - elapsedTime);
-        }
+        if (elapsedTime < minimumLoadingScreenTime) yield return new WaitForSeconds(minimumLoadingScreenTime - elapsedTime);
 
         LoadingScreenManager.instance.HideLoadingScreen(fadeDuration);
         isTransitioning = false;
@@ -190,10 +207,7 @@ public class GameManager : MonoBehaviour
                 break;
             case SceneType.DomeBattle:
                 WagonHotbarManager wagonHotbar = FindAnyObjectByType<WagonHotbarManager>(FindObjectsInactive.Include);
-                if (wagonHotbar != null)
-                {
-                    wagonHotbar.InitializeAndShow();
-                }
+                if (wagonHotbar != null) wagonHotbar.InitializeAndShow();
                 PartyManager.instance.SetPlayerSwitching(true);
                 PartyAIManager.instance.EnterCombatMode();
                 break;
@@ -212,12 +226,22 @@ public class GameManager : MonoBehaviour
         if (isTransitioning) yield break;
         isTransitioning = true;
 
-        // --- NEW: Capture Wagon State before leaving World Map ---
         if (currentSceneType == SceneType.WorldMap)
         {
             CaptureWagonState();
         }
-        // ---------------------------------------------------------
+
+        // --- FILTERED RETURN LOGIC ---
+        if (currentLevelScene != sceneName)
+        {
+            if (currentSceneType == SceneType.Town ||
+                currentSceneType == SceneType.DomeBattle ||
+                currentSceneType == SceneType.WorldMap)
+            {
+                previousSceneName = currentLevelScene;
+            }
+        }
+        // -----------------------------
 
         float startTime = Time.realtimeSinceStartup;
         yield return LoadingScreenManager.instance.ShowLoadingScreen(fadeDuration);
@@ -255,31 +279,21 @@ public class GameManager : MonoBehaviour
             if (!string.IsNullOrEmpty(fromNodeID)) { lastKnownLocationNodeID = fromNodeID; }
             SetPlayerModelsActive(true);
             SetPlayerMovementComponentsActive(true);
-
             MovePartyToSpawnPoint(spawnPointID);
-
-            if (InventoryUIController.instance != null)
-            {
-                InventoryUIController.instance.RefreshAllPlayerDisplays(PartyManager.instance.ActivePlayer);
-            }
+            if (InventoryUIController.instance != null) InventoryUIController.instance.RefreshAllPlayerDisplays(PartyManager.instance.ActivePlayer);
         }
 
         ApplySceneRules();
 
-        // --- NEW HOOK FOR DUAL MODE ---
         if (DualModeManager.instance != null)
         {
             DualModeManager.instance.ApplyTeamState(currentSceneType);
         }
-        // ------------------------------
 
         FindAnyObjectByType<UIPartyPortraitsManager>()?.RefreshAllPortraits();
 
         float elapsedTime = Time.realtimeSinceStartup - startTime;
-        if (elapsedTime < minimumLoadingScreenTime)
-        {
-            yield return new WaitForSeconds(minimumLoadingScreenTime - elapsedTime);
-        }
+        if (elapsedTime < minimumLoadingScreenTime) yield return new WaitForSeconds(minimumLoadingScreenTime - elapsedTime);
 
         LoadingScreenManager.instance.HideLoadingScreen(fadeDuration);
         isTransitioning = false;
@@ -440,6 +454,11 @@ public class GameManager : MonoBehaviour
             stats.CalculateFinalStats();
         }
 
+        if (SaveManager.instance != null)
+        {
+            SaveManager.instance.RestoreDualModeState(data);
+        }
+
         if (InventoryUIController.instance != null)
         {
             InventoryUIController.instance.RefreshAllPlayerDisplays(PartyManager.instance.ActivePlayer);
@@ -461,18 +480,13 @@ public class GameManager : MonoBehaviour
         if (alreadyLoaded && currentLevelScene == sceneName && SceneManager.GetActiveScene().name == sceneName) return;
         StartCoroutine(TransitionLevel(sceneName, spawnPointID, fromNodeID));
     }
-    
-    // --- NEW METHOD ---
+
     public void ReloadCurrentLevel(string spawnPointID = null)
     {
         if (isTransitioning) return;
-
-        // We use the internal TransitionLevel coroutine directly, 
-        // bypassing the "already loaded" check in LoadLevel.
         lastSpawnPointID = spawnPointID;
         StartCoroutine(TransitionLevel(currentLevelScene, spawnPointID));
     }
-    // ------------------
 
     public void StartNewGame() { LoadLevel(startingSceneName); }
 
