@@ -539,10 +539,16 @@ public class WorldMapManager : MonoBehaviour
 
         if (GameManager.instance != null && currentLocation != null)
         {
-            // --- UPDATED: Pass Node Type with Debug Log ---
             Debug.Log($"WorldMapManager: Setting Location Type to {currentLocation.nodeType}");
             GameManager.instance.SetLocationType(currentLocation.nodeType);
-            // ----------------------------------------------
+
+            // --- UPDATED: Pass Dungeon Scene to DualModeManager ---
+            if (DualModeManager.instance != null)
+            {
+                DualModeManager.instance.queuedDungeonScene = currentLocation.dualModeDungeonScene;
+                Debug.Log($"WorldMapManager: Queued dungeon scene '{currentLocation.dualModeDungeonScene}' for DualMode.");
+            }
+            // -----------------------------------------------------
 
             string spawnPointID = "WorldMapArrival";
             var originNode = FindObjectsByType<LocationNode>(FindObjectsSortMode.None).FirstOrDefault(n => n.connections.Any(c => c.destinationNode.locationName == currentLocation.locationName));

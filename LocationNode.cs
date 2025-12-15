@@ -27,6 +27,12 @@ public class LocationNode : MonoBehaviour
     public string locationName;
     public NodeType nodeType = NodeType.Scene;
 
+    // --- UPDATED: Added Dungeon Scene Entry ---
+    [Header("Dual Mode Settings")]
+    [Tooltip("The name of the Dungeon Scene to load when starting an operation here.")]
+    public string dualModeDungeonScene;
+    // ------------------------------------------
+
     [Header("Paper Map Mapping")]
     [Tooltip("If true, the icon position is calculated from the node's World Position relative to the World Map Bounds.")]
     public bool useAutoPosition = true;

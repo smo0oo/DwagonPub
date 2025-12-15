@@ -37,6 +37,12 @@ public class DualModeManager : MonoBehaviour
 
     [Header("Scene Config")]
     public string defenseSceneName = "DomeBattle";
+
+    // --- UPDATED: Runtime Config ---
+    [Header("Runtime Config")]
+    public string queuedDungeonScene; // Stores the dungeon scene passed from the LocationNode
+    // -------------------------------
+
     private string pendingDungeonScene;
     private string pendingDungeonSpawn;
 
@@ -206,6 +212,7 @@ public class DualModeManager : MonoBehaviour
         dungeonTeamIndices.Clear();
         wagonTeamIndices.Clear();
         fallenHeroes.Clear();
+        queuedDungeonScene = ""; // Reset queued scene
         OnLootBagChanged?.Invoke();
 
         // Reactivate visually just in case ApplyTeamState didn't catch it

@@ -77,6 +77,14 @@ public class DualModeSetupUI : MonoBehaviour
     {
         if (PartyManager.instance == null) return;
 
+        // --- UPDATED: Override Dungeon Scene from Manager ---
+        if (DualModeManager.instance != null && !string.IsNullOrEmpty(DualModeManager.instance.queuedDungeonScene))
+        {
+            Debug.Log($"DualModeSetupUI: Overriding dungeon scene with '{DualModeManager.instance.queuedDungeonScene}' from LocationNode.");
+            firstDungeonSceneName = DualModeManager.instance.queuedDungeonScene;
+        }
+        // ----------------------------------------------------
+
         assignments.Clear();
         // Default: Everyone (except Player 0) is on the Wagon Team
         for (int i = 1; i < PartyManager.instance.partyMembers.Count; i++)

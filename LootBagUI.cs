@@ -3,14 +3,11 @@ using UnityEngine.UI;
 using TMPro;
 using UnityEngine.SceneManagement;
 using System.Collections.Generic;
-using System; // Required for Action
+using System;
 
 public class LootBagUI : MonoBehaviour
 {
-    // --- NEW: Event to notify other systems (like BattleManager) ---
     public static event Action OnLootBagClosed;
-
-    // --- NEW: Property to check visibility ---
     public bool IsVisible => panelRoot != null && panelRoot.activeSelf;
 
     [Header("UI References")]
@@ -68,6 +65,12 @@ public class LootBagUI : MonoBehaviour
             {
                 GameObject slotObj = Instantiate(itemSlotPrefab, itemsContainer);
 
+                // --- NEW: Attach and Initialize Tooltip Trigger ---
+                LootSlot lootSlot = slotObj.GetComponent<LootSlot>();
+                if (lootSlot == null) lootSlot = slotObj.AddComponent<LootSlot>();
+                lootSlot.Initialize(stack);
+                // --------------------------------------------------
+
                 Image icon = slotObj.transform.Find("Icon")?.GetComponent<Image>();
                 TextMeshProUGUI qty = slotObj.transform.Find("Quantity")?.GetComponent<TextMeshProUGUI>();
                 TextMeshProUGUI name = slotObj.transform.Find("Name")?.GetComponent<TextMeshProUGUI>();
@@ -87,8 +90,6 @@ public class LootBagUI : MonoBehaviour
         }
 
         if (panelRoot != null) panelRoot.SetActive(false);
-
-        // --- NEW: Fire event so DomeBattleManager knows to wake up ---
         OnLootBagClosed?.Invoke();
     }
 }
