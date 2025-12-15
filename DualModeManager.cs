@@ -3,15 +3,13 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine.SceneManagement;
 using UnityEngine.AI;
-using System; // Required for Action
+using System;
 
 public class DualModeManager : MonoBehaviour
 {
     public static DualModeManager instance;
 
-    // --- EVENT FOR UI UPDATES ---
     public event Action OnLootBagChanged;
-    // ----------------------------
 
     [Header("State")]
     public bool isDualModeActive = false;
@@ -62,12 +60,10 @@ public class DualModeManager : MonoBehaviour
         OnLootBagChanged?.Invoke();
     }
 
-    // --- MISSING METHOD FIX ---
     public void AddItemToLootBag(ItemData item, int quantity)
     {
         if (item == null || quantity <= 0) return;
 
-        // Try to stack existing items
         if (item.isStackable)
         {
             foreach (var stack in dungeonLootBag)
@@ -83,7 +79,6 @@ public class DualModeManager : MonoBehaviour
             }
         }
 
-        // Add remaining as new stack
         if (quantity > 0)
         {
             dungeonLootBag.Add(new ItemStack(item, quantity));
@@ -92,13 +87,29 @@ public class DualModeManager : MonoBehaviour
         Debug.Log($"Added {item.itemName} to Dungeon Loot Bag.");
         OnLootBagChanged?.Invoke();
     }
-    // --------------------------
 
+    // --- UPDATED: Part 1 - Transition only ---
     public void CompleteDungeonRun()
     {
         if (!isDualModeActive) return;
 
-        Debug.Log("Dungeon Run Complete! Returning to Dome...");
+        Debug.Log("Dungeon Run Complete! Loading return scene (Loot Pending)...");
+
+        // We DO NOT merge loot or end dual mode here anymore.
+        // We just verify the destination and go there.
+
+        if (GameManager.instance != null)
+        {
+            // Set the flag so the UI knows to open
+            GameManager.instance.SetJustExitedDungeon(true);
+            GameManager.instance.LoadLevel(defenseSceneName, "WagonCenter");
+        }
+    }
+
+    // --- NEW: Part 2 - Called by LootBagUI ---
+    public void FinalizeDungeonRun()
+    {
+        Debug.Log("Finalizing Dungeon Run: Merging loot and ending Dual Mode.");
 
         // 1. Merge Loot
         MergeLootToMainInventory();
@@ -110,15 +121,16 @@ public class DualModeManager : MonoBehaviour
             pendingBossBuff = null;
         }
 
-        // 3. Reunite Teams
-        ReuniteTeams();
-
-        // 4. Load Defense Scene
+        // 3. Clear the Exit Flag (UI is done)
         if (GameManager.instance != null)
         {
-            GameManager.instance.LoadLevel(defenseSceneName, "WagonCenter");
+            GameManager.instance.SetJustExitedDungeon(false);
         }
+
+        // 4. End Dual Mode
+        EndDualMode();
     }
+    // -----------------------------------------
 
     private void ReuniteTeams()
     {
@@ -139,9 +151,11 @@ public class DualModeManager : MonoBehaviour
         {
             Inventory targetInventory = null;
 
+            // Try to find the Active Player's inventory
             if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
                 targetInventory = PartyManager.instance.ActivePlayer.GetComponentInChildren<Inventory>();
 
+            // Fallback to first available inventory
             if (targetInventory == null)
             {
                 var allInventories = InventoryManager.instance.GetAllPlayerInventories();
@@ -196,6 +210,8 @@ public class DualModeManager : MonoBehaviour
         wagonTeamIndices.Clear();
         fallenHeroes.Clear();
         OnLootBagChanged?.Invoke();
+
+        Debug.Log("Dual Mode has ended. Returning to standard gameplay.");
     }
 
     public void StartRescueMission()

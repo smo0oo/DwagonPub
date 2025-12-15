@@ -9,14 +9,18 @@ public class SaveData
     public float timeOfDay;
     public string currentLocationNodeID;
 
+    // --- NEW: Location Type State ---
+    // Stored as int to ensure serialization works easily across versions
+    public int lastLocationType;
+    // --------------------------------
+
     // Wagon Resources
     public float wagonFuel;
     public float wagonRations;
     public float wagonIntegrity;
 
-    // --- NEW: Dual Mode State ---
+    // Dual Mode State
     public DualModeSaveData dualModeData = new DualModeSaveData();
-    // ----------------------------
 
     // Party
     public int partyLevel;

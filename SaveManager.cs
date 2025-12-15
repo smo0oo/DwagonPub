@@ -69,6 +69,13 @@ public class SaveManager : MonoBehaviour
             data.currentLocationNodeID = GameManager.instance.lastKnownLocationNodeID;
         }
 
+        // --- NEW: Save Last Location Type ---
+        if (GameManager.instance != null)
+        {
+            data.lastLocationType = (int)GameManager.instance.lastLocationType;
+        }
+        // ------------------------------------
+
         // --- Save Dual Mode Data ---
         if (dualModeManager != null)
         {

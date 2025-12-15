@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System.Collections.Generic;
+using UnityEngine.SceneManagement;
 
 public class DualModeSetupUI : MonoBehaviour
 {
@@ -13,31 +14,58 @@ public class DualModeSetupUI : MonoBehaviour
     public GameObject panelRoot;
 
     [Header("Settings")]
-    [Tooltip("The name of the scene to load for the Dungeon part.")]
     public string firstDungeonSceneName = "Dungeon_Level1";
-    [Tooltip("The SpawnPoint ID to use in the dungeon.")]
     public string dungeonSpawnPointID = "Entrance";
-
-    [Tooltip("The name of the Dome Battle scene to load when switching to Group B (e.g. 'DomeBattle_Forest').")]
     public string domeDefenseSceneName = "DomeBattle";
 
     private Dictionary<int, bool> assignments = new Dictionary<int, bool>();
 
-    void Start()
+    void OnEnable()
     {
+        SceneManager.sceneLoaded += OnSceneLoaded;
         if (startOperationButton != null)
-            startOperationButton.onClick.AddListener(OnStartClicked);
-
-        if (panelRoot != null) panelRoot.SetActive(false);
-
-        // --- NEW: Auto-open using global NodeType enum ---
-        if (GameManager.instance != null &&
-            GameManager.instance.lastLocationType == NodeType.DualModeLocation)
         {
-            Debug.Log("Dual Mode Location Detected: Auto-opening Setup UI.");
+            startOperationButton.onClick.RemoveListener(OnStartClicked);
+            startOperationButton.onClick.AddListener(OnStartClicked);
+        }
+        if (panelRoot != null) panelRoot.SetActive(false);
+    }
+
+    void OnDisable()
+    {
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+    }
+
+    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        CheckAndOpenSetup();
+    }
+
+    private void CheckAndOpenSetup()
+    {
+        if (GameManager.instance == null) return;
+
+        // 1. Is the mission already running? If so, DO NOT open setup.
+        if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
+        {
+            return;
+        }
+
+        // 2. Did we just finish a run? If so, DO NOT open setup.
+        // --- NEW CHECK ---
+        if (GameManager.instance.justExitedDungeon)
+        {
+            Debug.Log("DualModeSetupUI: Player just exited dungeon. Keeping Setup UI closed.");
+            return;
+        }
+        // -----------------
+
+        // 3. Are we in a Dual Mode Location?
+        if (GameManager.instance.lastLocationType == NodeType.DualModeLocation)
+        {
+            Debug.Log($"DualModeSetupUI: Opening Setup UI for location type '{GameManager.instance.lastLocationType}' in scene '{SceneManager.GetActiveScene().name}'.");
             OpenSetup();
         }
-        // -------------------------------------------------
     }
 
     public void OpenSetup()
@@ -45,11 +73,9 @@ public class DualModeSetupUI : MonoBehaviour
         if (PartyManager.instance == null) return;
 
         assignments.Clear();
-
-        // Default: Everyone (except Player 0) is on the Wagon Team
         for (int i = 1; i < PartyManager.instance.partyMembers.Count; i++)
         {
-            assignments[i] = false; // False = Wagon Team
+            assignments[i] = false;
         }
 
         RefreshUI();

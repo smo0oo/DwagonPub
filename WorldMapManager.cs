@@ -521,7 +521,6 @@ public class WorldMapManager : MonoBehaviour
         arrivalText.text = $"You have arrived at {currentLocation.locationName}.\nTime is {Mathf.Floor(timeOfDay)}:00.";
         arrivalPanel.SetActive(true);
 
-        // --- UPDATED: Allow entry for Dual Mode too ---
         if (currentLocation.nodeType == NodeType.Scene ||
             currentLocation.nodeType == NodeType.DualModeLocation)
         {
@@ -540,9 +539,10 @@ public class WorldMapManager : MonoBehaviour
 
         if (GameManager.instance != null && currentLocation != null)
         {
-            // --- NEW: Pass Node Type to GameManager before Loading ---
+            // --- UPDATED: Pass Node Type with Debug Log ---
+            Debug.Log($"WorldMapManager: Setting Location Type to {currentLocation.nodeType}");
             GameManager.instance.SetLocationType(currentLocation.nodeType);
-            // ---------------------------------------------------------
+            // ----------------------------------------------
 
             string spawnPointID = "WorldMapArrival";
             var originNode = FindObjectsByType<LocationNode>(FindObjectsSortMode.None).FirstOrDefault(n => n.connections.Any(c => c.destinationNode.locationName == currentLocation.locationName));

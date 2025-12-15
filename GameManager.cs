@@ -35,6 +35,9 @@ public class GameManager : MonoBehaviour
     // --- REQUIRED FOR DUAL MODE SETUP ---
     [Tooltip("The type of the Location Node we most recently entered.")]
     public NodeType lastLocationType;
+
+    [Tooltip("Flag to suppress Dual Mode UI when returning from a dungeon run.")]
+    public bool justExitedDungeon = false; // NEW FLAG
     // ------------------------------------
 
     [Header("Travel State")]
@@ -66,7 +69,7 @@ public class GameManager : MonoBehaviour
     private bool isTransitioning;
     public bool IsTransitioning => isTransitioning;
 
-    // --- DEBUG GUI ---
+    // --- UPDATED DEBUG GUI ---
     void OnGUI()
     {
         if (!Debug.isDebugBuild) return;
@@ -77,6 +80,7 @@ public class GameManager : MonoBehaviour
         GUILayout.Label($"Scene: {currentLevelScene} ({currentSceneType})");
         GUILayout.Label($"Return Point: {previousSceneName}");
         GUILayout.Label($"Last Loc Type: {lastLocationType}");
+        GUILayout.Label($"Just Exited Dungeon: {justExitedDungeon}"); // DEBUG DISPLAY
 
         if (DualModeManager.instance != null)
         {
@@ -114,12 +118,18 @@ public class GameManager : MonoBehaviour
         currentLevelScene = NormalizeSceneName(SceneManager.GetActiveScene().name);
     }
 
-    // --- NEW HELPER METHOD (Fixes Error) ---
     public void SetLocationType(NodeType type)
     {
         lastLocationType = type;
+        // If we are setting a new location type, we assume we are entering fresh, so clear the exit flag
+        justExitedDungeon = false;
+        Debug.Log($"GameManager: Location Type updated to {lastLocationType}");
     }
-    // ---------------------------------------
+
+    public void SetJustExitedDungeon(bool state)
+    {
+        justExitedDungeon = state;
+    }
 
     public void CaptureWagonState()
     {
@@ -146,6 +156,12 @@ public class GameManager : MonoBehaviour
     private IEnumerator TransitionToWorldMap()
     {
         isTransitioning = true;
+
+        // --- RESET STATE ON RETURN TO MAP ---
+        justExitedDungeon = false;
+        lastLocationType = NodeType.Scene; // Clear location type so UI doesn't open on the Map
+        // ------------------------------------
+
         float startTime = Time.realtimeSinceStartup;
         yield return LoadingScreenManager.instance.ShowLoadingScreen(fadeDuration);
 
@@ -231,7 +247,6 @@ public class GameManager : MonoBehaviour
             CaptureWagonState();
         }
 
-        // --- FILTERED RETURN LOGIC ---
         if (currentLevelScene != sceneName)
         {
             if (currentSceneType == SceneType.Town ||
@@ -241,7 +256,6 @@ public class GameManager : MonoBehaviour
                 previousSceneName = currentLevelScene;
             }
         }
-        // -----------------------------
 
         float startTime = Time.realtimeSinceStartup;
         yield return LoadingScreenManager.instance.ShowLoadingScreen(fadeDuration);
@@ -318,6 +332,9 @@ public class GameManager : MonoBehaviour
 
         string json = File.ReadAllText(path);
         SaveData data = JsonUtility.FromJson<SaveData>(json);
+
+        lastLocationType = (NodeType)data.lastLocationType;
+        justExitedDungeon = false; // Always reset this on load so the player can start a new run if they saved in the hub
 
         yield return SwitchToSceneExact(startingSceneName);
 
@@ -488,7 +505,12 @@ public class GameManager : MonoBehaviour
         StartCoroutine(TransitionLevel(currentLevelScene, spawnPointID));
     }
 
-    public void StartNewGame() { LoadLevel(startingSceneName); }
+    public void StartNewGame()
+    {
+        lastLocationType = NodeType.Scene;
+        justExitedDungeon = false; // Reset on new game
+        LoadLevel(startingSceneName);
+    }
 
     public void LoadSavedGame()
     {
@@ -503,6 +525,8 @@ public class GameManager : MonoBehaviour
     public void ReturnToMainMenu()
     {
         Time.timeScale = 1f;
+        lastLocationType = NodeType.Scene;
+        justExitedDungeon = false; // Reset on exit
         LoadLevel("MainMenu");
     }
 
