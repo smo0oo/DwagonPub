@@ -23,34 +23,40 @@ public class DomeBattleManager : MonoBehaviour
     public Button startNightButton;
     public TextMeshProUGUI waveStatusText;
 
+    private LootBagUI _lootBagRef;
+
     void Awake()
     {
         if (instance != null && instance != this) { Destroy(gameObject); }
         else { instance = this; }
     }
 
+    void OnDestroy()
+    {
+        // Always unsubscribe to avoid errors
+        if (_lootBagRef != null)
+        {
+            LootBagUI.OnLootBagClosed -= OnLootBagClosed;
+        }
+    }
+
     void Start()
     {
         if (resourceManager == null)
         {
+            // Update legacy check here too if needed, though FindAnyObjectByType is fine
             resourceManager = WagonResourceManager.instance ?? FindAnyObjectByType<WagonResourceManager>();
         }
 
         if (exitZoneObject != null) exitZoneObject.SetActive(false);
 
-        // --- NEW: Check for Dual Mode & Buffs ---
         if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
         {
-            // 1. Auto-start battle (skip prep phase for fluidity?)
-            // Or keep prep phase to let player check Wagon inventory. Let's keep prep.
-
-            // 2. Check for Boss Buff
             if (DualModeManager.instance.pendingBossBuff != null)
             {
                 ApplyBossBuff(DualModeManager.instance.pendingBossBuff);
             }
         }
-        // ----------------------------------------
 
         string spawnID = GetCurrentSpawnID();
         if (spawnID == "AmbushSpawn")
@@ -63,29 +69,118 @@ public class DomeBattleManager : MonoBehaviour
             EnterPrepPhase();
         }
 
+        // --- NEW LOGIC: Check for Blocking UI ---
+        bool uiBlocked = false;
+
+        // 1. Check Loot Bag
+        // --- FIX: Replaced FindObjectOfType with FindFirstObjectByType ---
+        var lootUI = FindFirstObjectByType<LootBagUI>();
+        if (lootUI != null && lootUI.IsVisible)
+        {
+            uiBlocked = true;
+            _lootBagRef = lootUI;
+            // Subscribe to static event to know when it closes
+            LootBagUI.OnLootBagClosed += OnLootBagClosed;
+        }
+
+        // 2. Check Dual Mode Setup UI
+        // --- FIX: Replaced FindObjectOfType with FindFirstObjectByType ---
+        var setupUI = FindFirstObjectByType<DualModeSetupUI>();
+        if (setupUI != null && setupUI.IsVisible)
+        {
+            uiBlocked = true;
+        }
+
+        // If blocked, hide the prep panel (it will be reshown via event when UI closes)
+        if (uiBlocked && prepPhasePanel != null)
+        {
+            prepPhasePanel.SetActive(false);
+        }
+        // ----------------------------------------
+
+        if (GameManager.instance != null && GameManager.instance.justExitedDungeon)
+        {
+            if (startNightButton != null)
+            {
+                TextMeshProUGUI btnText = startNightButton.GetComponentInChildren<TextMeshProUGUI>();
+                if (btnText != null) btnText.text = "Ready";
+                else
+                {
+                    Text standardText = startNightButton.GetComponentInChildren<Text>();
+                    if (standardText != null) standardText.text = "Ready";
+                }
+            }
+
+            if (waveStatusText != null)
+            {
+                waveStatusText.text = "Phase: <color=yellow>Final Stand</color>";
+            }
+        }
+
         if (startNightButton != null) startNightButton.onClick.AddListener(OnStartNightClicked);
     }
 
-    // ... (GetCurrentSpawnID, EnterPrepPhase, OnStartNightClicked, StartAmbushSequence, StartBattle remain unchanged) ...
-    private string GetCurrentSpawnID() { if (GameManager.instance != null && !string.IsNullOrEmpty(GameManager.instance.lastSpawnPointID)) return GameManager.instance.lastSpawnPointID; return "WagonCenter"; }
-    private void EnterPrepPhase() { IsBattleActive = false; if (prepPhasePanel != null) prepPhasePanel.SetActive(true); if (waveStatusText != null) waveStatusText.text = "Phase: <color=green>Preparation</color>"; if (waveSpawner != null) waveSpawner.StopSpawning(); }
-    public void OnStartNightClicked() { StartBattle(); }
-    private IEnumerator StartAmbushSequence() { if (prepPhasePanel != null) prepPhasePanel.SetActive(false); if (waveStatusText != null) waveStatusText.text = "<color=red>AMBUSH!</color>"; yield return new WaitForSeconds(autoStartDelayForAmbush); StartBattle(); }
-    private void StartBattle() { IsBattleActive = true; if (prepPhasePanel != null) prepPhasePanel.SetActive(false); if (waveSpawner != null) waveSpawner.StartSpawning(); if (waveStatusText != null) waveStatusText.text = "Phase: <color=red>Night Defense</color>"; }
+    // --- NEW CALLBACK ---
+    private void OnLootBagClosed()
+    {
+        // When loot bag closes, if we haven't started battle yet, show the prep panel
+        if (!IsBattleActive && prepPhasePanel != null)
+        {
+            prepPhasePanel.SetActive(true);
+        }
+
+        // Clean up subscription
+        LootBagUI.OnLootBagClosed -= OnLootBagClosed;
+    }
+    // --------------------
+
+    private string GetCurrentSpawnID()
+    {
+        if (GameManager.instance != null && !string.IsNullOrEmpty(GameManager.instance.lastSpawnPointID))
+            return GameManager.instance.lastSpawnPointID;
+        return "WagonCenter";
+    }
+
+    private void EnterPrepPhase()
+    {
+        IsBattleActive = false;
+        if (prepPhasePanel != null) prepPhasePanel.SetActive(true);
+        if (waveStatusText != null) waveStatusText.text = "Phase: <color=green>Preparation</color>";
+        if (waveSpawner != null) waveSpawner.StopSpawning();
+    }
+
+    public void OnStartNightClicked()
+    {
+        StartBattle();
+    }
+
+    private IEnumerator StartAmbushSequence()
+    {
+        if (prepPhasePanel != null) prepPhasePanel.SetActive(false);
+        if (waveStatusText != null) waveStatusText.text = "<color=red>AMBUSH!</color>";
+        yield return new WaitForSeconds(autoStartDelayForAmbush);
+        StartBattle();
+    }
+
+    private void StartBattle()
+    {
+        IsBattleActive = true;
+        if (prepPhasePanel != null) prepPhasePanel.SetActive(false);
+        if (waveSpawner != null) waveSpawner.StartSpawning();
+        if (waveStatusText != null) waveStatusText.text = "Phase: <color=red>Night Defense</color>";
+    }
 
     public void OnVictory()
     {
         IsBattleActive = false;
         if (waveStatusText != null) waveStatusText.text = "<color=gold>VICTORY</color>";
 
-        // --- MODIFIED: Dual Mode Logic ---
         if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
         {
             Debug.Log("Dual Mode Defense Complete. Returning to Dungeon...");
             StartCoroutine(DualModeVictoryRoutine());
             return;
         }
-        // ---------------------------------
 
         if (exitZoneObject != null)
         {
@@ -95,24 +190,21 @@ public class DomeBattleManager : MonoBehaviour
         }
     }
 
-    // --- NEW HELPER METHODS ---
     private IEnumerator DualModeVictoryRoutine()
     {
-        yield return new WaitForSeconds(3.0f); // Give player time to see "Victory"
+        yield return new WaitForSeconds(3.0f);
         DualModeManager.instance.SwitchToDungeon();
     }
 
     private void ApplyBossBuff(Ability buffAbility)
     {
         Debug.Log($"Applying Boss Buff: {buffAbility.name}");
-        // Apply to all active Wagon Team members
         if (PartyAIManager.instance != null)
         {
             foreach (var member in PartyAIManager.instance.AllPartyAIs)
             {
                 if (member.gameObject.activeInHierarchy)
                 {
-                    // Apply friendly effects from the buff ability
                     foreach (var effect in buffAbility.friendlyEffects)
                     {
                         effect.Apply(member.gameObject, member.gameObject);

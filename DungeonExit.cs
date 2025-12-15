@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Collections.Generic; // Added for List
 
 public class DungeonExit : MonoBehaviour, IInteractable
 {
@@ -19,7 +20,6 @@ public class DungeonExit : MonoBehaviour, IInteractable
 
     void Start()
     {
-        // Replaced obsolete FindObjectOfType with FindFirstObjectByType
         sceneBoss = FindFirstObjectByType<BossTrigger>();
     }
 
@@ -47,7 +47,11 @@ public class DungeonExit : MonoBehaviour, IInteractable
             return;
         }
 
-        // 3. Dynamic Return Logic (Standard Gameplay)
+        // 3. Dynamic Return Logic (Standard Gameplay / Debug Testing)
+        // If we are here, Dual Mode was NOT active. 
+        // We must ensure the party is visible because they might be hidden from a previous state.
+        ForcePartyVisibility();
+
         string targetScene = GameManager.instance != null ? GameManager.instance.previousSceneName : null;
 
         if (string.IsNullOrEmpty(targetScene))
@@ -67,6 +71,18 @@ public class DungeonExit : MonoBehaviour, IInteractable
         else
         {
             Debug.LogError("DungeonExit: No target scene found (Previous Scene is null AND Fallback is null).");
+        }
+    }
+
+    // --- NEW HELPER: Ensures characters aren't invisible if we exit normally ---
+    private void ForcePartyVisibility()
+    {
+        if (PartyManager.instance != null)
+        {
+            foreach (var member in PartyManager.instance.partyMembers)
+            {
+                if (member != null) member.SetActive(true);
+            }
         }
     }
 

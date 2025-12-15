@@ -3,6 +3,7 @@ using UnityEngine.UI;
 using TMPro;
 using System.Collections.Generic;
 using UnityEngine.SceneManagement;
+using PixelCrushers.DialogueSystem;
 
 public class DualModeSetupUI : MonoBehaviour
 {
@@ -18,7 +19,16 @@ public class DualModeSetupUI : MonoBehaviour
     public string dungeonSpawnPointID = "Entrance";
     public string domeDefenseSceneName = "DomeBattle";
 
+    [Header("Team Constraints")]
+    [Tooltip("Minimum members required in EACH team (excluding Player 0).")]
+    public int minTeamMembers = 2;
+    [Tooltip("Maximum members allowed in EACH team (excluding Player 0).")]
+    public int maxTeamMembers = 2;
+
     private Dictionary<int, bool> assignments = new Dictionary<int, bool>();
+
+    // Property to check visibility
+    public bool IsVisible => panelRoot != null && panelRoot.activeSelf;
 
     void OnEnable()
     {
@@ -45,22 +55,17 @@ public class DualModeSetupUI : MonoBehaviour
     {
         if (GameManager.instance == null) return;
 
-        // 1. Is the mission already running? If so, DO NOT open setup.
         if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
         {
             return;
         }
 
-        // 2. Did we just finish a run? If so, DO NOT open setup.
-        // --- NEW CHECK ---
         if (GameManager.instance.justExitedDungeon)
         {
             Debug.Log("DualModeSetupUI: Player just exited dungeon. Keeping Setup UI closed.");
             return;
         }
-        // -----------------
 
-        // 3. Are we in a Dual Mode Location?
         if (GameManager.instance.lastLocationType == NodeType.DualModeLocation)
         {
             Debug.Log($"DualModeSetupUI: Opening Setup UI for location type '{GameManager.instance.lastLocationType}' in scene '{SceneManager.GetActiveScene().name}'.");
@@ -73,6 +78,7 @@ public class DualModeSetupUI : MonoBehaviour
         if (PartyManager.instance == null) return;
 
         assignments.Clear();
+        // Default: Everyone (except Player 0) is on the Wagon Team
         for (int i = 1; i < PartyManager.instance.partyMembers.Count; i++)
         {
             assignments[i] = false;
@@ -103,13 +109,54 @@ public class DualModeSetupUI : MonoBehaviour
             Transform parent = isDungeon ? dungeonTeamContainer : wagonTeamContainer;
             GameObject btnObj = Instantiate(memberButtonPrefab, parent);
 
+            // --- 1. SET NAME ---
             TextMeshProUGUI text = btnObj.GetComponentInChildren<TextMeshProUGUI>();
-            if (text != null) text.text = memberObj.name;
+            string displayName = memberObj.name;
+
+            DialogueActor da = memberObj.GetComponentInChildren<DialogueActor>();
+            if (da != null && !string.IsNullOrEmpty(da.actor))
+            {
+                var actor = DialogueManager.MasterDatabase.GetActor(da.actor);
+                if (actor != null)
+                {
+                    displayName = actor.LookupValue("Display Name") ?? actor.Name;
+                }
+            }
+            if (text != null) text.text = displayName;
+
+            // --- 2. SET PORTRAIT ---
+            Transform portraitTrans = btnObj.transform.Find("Portrait");
+            if (portraitTrans != null)
+            {
+                Image portraitImg = portraitTrans.GetComponent<Image>();
+                if (portraitImg != null)
+                {
+                    if (da != null)
+                    {
+                        var actor = DialogueManager.MasterDatabase.GetActor(da.actor);
+                        if (actor != null && actor.portrait != null)
+                        {
+                            Texture2D tex = actor.portrait;
+                            portraitImg.sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
+                            portraitImg.enabled = true;
+                        }
+                        else
+                        {
+                            portraitImg.enabled = false;
+                        }
+                    }
+                    else
+                    {
+                        portraitImg.enabled = false;
+                    }
+                }
+            }
 
             Button btn = btnObj.GetComponent<Button>();
             btn.onClick.AddListener(() => ToggleTeam(memberIndex));
         }
 
+        // --- VALIDATE BUTTON STATE ---
         ValidateStart();
     }
 
@@ -122,21 +169,29 @@ public class DualModeSetupUI : MonoBehaviour
         }
     }
 
+    // --- UPDATED VALIDATION LOGIC ---
     private void ValidateStart()
     {
-        bool hasDungeonMember = false;
+        int dungeonCount = 0;
+        int wagonCount = 0;
+
         foreach (var kvp in assignments)
         {
-            if (kvp.Value == true)
-            {
-                hasDungeonMember = true;
-                break;
-            }
+            if (kvp.Value == true) dungeonCount++; // True = Dungeon
+            else wagonCount++; // False = Wagon
         }
 
+        // Check constraints for BOTH teams
+        bool dungeonValid = (dungeonCount >= minTeamMembers && dungeonCount <= maxTeamMembers);
+        bool wagonValid = (wagonCount >= minTeamMembers && wagonCount <= maxTeamMembers);
+
         if (startOperationButton != null)
-            startOperationButton.interactable = hasDungeonMember;
+        {
+            // Only enable button if BOTH teams meet the criteria
+            startOperationButton.interactable = (dungeonValid && wagonValid);
+        }
     }
+    // -------------------------------
 
     private void OnStartClicked()
     {

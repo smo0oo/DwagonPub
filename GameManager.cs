@@ -27,18 +27,14 @@ public class GameManager : MonoBehaviour
     [Tooltip("The ID of the spawn point used to enter the current scene.")]
     public string lastSpawnPointID;
 
-    // --- REQUIRED FOR DUNGEON EXIT ---
     [Tooltip("The scene we came from. Used by Dungeon Exits to return to the correct Hub (Town/Dome).")]
     public string previousSceneName;
-    // ---------------------------------
 
-    // --- REQUIRED FOR DUAL MODE SETUP ---
     [Tooltip("The type of the Location Node we most recently entered.")]
     public NodeType lastLocationType;
 
     [Tooltip("Flag to suppress Dual Mode UI when returning from a dungeon run.")]
-    public bool justExitedDungeon = false; // NEW FLAG
-    // ------------------------------------
+    public bool justExitedDungeon = false;
 
     [Header("Travel State")]
     public string lastKnownLocationNodeID;
@@ -69,36 +65,53 @@ public class GameManager : MonoBehaviour
     private bool isTransitioning;
     public bool IsTransitioning => isTransitioning;
 
+    // --- NEW: Toggle for Debug UI ---
+    private bool isDebugExpanded = true;
+
     // --- UPDATED DEBUG GUI ---
     void OnGUI()
     {
         if (!Debug.isDebugBuild) return;
 
-        GUILayout.BeginArea(new Rect(10, 10, 350, 250));
-        GUILayout.Box("Game State Debugger");
+        // Adjust height dynamically: 250 if expanded, 30 if collapsed
+        float height = isDebugExpanded ? 250 : 30;
 
-        GUILayout.Label($"Scene: {currentLevelScene} ({currentSceneType})");
-        GUILayout.Label($"Return Point: {previousSceneName}");
-        GUILayout.Label($"Last Loc Type: {lastLocationType}");
-        GUILayout.Label($"Just Exited Dungeon: {justExitedDungeon}"); // DEBUG DISPLAY
+        GUILayout.BeginArea(new Rect(10, 10, 350, height));
 
-        if (DualModeManager.instance != null)
+        // Title Button to Toggle Collapse
+        if (GUILayout.Button(isDebugExpanded ? "Game State Debugger (▼)" : "Game State Debugger (▶)"))
         {
-            var dmm = DualModeManager.instance;
-            string activeColor = dmm.isDualModeActive ? "green" : "grey";
-            GUILayout.Label($"Dual Mode: <color={activeColor}>{dmm.isDualModeActive}</color>");
-
-            if (dmm.isDualModeActive)
-            {
-                GUILayout.Label($"Rescue: {dmm.isRescueMissionActive}");
-                GUILayout.Label($"Bag: {dmm.dungeonLootBag.Count} items");
-                GUILayout.Label($"Dungeon Team: {dmm.dungeonTeamIndices.Count}");
-                GUILayout.Label($"Wagon Team: {dmm.wagonTeamIndices.Count}");
-            }
+            isDebugExpanded = !isDebugExpanded;
         }
-        else
+
+        if (isDebugExpanded)
         {
-            GUILayout.Label("DualModeManager: <color=red>MISSING</color>");
+            // Draw Background Box for content visibility
+            GUI.Box(new Rect(0, 25, 350, 225), "");
+
+            GUILayout.Label($"Scene: {currentLevelScene} ({currentSceneType})");
+            GUILayout.Label($"Return Point: {previousSceneName}");
+            GUILayout.Label($"Last Loc Type: {lastLocationType}");
+            GUILayout.Label($"Just Exited Dungeon: {justExitedDungeon}");
+
+            if (DualModeManager.instance != null)
+            {
+                var dmm = DualModeManager.instance;
+                string activeColor = dmm.isDualModeActive ? "green" : "grey";
+                GUILayout.Label($"Dual Mode: <color={activeColor}>{dmm.isDualModeActive}</color>");
+
+                if (dmm.isDualModeActive)
+                {
+                    GUILayout.Label($"Rescue: {dmm.isRescueMissionActive}");
+                    GUILayout.Label($"Bag: {dmm.dungeonLootBag.Count} items");
+                    GUILayout.Label($"Dungeon Team: {dmm.dungeonTeamIndices.Count}");
+                    GUILayout.Label($"Wagon Team: {dmm.wagonTeamIndices.Count}");
+                }
+            }
+            else
+            {
+                GUILayout.Label("DualModeManager: <color=red>MISSING</color>");
+            }
         }
 
         GUILayout.EndArea();
@@ -121,7 +134,6 @@ public class GameManager : MonoBehaviour
     public void SetLocationType(NodeType type)
     {
         lastLocationType = type;
-        // If we are setting a new location type, we assume we are entering fresh, so clear the exit flag
         justExitedDungeon = false;
         Debug.Log($"GameManager: Location Type updated to {lastLocationType}");
     }
@@ -157,10 +169,8 @@ public class GameManager : MonoBehaviour
     {
         isTransitioning = true;
 
-        // --- RESET STATE ON RETURN TO MAP ---
         justExitedDungeon = false;
-        lastLocationType = NodeType.Scene; // Clear location type so UI doesn't open on the Map
-        // ------------------------------------
+        lastLocationType = NodeType.Scene;
 
         float startTime = Time.realtimeSinceStartup;
         yield return LoadingScreenManager.instance.ShowLoadingScreen(fadeDuration);
@@ -334,7 +344,7 @@ public class GameManager : MonoBehaviour
         SaveData data = JsonUtility.FromJson<SaveData>(json);
 
         lastLocationType = (NodeType)data.lastLocationType;
-        justExitedDungeon = false; // Always reset this on load so the player can start a new run if they saved in the hub
+        justExitedDungeon = false;
 
         yield return SwitchToSceneExact(startingSceneName);
 
@@ -508,7 +518,7 @@ public class GameManager : MonoBehaviour
     public void StartNewGame()
     {
         lastLocationType = NodeType.Scene;
-        justExitedDungeon = false; // Reset on new game
+        justExitedDungeon = false;
         LoadLevel(startingSceneName);
     }
 
@@ -526,7 +536,7 @@ public class GameManager : MonoBehaviour
     {
         Time.timeScale = 1f;
         lastLocationType = NodeType.Scene;
-        justExitedDungeon = false; // Reset on exit
+        justExitedDungeon = false;
         LoadLevel("MainMenu");
     }
 

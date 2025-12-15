@@ -88,49 +88,48 @@ public class DualModeManager : MonoBehaviour
         OnLootBagChanged?.Invoke();
     }
 
-    // --- UPDATED: Part 1 - Transition only ---
     public void CompleteDungeonRun()
     {
-        if (!isDualModeActive) return;
+        // Safety check, but we log if it fails to help debug
+        if (!isDualModeActive)
+        {
+            Debug.LogWarning("CompleteDungeonRun called, but Dual Mode is NOT active. Aborting.");
+            return;
+        }
 
-        Debug.Log("Dungeon Run Complete! Loading return scene (Loot Pending)...");
-
-        // We DO NOT merge loot or end dual mode here anymore.
-        // We just verify the destination and go there.
+        Debug.Log("Dungeon Run Complete! Setting 'JustExitedDungeon' flag and loading scene...");
 
         if (GameManager.instance != null)
         {
-            // Set the flag so the UI knows to open
             GameManager.instance.SetJustExitedDungeon(true);
+
+            // Verify it was set
+            if (GameManager.instance.justExitedDungeon == false)
+                Debug.LogError("DualModeManager: Failed to set justExitedDungeon flag!");
+
             GameManager.instance.LoadLevel(defenseSceneName, "WagonCenter");
         }
     }
 
-    // --- NEW: Part 2 - Called by LootBagUI ---
     public void FinalizeDungeonRun()
     {
         Debug.Log("Finalizing Dungeon Run: Merging loot and ending Dual Mode.");
 
-        // 1. Merge Loot
         MergeLootToMainInventory();
 
-        // 2. Apply Boss Buff
         if (pendingBossBuff != null)
         {
             ApplyBuffToTeam(wagonTeamIndices, pendingBossBuff);
             pendingBossBuff = null;
         }
 
-        // 3. Clear the Exit Flag (UI is done)
         if (GameManager.instance != null)
         {
             GameManager.instance.SetJustExitedDungeon(false);
         }
 
-        // 4. End Dual Mode
         EndDualMode();
     }
-    // -----------------------------------------
 
     private void ReuniteTeams()
     {
@@ -151,11 +150,9 @@ public class DualModeManager : MonoBehaviour
         {
             Inventory targetInventory = null;
 
-            // Try to find the Active Player's inventory
             if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
                 targetInventory = PartyManager.instance.ActivePlayer.GetComponentInChildren<Inventory>();
 
-            // Fallback to first available inventory
             if (targetInventory == null)
             {
                 var allInventories = InventoryManager.instance.GetAllPlayerInventories();
@@ -210,6 +207,22 @@ public class DualModeManager : MonoBehaviour
         wagonTeamIndices.Clear();
         fallenHeroes.Clear();
         OnLootBagChanged?.Invoke();
+
+        // Reactivate visually just in case ApplyTeamState didn't catch it
+        if (PartyManager.instance != null)
+        {
+            for (int i = 1; i < PartyManager.instance.partyMembers.Count; i++)
+            {
+                if (PartyManager.instance.partyMembers[i] != null)
+                {
+                    PartyManager.instance.partyMembers[i].SetActive(true);
+                }
+            }
+            if (PartyManager.instance.partyMembers.Count > 1)
+            {
+                PartyManager.instance.SetActivePlayer(1);
+            }
+        }
 
         Debug.Log("Dual Mode has ended. Returning to standard gameplay.");
     }
@@ -354,18 +367,34 @@ public class DualModeManager : MonoBehaviour
         }
         else if (currentScene == SceneType.DomeBattle)
         {
-            if (allMembers.Count > 0 && allMembers[0] != null) allMembers[0].SetActive(false);
+            bool justReturned = (GameManager.instance != null && GameManager.instance.justExitedDungeon);
 
-            foreach (int index in dungeonTeamIndices)
-                if (ValidateIndex(index)) allMembers[index].SetActive(false);
+            if (allMembers.Count > 0 && allMembers[0] != null) allMembers[0].SetActive(false); // Player 0 (Wagon) always hidden in Dome?
 
-            foreach (int index in wagonTeamIndices)
-                if (ValidateIndex(index)) allMembers[index].SetActive(true);
+            if (justReturned)
+            {
+                // Force VISUAL reunion immediately upon scene load
+                for (int i = 1; i < allMembers.Count; i++)
+                {
+                    if (allMembers[i] != null) allMembers[i].SetActive(true);
+                }
 
-            if (wagonTeamIndices.Count > 0)
-                PartyManager.instance.SetActivePlayer(wagonTeamIndices[0]);
+                if (allMembers.Count > 1) PartyManager.instance.SetActivePlayer(1);
+            }
             else
-                PartyManager.instance.SetActivePlayer(0);
+            {
+                // Standard Split Behavior (Dungeon team away, Wagon team defending)
+                foreach (int index in dungeonTeamIndices)
+                    if (ValidateIndex(index)) allMembers[index].SetActive(false);
+
+                foreach (int index in wagonTeamIndices)
+                    if (ValidateIndex(index)) allMembers[index].SetActive(true);
+
+                if (wagonTeamIndices.Count > 0)
+                    PartyManager.instance.SetActivePlayer(wagonTeamIndices[0]);
+                else
+                    PartyManager.instance.SetActivePlayer(0);
+            }
         }
     }
 
