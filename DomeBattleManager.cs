@@ -33,7 +33,6 @@ public class DomeBattleManager : MonoBehaviour
 
     void OnDestroy()
     {
-        // Always unsubscribe to avoid errors
         if (_lootBagRef != null)
         {
             LootBagUI.OnLootBagClosed -= OnLootBagClosed;
@@ -42,9 +41,21 @@ public class DomeBattleManager : MonoBehaviour
 
     void Start()
     {
+        // --- NEW: Force Initialize the Wagon Hotbar ---
+        // This ensures the hotbar links up even if GameManager missed it
+        WagonHotbarManager hotbar = FindAnyObjectByType<WagonHotbarManager>();
+        if (hotbar != null)
+        {
+            hotbar.InitializeAndShow();
+        }
+        else
+        {
+            Debug.LogWarning("DomeBattleManager: Could not find WagonHotbarManager in the scene.");
+        }
+        // ----------------------------------------------
+
         if (resourceManager == null)
         {
-            // Update legacy check here too if needed, though FindAnyObjectByType is fine
             resourceManager = WagonResourceManager.instance ?? FindAnyObjectByType<WagonResourceManager>();
         }
 
@@ -69,34 +80,29 @@ public class DomeBattleManager : MonoBehaviour
             EnterPrepPhase();
         }
 
-        // --- NEW LOGIC: Check for Blocking UI ---
+        // Check for Blocking UI
         bool uiBlocked = false;
 
         // 1. Check Loot Bag
-        // --- FIX: Replaced FindObjectOfType with FindFirstObjectByType ---
         var lootUI = FindFirstObjectByType<LootBagUI>();
         if (lootUI != null && lootUI.IsVisible)
         {
             uiBlocked = true;
             _lootBagRef = lootUI;
-            // Subscribe to static event to know when it closes
             LootBagUI.OnLootBagClosed += OnLootBagClosed;
         }
 
         // 2. Check Dual Mode Setup UI
-        // --- FIX: Replaced FindObjectOfType with FindFirstObjectByType ---
         var setupUI = FindFirstObjectByType<DualModeSetupUI>();
         if (setupUI != null && setupUI.IsVisible)
         {
             uiBlocked = true;
         }
 
-        // If blocked, hide the prep panel (it will be reshown via event when UI closes)
         if (uiBlocked && prepPhasePanel != null)
         {
             prepPhasePanel.SetActive(false);
         }
-        // ----------------------------------------
 
         if (GameManager.instance != null && GameManager.instance.justExitedDungeon)
         {
@@ -120,19 +126,14 @@ public class DomeBattleManager : MonoBehaviour
         if (startNightButton != null) startNightButton.onClick.AddListener(OnStartNightClicked);
     }
 
-    // --- NEW CALLBACK ---
     private void OnLootBagClosed()
     {
-        // When loot bag closes, if we haven't started battle yet, show the prep panel
         if (!IsBattleActive && prepPhasePanel != null)
         {
             prepPhasePanel.SetActive(true);
         }
-
-        // Clean up subscription
         LootBagUI.OnLootBagClosed -= OnLootBagClosed;
     }
-    // --------------------
 
     private string GetCurrentSpawnID()
     {

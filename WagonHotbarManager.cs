@@ -1,6 +1,8 @@
 using UnityEngine;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using UnityEngine.EventSystems;
 
 public class WagonHotbarManager : MonoBehaviour
 {
@@ -11,12 +13,19 @@ public class WagonHotbarManager : MonoBehaviour
     [Tooltip("The keys used to trigger the wagon abilities. Should match the number of slots.")]
     public KeyCode[] keyCodes = { KeyCode.F1, KeyCode.F2, KeyCode.F3, KeyCode.F4 };
 
-    // --- MODIFIED: This is now the correct DomeAbilityHolder ---
     private DomeAbilityHolder casterAbilityHolder;
 
-    void Start()
+    // Wait loop to ensure we hook up even if the Dome loads late
+    IEnumerator Start()
     {
-        // The GameManager is responsible for showing/hiding this UI.
+        while (DomeController.instance == null)
+        {
+            yield return null;
+        }
+        // Small buffer to ensure DomeAI is initialized
+        yield return null;
+
+        InitializeAndShow();
     }
 
     void Update()
@@ -27,36 +36,42 @@ public class WagonHotbarManager : MonoBehaviour
         {
             if (i < wagonHotbarSlots.Count && Input.GetKeyDown(keyCodes[i]))
             {
-                wagonHotbarSlots[i].SendMessage("OnPointerClick", new UnityEngine.EventSystems.PointerEventData(UnityEngine.EventSystems.EventSystem.current), SendMessageOptions.DontRequireReceiver);
+                if (wagonHotbarSlots[i].gameObject.activeSelf)
+                {
+                    var pointerData = new PointerEventData(EventSystem.current) { button = PointerEventData.InputButton.Left };
+                    wagonHotbarSlots[i].OnPointerClick(pointerData);
+                }
             }
         }
     }
 
-    // ### THIS METHOD HAS BEEN MODIFIED ###
     public void InitializeAndShow()
     {
-        // --- FIX: Replaced FindObjectOfType with FindAnyObjectByType ---
-        DomeController dome = FindAnyObjectByType<DomeController>();
+        DomeController dome = DomeController.instance;
+
+        // If Dome is not ready yet, just return. Do NOT disable the UI object, 
+        // or the Start() coroutine will die and never retry.
         if (dome == null)
         {
-            gameObject.SetActive(false);
             return;
         }
 
-        // --- MODIFIED: Gets the DomeAbilityHolder now ---
         casterAbilityHolder = dome.GetComponentInChildren<DomeAbilityHolder>();
         DomeAI domeAI = dome.GetComponentInChildren<DomeAI>();
 
         if (casterAbilityHolder == null || domeAI == null)
         {
-            Debug.LogError("WagonHotbarManager: The instantiated Dome is missing a DomeAbilityHolder or DomeAI component.", dome.gameObject);
-            gameObject.SetActive(false);
+            Debug.LogError("WagonHotbarManager: Dome found, but missing AbilityHolder or DomeAI.", dome.gameObject);
             return;
         }
 
+        // Filter for abilities specifically marked as WagonCallable
         var wagonAbilities = domeAI.defaultAbilities
             .Where(a => a.usageType == AIUsageType.WagonCallable)
             .ToList();
+
+        // --- DEBUG LOG: This will tell you if the connection works but list is empty ---
+        Debug.Log($"WagonHotbarManager: Initialized. Found {wagonAbilities.Count} abilities with 'WagonCallable' usage type.");
 
         for (int i = 0; i < wagonHotbarSlots.Count; i++)
         {
@@ -73,7 +88,6 @@ public class WagonHotbarManager : MonoBehaviour
         }
     }
 
-    // ### THIS METHOD HAS BEEN MODIFIED ###
     public void TriggerAbility(Ability ability)
     {
         if (casterAbilityHolder == null || !casterAbilityHolder.CanUseAbility(ability, casterAbilityHolder.gameObject)) return;
@@ -84,8 +98,11 @@ public class WagonHotbarManager : MonoBehaviour
             case AbilityType.GroundPlacement:
                 if (TargetingController.instance != null)
                 {
-                    // Now correctly passes the DomeAbilityHolder to the generic StartTargeting method
                     TargetingController.instance.StartTargeting(ability, casterAbilityHolder);
+                }
+                else
+                {
+                    Debug.LogWarning("WagonHotbarManager: Missing TargetingController instance for AOE ability.");
                 }
                 break;
 
