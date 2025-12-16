@@ -15,14 +15,15 @@ public class TargetingController : MonoBehaviour
     private GameObject currentReticle;
     private Renderer reticleRenderer;
     private Ability abilityToCast;
-    // --- MODIFIED: Changed from PlayerAbilityHolder to the more generic MonoBehaviour ---
     private MonoBehaviour currentCaster;
     private Camera mainCamera;
+
+    // --- NEW: Keep track of which player we locked so we can unlock them later ---
+    private PlayerMovement lockedPlayerMovement;
 
     public bool IsTargeting { get; private set; } = false;
 
     public Ability GetCurrentTargetingAbility() => abilityToCast;
-
 
     void Awake()
     {
@@ -82,12 +83,39 @@ public class TargetingController : MonoBehaviour
         }
     }
 
-    // --- MODIFIED: The 'caster' parameter is now a generic MonoBehaviour ---
     public void StartTargeting(Ability ability, MonoBehaviour caster)
     {
+        if (IsTargeting)
+        {
+            CancelTargeting();
+        }
+
         IsTargeting = true;
         abilityToCast = ability;
         currentCaster = caster;
+
+        // --- FIX START: Lock the Active Player regardless of who is casting ---
+        // Previously, this only worked if 'caster' was the player. 
+        // Now we explicitly find the Active Player to stop them moving while the Wagon (or anyone else) aims.
+
+        PlayerMovement pmToLock = null;
+
+        if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
+        {
+            pmToLock = PartyManager.instance.ActivePlayer.GetComponent<PlayerMovement>();
+        }
+        else if (caster is PlayerAbilityHolder playerCaster)
+        {
+            // Fallback for single-player testing scenes
+            pmToLock = playerCaster.GetComponentInParent<PlayerMovement>();
+        }
+
+        if (pmToLock != null)
+        {
+            lockedPlayerMovement = pmToLock;
+            lockedPlayerMovement.IsGroundTargeting = true;
+        }
+        // --- FIX END ---
 
         currentReticle = Instantiate(targetingReticlePrefab);
         reticleRenderer = currentReticle.GetComponent<Renderer>();
@@ -105,24 +133,28 @@ public class TargetingController : MonoBehaviour
         currentReticle.transform.localScale = new Vector3(diameter, currentReticle.transform.localScale.y, diameter);
     }
 
-    // --- MODIFIED: Now checks the type of the caster before calling the method ---
     private void ConfirmTargeting()
     {
-        if (currentCaster != null && abilityToCast != null)
+        try
         {
-            Vector3 targetPosition = currentReticle.transform.position;
+            if (currentCaster != null && abilityToCast != null)
+            {
+                Vector3 targetPosition = currentReticle.transform.position;
 
-            // Check if the caster is a player or the dome and call the appropriate method
-            if (currentCaster is PlayerAbilityHolder playerCaster)
-            {
-                playerCaster.UseAbility(abilityToCast, targetPosition);
-            }
-            else if (currentCaster is DomeAbilityHolder domeCaster)
-            {
-                domeCaster.UseAbility(abilityToCast, targetPosition);
+                if (currentCaster is PlayerAbilityHolder playerCaster)
+                {
+                    playerCaster.UseAbility(abilityToCast, targetPosition);
+                }
+                else if (currentCaster is DomeAbilityHolder domeCaster)
+                {
+                    domeCaster.UseAbility(abilityToCast, targetPosition);
+                }
             }
         }
-        CancelTargeting();
+        finally
+        {
+            CancelTargeting();
+        }
     }
 
     public void ConfirmTargetingWithKey()
@@ -136,7 +168,7 @@ public class TargetingController : MonoBehaviour
             {
                 if (abilityToCast != null)
                 {
-                    ConfirmTargeting(); // Re-use the new logic here
+                    ConfirmTargeting();
                 }
                 else
                 {
@@ -160,13 +192,11 @@ public class TargetingController : MonoBehaviour
             HotbarManager.instance.LockingAbility = null;
         }
 
-        if (currentCaster is PlayerAbilityHolder playerCaster)
+        // --- FIX: Safely unlock the specific player we locked earlier ---
+        if (lockedPlayerMovement != null)
         {
-            PlayerMovement playerMovement = playerCaster.GetComponentInParent<PlayerMovement>();
-            if (playerMovement != null)
-            {
-                playerMovement.IsGroundTargeting = false;
-            }
+            lockedPlayerMovement.StartCoroutine(lockedPlayerMovement.ResetGroundTargetingFlag());
+            lockedPlayerMovement = null;
         }
 
         if (currentReticle != null)

@@ -18,8 +18,6 @@ public class CombatLogManager : MonoBehaviour
         else
         {
             instance = this;
-            // --- DIAGNOSTIC ---
-            Debug.Log("<color=cyan>[COMBAT LOG] CombatLogManager has AWAKENED.</color>");
         }
     }
 
@@ -28,8 +26,6 @@ public class CombatLogManager : MonoBehaviour
         Health.OnDamageTaken += HandleDamageEvent;
         Health.OnHealed += HandleHealEvent;
         StatusEffectHolder.OnStatusEffectChanged += HandleStatusEffectEvent;
-        // --- DIAGNOSTIC ---
-        Debug.Log("<color=cyan>[COMBAT LOG] CombatLogManager is now LISTENING for events.</color>");
     }
 
     private void OnDestroy()
@@ -41,8 +37,6 @@ public class CombatLogManager : MonoBehaviour
 
     private void AddLogEntry(string entry)
     {
-        // --- DIAGNOSTIC ---
-        Debug.Log($"<color=cyan>[COMBAT LOG] Adding entry to log data: \"{entry}\"</color>");
         combatLogEntries.Add(entry);
         OnLogEntryAdded?.Invoke(entry);
 
@@ -61,8 +55,6 @@ public class CombatLogManager : MonoBehaviour
 
     public void HandleDamageEvent(DamageInfo info)
     {
-        // --- DIAGNOSTIC ---
-        Debug.Log("<color=cyan>[COMBAT LOG] Received a Damage Event.</color>");
         string casterName = GetCharacterName(info.Caster);
         string targetName = GetCharacterName(info.Target);
         string critText = info.IsCrit ? " (Critical!)" : "";
@@ -72,8 +64,6 @@ public class CombatLogManager : MonoBehaviour
 
     public void HandleHealEvent(HealInfo info)
     {
-        // --- DIAGNOSTIC ---
-        Debug.Log("<color=cyan>[COMBAT LOG] Received a Heal Event.</color>");
         string casterName = GetCharacterName(info.Caster);
         string targetName = GetCharacterName(info.Target);
         string critText = info.IsCrit ? " (Critical!)" : "";

@@ -68,7 +68,7 @@ public class DomeAbilityHolder : MonoBehaviour
         }
     }
 
-    private void PayCostAndStartCooldown(Ability ability, bool bypassCooldown = false)
+    public void PayCostAndStartCooldown(Ability ability, bool bypassCooldown = false)
     {
         if (!bypassCooldown)
         {
@@ -96,6 +96,10 @@ public class DomeAbilityHolder : MonoBehaviour
         int hitCount = Physics.OverlapSphereNonAlloc(position, ability.aoeRadius, _aoeBuffer);
         _affectedCharactersBuffer.Clear();
 
+        // FIX: Pre-fetch layer IDs to avoid string lookups inside the loop
+        int playerLayer = LayerMask.NameToLayer("Player");
+        int friendlyLayer = LayerMask.NameToLayer("Friendly");
+
         for (int i = 0; i < hitCount; i++)
         {
             var hit = _aoeBuffer[i];
@@ -106,7 +110,17 @@ public class DomeAbilityHolder : MonoBehaviour
             }
             _affectedCharactersBuffer.Add(hitCharacter);
 
-            bool isHostile = hitCharacter.gameObject.layer != this.gameObject.layer;
+            // --- FIX START: Improved Hostility Check ---
+            // Previously: bool isHostile = hitCharacter.gameObject.layer != this.gameObject.layer;
+            // This was causing self-damage because the Wagon layer != Player layer.
+
+            int targetLayer = hitCharacter.gameObject.layer;
+            bool isTargetFriendly = (targetLayer == playerLayer || targetLayer == friendlyLayer);
+
+            // If the target is NOT friendly, we consider it hostile.
+            bool isHostile = !isTargetFriendly;
+            // --- FIX END ---
+
             var effectsToApply = isHostile ? ability.hostileEffects : ability.friendlyEffects;
 
             foreach (var effect in effectsToApply)
@@ -187,6 +201,7 @@ public class DomeAbilityHolder : MonoBehaviour
                 continue;
             }
 
+            // Note: HandleSelfCast specifically looks for Players to buff, which is why your passive heals worked.
             if (hitCharacter.gameObject.layer == LayerMask.NameToLayer("Player"))
             {
                 _affectedCharactersBuffer.Add(hitCharacter);
