@@ -41,6 +41,7 @@ public class GameManager : MonoBehaviour
     public string lastSplineContainerName;
     public float lastSplineProgress;
     public bool lastSplineReverse;
+    public string lastLongTermDestinationID; // Tracks final target of multi-leg trip
 
     [Header("Persistent Objects")]
     public GameObject playerPartyObject;
@@ -65,20 +66,14 @@ public class GameManager : MonoBehaviour
     private bool isTransitioning;
     public bool IsTransitioning => isTransitioning;
 
-    // --- NEW: Toggle for Debug UI ---
     private bool isDebugExpanded = true;
 
-    // --- UPDATED DEBUG GUI ---
     void OnGUI()
     {
         if (!Debug.isDebugBuild) return;
 
-        // Adjust height dynamically: 250 if expanded, 30 if collapsed
         float height = isDebugExpanded ? 250 : 30;
-
         GUILayout.BeginArea(new Rect(10, 10, 350, height));
-
-        // Title Button to Toggle Collapse
         if (GUILayout.Button(isDebugExpanded ? "Game State Debugger (▼)" : "Game State Debugger (▶)"))
         {
             isDebugExpanded = !isDebugExpanded;
@@ -86,13 +81,12 @@ public class GameManager : MonoBehaviour
 
         if (isDebugExpanded)
         {
-            // Draw Background Box for content visibility
             GUI.Box(new Rect(0, 25, 350, 225), "");
-
             GUILayout.Label($"Scene: {currentLevelScene} ({currentSceneType})");
             GUILayout.Label($"Return Point: {previousSceneName}");
             GUILayout.Label($"Last Loc Type: {lastLocationType}");
             GUILayout.Label($"Just Exited Dungeon: {justExitedDungeon}");
+            GUILayout.Label($"Long Term Dest: {lastLongTermDestinationID}");
 
             if (DualModeManager.instance != null)
             {
@@ -113,10 +107,8 @@ public class GameManager : MonoBehaviour
                 GUILayout.Label("DualModeManager: <color=red>MISSING</color>");
             }
         }
-
         GUILayout.EndArea();
     }
-    // -----------------
 
     void Awake()
     {
@@ -146,16 +138,35 @@ public class GameManager : MonoBehaviour
     public void CaptureWagonState()
     {
         WagonController wagon = FindAnyObjectByType<WagonController>();
+        WorldMapManager wmm = FindAnyObjectByType<WorldMapManager>();
+
         if (wagon != null && wagon.CurrentSpline != null)
         {
             lastSplineContainerName = wagon.CurrentSpline.gameObject.name;
             lastSplineProgress = wagon.TravelProgress;
             lastSplineReverse = wagon.IsReversing;
             lastKnownLocationNodeID = null;
+
+            // --- UPDATED: Robust Destination Capture ---
+            if (wmm != null)
+            {
+                var dest = wmm.GetFinalDestination();
+                if (dest != null)
+                {
+                    lastLongTermDestinationID = dest.locationName;
+                    Debug.Log($"[GameManager] Captured Long Term Destination: {lastLongTermDestinationID}");
+                }
+                else
+                {
+                    lastLongTermDestinationID = null;
+                }
+            }
+            // -------------------------------------------
         }
         else
         {
             lastSplineContainerName = null;
+            lastLongTermDestinationID = null;
         }
     }
 
@@ -169,9 +180,10 @@ public class GameManager : MonoBehaviour
     {
         isTransitioning = true;
 
-        justExitedDungeon = false;
-        lastLocationType = NodeType.Scene;
+        NodeType typeBeforeExit = lastLocationType;
+        string sceneBeforeExit = currentLevelScene;
 
+        lastLocationType = NodeType.Scene;
         float startTime = Time.realtimeSinceStartup;
         yield return LoadingScreenManager.instance.ShowLoadingScreen(fadeDuration);
 
@@ -205,6 +217,18 @@ public class GameManager : MonoBehaviour
             LocationNode targetNode = FindObjectsByType<LocationNode>(FindObjectsSortMode.None)
                 .FirstOrDefault(n => n.locationName == lastKnownLocationNodeID);
             if (targetNode != null) wmm.SetCurrentLocation(targetNode, true);
+        }
+
+        if (wmm != null)
+        {
+            bool isAmbushOrCamp = sceneBeforeExit.Contains("DomeBattle");
+            bool isDungeonRun = typeBeforeExit == NodeType.Scene || typeBeforeExit == NodeType.DualModeLocation;
+
+            if (isAmbushOrCamp || isDungeonRun)
+            {
+                Debug.Log($"TransitionToWorldMap: Returning from {sceneBeforeExit} ({typeBeforeExit}). Advancing time to Dawn (6:00).");
+                wmm.timeOfDay = 6f;
+            }
         }
 
         SetUIVisibility("WorldMap");
@@ -345,6 +369,7 @@ public class GameManager : MonoBehaviour
 
         lastLocationType = (NodeType)data.lastLocationType;
         justExitedDungeon = false;
+        lastLongTermDestinationID = null;
 
         yield return SwitchToSceneExact(startingSceneName);
 

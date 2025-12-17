@@ -91,6 +91,15 @@ public class WorldMapManager : MonoBehaviour
         if (resourceManager == null) resourceManager = FindAnyObjectByType<WagonResourceManager>();
     }
 
+    // --- NEW: Helper for GameManager to find the real destination ---
+    public LocationNode GetFinalDestination()
+    {
+        if (longTermDestination != null) return longTermDestination;
+        if (currentPlannedPath != null && currentPlannedPath.Count > 0) return currentPlannedPath.Last();
+        return null;
+    }
+    // ---------------------------------------------------------------
+
     public void RestoreJourneyState(SplineContainer spline, float progress, bool reverse)
     {
         currentPlannedPath = null;
@@ -122,6 +131,27 @@ public class WorldMapManager : MonoBehaviour
         {
             currentLocation = originNode;
             currentActiveConnection = connection;
+
+            // --- UPDATED: Robust Path Restoration ---
+            if (GameManager.instance != null && !string.IsNullOrEmpty(GameManager.instance.lastLongTermDestinationID))
+            {
+                var target = allNodes.FirstOrDefault(n => n.locationName == GameManager.instance.lastLongTermDestinationID);
+                if (target != null && target != originNode)
+                {
+                    SetLongTermDestination(target);
+                    var trip = NavigationComputer.CalculateTrip(originNode, target);
+                    if (trip.isValid && trip.path.Count > 1)
+                    {
+                        currentPlannedPath = trip.path;
+                        Debug.Log($"[WorldMapManager] Restored multi-leg journey: {originNode.locationName} -> {target.locationName} (Steps: {currentPlannedPath.Count})");
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[WorldMapManager] Failed to recalculate trip from {originNode.locationName} to {target.locationName}");
+                    }
+                }
+            }
+            // ----------------------------------------
 
             ShowRoadsidePanel();
 
@@ -189,23 +219,72 @@ public class WorldMapManager : MonoBehaviour
             {
                 wagonController.ResumeJourney();
             }
-            else if (currentActiveConnection != null && currentActiveConnection.destinationNode != null)
+            else
             {
                 float progress = Mathf.Clamp(wagonController.TravelProgress, 0f, 1f);
-                if (progress > 0.99f)
+
+                // --- UPDATED: Robust Multi-Leg Resumption ---
+                if (currentPlannedPath != null && currentPlannedPath.Count > 1)
                 {
-                    Debug.Log("Resume: Already at destination. Triggering Arrival.");
-                    SetCurrentLocation(currentActiveConnection.destinationNode, true);
-                    ShowArrivalPanel();
+                    StartCoroutine(ExecuteResumedJourney(progress));
                 }
-                else
+                else if (currentActiveConnection != null && currentActiveConnection.destinationNode != null)
                 {
-                    StartCoroutine(TravelToNode(currentActiveConnection.destinationNode, progress));
+                    // Fallback to single leg if path was lost
+                    if (progress > 0.99f)
+                    {
+                        Debug.Log("Resume: Already at destination. Triggering Arrival.");
+                        SetCurrentLocation(currentActiveConnection.destinationNode, true);
+                        ShowArrivalPanel();
+                    }
+                    else
+                    {
+                        StartCoroutine(TravelToNode(currentActiveConnection.destinationNode, progress));
+                    }
                 }
+                // --------------------------------------------
             }
         }
 
         if (haltButton != null) haltButton.gameObject.SetActive(true);
+    }
+
+    private IEnumerator ExecuteResumedJourney(float firstLegStartProgress)
+    {
+        // Identify where we are in the path.
+        // currentPlannedPath[0] is typically the Origin.
+        int startIndex = currentPlannedPath.IndexOf(currentLocation);
+        if (startIndex == -1) startIndex = 0;
+
+        for (int i = startIndex; i < currentPlannedPath.Count - 1; i++)
+        {
+            LocationNode legEnd = currentPlannedPath[i + 1];
+            float progress = (i == startIndex) ? firstLegStartProgress : 0f;
+
+            // If we are basically already at the end of the first leg, force completion and skip to next
+            if (i == startIndex && progress > 0.99f)
+            {
+                Debug.Log($"[ExecuteResumedJourney] Already at end of leg to {legEnd.locationName}. Skipping travel.");
+                SetCurrentLocation(legEnd, true);
+
+                // If this was the last leg, stop.
+                if (legEnd == currentPlannedPath.Last())
+                {
+                    ShowArrivalPanel();
+                    yield break;
+                }
+                continue; // Move to next leg loop
+            }
+
+            yield return StartCoroutine(TravelToNode(legEnd, progress));
+
+            // Check if travel was successful
+            if (currentLocation != legEnd)
+            {
+                Debug.Log("Journey interrupted or halted!");
+                yield break;
+            }
+        }
     }
 
     private void OnCampClicked()
@@ -269,6 +348,7 @@ public class WorldMapManager : MonoBehaviour
         if (tripData.isValid && tripData.path.Count > 1)
         {
             currentPlannedPath = tripData.path;
+            SetLongTermDestination(destinationNode);
 
             float arrivalTime = (timeOfDay + tripData.totalHours) % 24;
             string warning = "";
@@ -542,13 +622,11 @@ public class WorldMapManager : MonoBehaviour
             Debug.Log($"WorldMapManager: Setting Location Type to {currentLocation.nodeType}");
             GameManager.instance.SetLocationType(currentLocation.nodeType);
 
-            // --- UPDATED: Pass Dungeon Scene to DualModeManager ---
             if (DualModeManager.instance != null)
             {
                 DualModeManager.instance.queuedDungeonScene = currentLocation.dualModeDungeonScene;
                 Debug.Log($"WorldMapManager: Queued dungeon scene '{currentLocation.dualModeDungeonScene}' for DualMode.");
             }
-            // -----------------------------------------------------
 
             string spawnPointID = "WorldMapArrival";
             var originNode = FindObjectsByType<LocationNode>(FindObjectsSortMode.None).FirstOrDefault(n => n.connections.Any(c => c.destinationNode.locationName == currentLocation.locationName));
