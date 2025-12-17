@@ -13,9 +13,14 @@ public class AITargeting : MonoBehaviour
     public float domePriorityMultiplier = 5.0f;
     public LayerMask obstacleLayers;
 
+    [Header("Aggro Logic")]
+    [Tooltip("Multiplier applied to the current target's score to make AI 'stick' to them.")]
+    public float stickyAggroMultiplier = 1.25f;
+
     private Collider[] _targetBuffer = new Collider[50];
 
-    public Transform FindBestTarget()
+    // --- MODIFIED: Accepts the current target to apply sticky bias ---
+    public Transform FindBestTarget(Transform currentFocus = null)
     {
         LayerMask combinedMask = playerLayer | domeMarkerLayer;
         int hitCount = Physics.OverlapSphereNonAlloc(transform.position, detectionRadius, _targetBuffer, combinedMask);
@@ -29,7 +34,7 @@ public class AITargeting : MonoBehaviour
         {
             var targetCollider = _targetBuffer[i];
 
-            // 1. Resolve Health Component (Optimized with Fallback)
+            // 1. Resolve Health Component
             Health targetHealth = null;
             CharacterRoot root = targetCollider.GetComponentInParent<CharacterRoot>();
 
@@ -39,14 +44,13 @@ public class AITargeting : MonoBehaviour
             }
             else
             {
-                // Fallback for markers or destructibles without a Root
                 targetHealth = targetCollider.GetComponent<Health>() ?? targetCollider.GetComponentInParent<Health>();
             }
 
             // 2. Dead/Downed Check
             if (targetHealth != null && (targetHealth.isDowned || targetHealth.currentHealth <= 0))
             {
-                continue; // Ignore this target
+                continue;
             }
 
             // 3. Line of Sight Check
@@ -58,13 +62,21 @@ public class AITargeting : MonoBehaviour
 
                 if (Physics.Raycast(origin, direction.normalized, direction.magnitude, obstacleLayers))
                 {
-                    continue; // Blocked
+                    continue;
                 }
             }
 
             // 4. Scoring
-            float score = 1.0f / (1.0f + Vector3.Distance(transform.position, targetCollider.transform.position));
+            float distance = Vector3.Distance(transform.position, targetCollider.transform.position);
+            float score = 1.0f / (1.0f + distance);
+
             if (targetCollider.CompareTag("DomeMarker")) score *= domePriorityMultiplier;
+
+            // --- NEW: Sticky Aggro Bonus ---
+            if (currentFocus != null && targetCollider.transform == currentFocus)
+            {
+                score *= stickyAggroMultiplier;
+            }
 
             if (score > bestScore)
             {

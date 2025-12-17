@@ -14,15 +14,22 @@ public class PartyMemberAI : MonoBehaviour
     [Header("AI State")]
     public AICommand currentCommand = AICommand.Follow;
     public AIStance currentStance = AIStance.Defensive;
+
     [Header("Movement")]
     public float followStoppingDistance = 1.5f;
-    // --- NEW VARIABLE ---
-    [Tooltip("How quickly the character turns to face their movement direction.")]
-    public float rotationSpeed = 10f;
+    public float rotationSpeed = 12f;
+
+    [Header("Self Preservation")]
+    [Tooltip("If health drops below this % (0-1), stop fighting and run to leader.")]
+    [Range(0f, 1f)] public float retreatThreshold = 0.3f;
+    private bool isRetreating = false;
+
     [Header("Animation")]
     public float animationDampTime = 0.1f;
+
     [Header("Behavior Thresholds")]
     [Range(0f, 1f)] public float finisherThreshold = 0.25f;
+
     [Header("Ranged Combat & Kiting")]
     public bool prefersToKeepDistance = false;
     public float preferredCombatDistance = 20f;
@@ -42,78 +49,333 @@ public class PartyMemberAI : MonoBehaviour
     private bool hasExplicitCommand = false;
     private string characterName;
     private float originalNavMeshSpeed;
-    // This field is unused and was causing the warning. It can be safely removed.
-    // private bool isAtDefendPosition; 
-    public string CurrentStatus { get; private set; }
     private Vector3 commandMovePosition;
+
+    public string CurrentStatus { get; private set; }
 
     void Awake()
     {
         CharacterRoot root = GetComponent<CharacterRoot>();
-        if (root != null) { navMeshAgent = root.GetComponent<NavMeshAgent>(); abilityHolder = root.PlayerAbilityHolder; health = root.Health; playerStats = root.PlayerStats; animator = root.Animator; characterName = root.gameObject.name; }
+        if (root != null)
+        {
+            navMeshAgent = root.GetComponent<NavMeshAgent>();
+            abilityHolder = root.PlayerAbilityHolder;
+            health = root.Health;
+            playerStats = root.PlayerStats;
+            animator = root.Animator;
+            characterName = root.gameObject.name;
+        }
         targeting = GetComponent<PartyMemberTargeting>();
         abilitySelector = GetComponent<PartyMemberAbilitySelector>();
-        if (navMeshAgent != null) { originalNavMeshSpeed = navMeshAgent.speed; }
 
-        // Ensure rotation is always manually controlled for consistency with the player.
-        if (navMeshAgent != null) { navMeshAgent.updateRotation = false; }
+        if (navMeshAgent != null)
+        {
+            originalNavMeshSpeed = navMeshAgent.speed;
+            navMeshAgent.updateRotation = false; // Manual rotation handling
+        }
+    }
+
+    void OnEnable()
+    {
+        StartCoroutine(InitializeAgent());
+    }
+
+    private IEnumerator InitializeAgent()
+    {
+        while (navMeshAgent != null && !navMeshAgent.isOnNavMesh) { yield return null; }
+        if (navMeshAgent != null)
+        {
+            if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
+            navMeshAgent.isStopped = false;
+        }
+        hasExplicitCommand = false;
+        UpdateStatus("Following");
+
+        // --- NEW: Start the Thinking Loop ---
+        StartCoroutine(AIThinkRoutine());
     }
 
     void Update()
     {
-        if (GameManager.instance != null && GameManager.instance.currentSceneType == SceneType.MainMenu) { return; }
+        if (GameManager.instance != null && GameManager.instance.currentSceneType == SceneType.MainMenu) return;
+
         UpdateAnimator();
-        if (PartyManager.instance != null && PartyManager.instance.ActivePlayer == this.gameObject) { if (navMeshAgent.hasPath) navMeshAgent.ResetPath(); return; }
-        if (navMeshAgent == null || !navMeshAgent.isOnNavMesh || health == null || health.currentHealth <= 0) { return; }
-        Think();
+
+        // If player is controlling this character, disable AI pathing but keep components ready
+        if (PartyManager.instance != null && PartyManager.instance.ActivePlayer == this.gameObject)
+        {
+            if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
+            return;
+        }
+
+        if (navMeshAgent == null || !navMeshAgent.isOnNavMesh || health == null || health.currentHealth <= 0) return;
+
+        // Note: Think() is now handled in Coroutine. Update() only handles smooth execution (Act).
         Act();
     }
 
-    // --- METHOD WITH THE PRIMARY FIX ---
+    // --- NEW: Optimization Coroutine (Runs 10 times/sec instead of every frame) ---
+    private IEnumerator AIThinkRoutine()
+    {
+        WaitForSeconds wait = new WaitForSeconds(0.1f);
+        // Random offset to prevent all AI thinking on the exact same frame
+        yield return new WaitForSeconds(UnityEngine.Random.Range(0f, 0.2f));
+
+        while (true)
+        {
+            if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != this.gameObject
+                && health != null && health.currentHealth > 0)
+            {
+                Think();
+            }
+            yield return wait;
+        }
+    }
+
+    private void Think()
+    {
+        // 1. Explicit Command Override
+        if (hasExplicitCommand)
+        {
+            if ((currentCommand == AICommand.AttackTarget || currentCommand == AICommand.HealTarget) &&
+                (currentTarget == null || IsTargetDeadOrInvalid(currentTarget)))
+            {
+                hasExplicitCommand = false;
+            }
+            else
+            {
+                return; // Keep following explicit command
+            }
+        }
+
+        // 2. Self-Preservation (Retreat)
+        float hpPercent = health.currentHealth / (float)health.maxHealth;
+        if (hpPercent < retreatThreshold)
+        {
+            isRetreating = true;
+        }
+        else if (hpPercent > retreatThreshold + 0.15f) // Hysteresis: wait until decent HP before re-engaging
+        {
+            isRetreating = false;
+        }
+
+        if (isRetreating)
+        {
+            currentCommand = AICommand.Follow;
+            currentTarget = null;
+            UpdateStatus("Retreating (Low HP)");
+            return;
+        }
+
+        // 3. Passive Stance Check
+        if (currentStance == AIStance.Passive)
+        {
+            currentCommand = AICommand.Follow;
+            currentTarget = null;
+            UpdateStatus("Passive");
+            return;
+        }
+
+        // 4. Support Logic (Healing)
+        if (playerStats.characterClass.aiRole == PlayerClass.AILogicRole.Support)
+        {
+            PartyMemberAI allyToHeal = targeting.FindWoundedAlly();
+            if (allyToHeal != null)
+            {
+                currentTarget = allyToHeal.gameObject;
+                currentCommand = AICommand.HealTarget;
+                return;
+            }
+        }
+
+        // 5. Combat Targeting
+        GameObject enemyTarget = null;
+        if (currentStance == AIStance.Defensive)
+        {
+            enemyTarget = PartyAIManager.instance.GetPartyFocusTarget();
+        }
+        else if (currentStance == AIStance.Aggressive)
+        {
+            // Aggressive looks for party focus first, then nearest enemy
+            enemyTarget = PartyAIManager.instance.GetPartyFocusTarget() ?? targeting.FindNearestEnemy();
+        }
+
+        if (enemyTarget != null)
+        {
+            currentTarget = enemyTarget;
+            currentCommand = AICommand.AttackTarget;
+        }
+        else
+        {
+            currentTarget = null;
+            currentCommand = AICommand.Follow;
+        }
+    }
+
+    private void Act()
+    {
+        switch (currentCommand)
+        {
+            case AICommand.Follow: HandleFollowState(); break;
+            case AICommand.AttackTarget: HandleAttackState(); break;
+            case AICommand.HealTarget: HandleHealState(); break;
+            case AICommand.MoveToAndDefend: HandleMoveToAndDefendState(); break;
+        }
+    }
+
     private void HandleFollowState()
     {
         navMeshAgent.speed = originalNavMeshSpeed;
         Vector3 destination = PartyAIManager.instance.GetFormationPositionFor(this);
-        navMeshAgent.stoppingDistance = followStoppingDistance;
+
+        // If retreating or passive, follow closer
+        navMeshAgent.stoppingDistance = (isRetreating || currentStance == AIStance.Passive) ? 1.0f : followStoppingDistance;
 
         if (Vector3.Distance(navMeshAgent.destination, destination) > 0.5f)
         {
             navMeshAgent.SetDestination(destination);
         }
 
-        // --- NEW ROTATION LOGIC ---
-        // If the agent is moving...
-        if (navMeshAgent.velocity.sqrMagnitude > 0.1f)
-        {
-            // ...smoothly rotate to face the direction of movement.
-            Quaternion lookRotation = Quaternion.LookRotation(navMeshAgent.velocity.normalized);
-            transform.rotation = Quaternion.Slerp(transform.rotation, lookRotation, Time.deltaTime * rotationSpeed);
+        HandleSmoothRotation();
+
+        if (!isRetreating && currentStance != AIStance.Passive)
             UpdateStatus("Following");
+    }
+
+    private void HandleAttackState()
+    {
+        if (currentTarget == null) { currentCommand = AICommand.Follow; return; }
+
+        RotateTowards(currentTarget.transform.position);
+
+        if (targeting.HasLineOfSight(currentTarget.transform))
+        {
+            Ability abilityToUse = abilitySelector.SelectBestAbility(currentTarget);
+            if (abilityToUse == null) return;
+
+            float distanceToTarget = Vector3.Distance(transform.position, currentTarget.transform.position);
+
+            // Move into range
+            if (distanceToTarget > abilityToUse.range)
+            {
+                navMeshAgent.SetDestination(currentTarget.transform.position);
+                UpdateStatus("Closing In");
+            }
+            // Stop and Cast
+            else
+            {
+                navMeshAgent.ResetPath();
+                abilityHolder.UseAbility(abilityToUse, currentTarget);
+                UpdateStatus($"Attacking: {currentTarget.name}");
+            }
         }
-        // If the agent has stopped...
         else
         {
-            // ...smoothly rotate to match the leader's orientation.
-            GameObject activePlayer = PartyAIManager.instance.ActivePlayer;
-            if (activePlayer != null)
-            {
-                Quaternion targetRotation = activePlayer.transform.rotation;
-                transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * rotationSpeed);
-            }
-            UpdateStatus("Following (Idle)");
+            // Reposition to get Line of Sight
+            navMeshAgent.SetDestination(currentTarget.transform.position);
+            UpdateStatus("Repositioning");
         }
     }
 
-    #region Unchanged Code
-    private void UpdateStatus(string newStatus) { if (CurrentStatus != newStatus) { CurrentStatus = newStatus; OnStatusChanged?.Invoke(this, CurrentStatus); } }
-    private void UpdateAnimator() { if (animator == null || navMeshAgent == null) return; Vector3 localVelocity = transform.InverseTransformDirection(navMeshAgent.velocity); animator.SetFloat("VelocityZ", localVelocity.z / navMeshAgent.speed, animationDampTime, Time.deltaTime); animator.SetFloat("VelocityX", localVelocity.x / navMeshAgent.speed, animationDampTime, Time.deltaTime); }
-    private void Think() { if (hasExplicitCommand) { if ((currentCommand == AICommand.AttackTarget || currentCommand == AICommand.HealTarget) && (currentTarget == null || currentTarget.GetComponent<Health>()?.currentHealth <= 0)) { hasExplicitCommand = false; } return; } if (playerStats.characterClass.aiRole == PlayerClass.AILogicRole.Support) { PartyMemberAI allyToHeal = targeting.FindWoundedAlly(); if (allyToHeal != null) { currentTarget = allyToHeal.gameObject; currentCommand = AICommand.HealTarget; return; } } GameObject enemyTarget = null; if (currentStance == AIStance.Defensive) { enemyTarget = PartyAIManager.instance.GetPartyFocusTarget(); } else if (currentStance == AIStance.Aggressive) { enemyTarget = PartyAIManager.instance.GetPartyFocusTarget() ?? targeting.FindNearestEnemy(); } if (enemyTarget != null) { currentTarget = enemyTarget; currentCommand = AICommand.AttackTarget; } else { currentTarget = null; currentCommand = AICommand.Follow; } }
-    private void Act() { switch (currentCommand) { case AICommand.Follow: HandleFollowState(); break; case AICommand.AttackTarget: HandleAttackState(); break; case AICommand.HealTarget: HandleHealState(); break; case AICommand.MoveToAndDefend: HandleMoveToAndDefendState(); break; } }
-    private void HandleAttackState() { if (currentTarget == null) { currentCommand = AICommand.Follow; return; } transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(currentTarget.transform.position - transform.position), Time.deltaTime * rotationSpeed); if (targeting.HasLineOfSight(currentTarget.transform)) { Ability abilityToUse = abilitySelector.SelectBestAbility(currentTarget); if (abilityToUse == null) { return; } float distanceToTarget = Vector3.Distance(transform.position, currentTarget.transform.position); if (distanceToTarget > abilityToUse.range) { navMeshAgent.SetDestination(currentTarget.transform.position); UpdateStatus("Closing In"); } else { navMeshAgent.ResetPath(); abilityHolder.UseAbility(abilityToUse, currentTarget); UpdateStatus($"Attacking: {currentTarget.name}"); } } else { navMeshAgent.SetDestination(currentTarget.transform.position); UpdateStatus("Repositioning"); } }
-    private void HandleHealState() { if (currentTarget == null) { currentCommand = AICommand.Follow; return; } transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(currentTarget.transform.position - transform.position), Time.deltaTime * rotationSpeed); if (targeting.HasLineOfSight(currentTarget.transform)) { Ability healAbility = abilitySelector.SelectBestAbility(currentTarget); if (healAbility == null) { return; } float distanceToTarget = Vector3.Distance(transform.position, currentTarget.transform.position); if (distanceToTarget > healAbility.range) { navMeshAgent.SetDestination(currentTarget.transform.position); UpdateStatus($"Moving to Heal"); } else { navMeshAgent.ResetPath(); abilityHolder.UseAbility(healAbility, currentTarget); UpdateStatus($"Healing: {currentTarget.name}"); } } else { navMeshAgent.SetDestination(currentTarget.transform.position); UpdateStatus("Repositioning to Heal"); } }
-    void OnEnable() { StartCoroutine(InitializeAgent()); }
-    private IEnumerator InitializeAgent() { while (navMeshAgent != null && !navMeshAgent.isOnNavMesh) { yield return null; } if (navMeshAgent != null) { if (navMeshAgent.hasPath) { navMeshAgent.ResetPath(); } navMeshAgent.isStopped = false; } hasExplicitCommand = false; UpdateStatus("Following"); }
-    private void HandleMoveToAndDefendState() { navMeshAgent.SetDestination(commandMovePosition); UpdateStatus("Moving to Position"); if (navMeshAgent.velocity.sqrMagnitude > 0.1f) { Quaternion lookRotation = Quaternion.LookRotation(navMeshAgent.velocity.normalized); transform.rotation = Quaternion.Slerp(transform.rotation, lookRotation, Time.deltaTime * rotationSpeed); } if (!navMeshAgent.pathPending && navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance) { UpdateStatus("Holding Position"); } }
-    public void SetCommand(AICommand newCommand, GameObject target = null, Vector3 position = default) { hasExplicitCommand = (newCommand != AICommand.Follow); currentCommand = newCommand; currentTarget = target; commandMovePosition = position; Act(); }
-    #endregion
+    private void HandleHealState()
+    {
+        if (currentTarget == null) { currentCommand = AICommand.Follow; return; }
+
+        RotateTowards(currentTarget.transform.position);
+
+        if (targeting.HasLineOfSight(currentTarget.transform))
+        {
+            Ability healAbility = abilitySelector.SelectBestAbility(currentTarget);
+            if (healAbility == null) return;
+
+            float distanceToTarget = Vector3.Distance(transform.position, currentTarget.transform.position);
+            if (distanceToTarget > healAbility.range)
+            {
+                navMeshAgent.SetDestination(currentTarget.transform.position);
+                UpdateStatus($"Moving to Heal");
+            }
+            else
+            {
+                navMeshAgent.ResetPath();
+                abilityHolder.UseAbility(healAbility, currentTarget);
+                UpdateStatus($"Healing: {currentTarget.name}");
+            }
+        }
+        else
+        {
+            navMeshAgent.SetDestination(currentTarget.transform.position);
+            UpdateStatus("Repositioning to Heal");
+        }
+    }
+
+    private void HandleMoveToAndDefendState()
+    {
+        navMeshAgent.SetDestination(commandMovePosition);
+        UpdateStatus("Moving to Position");
+
+        HandleSmoothRotation();
+
+        if (!navMeshAgent.pathPending && navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance)
+        {
+            UpdateStatus("Holding Position");
+        }
+    }
+
+    private void HandleSmoothRotation()
+    {
+        if (navMeshAgent.velocity.sqrMagnitude > 0.1f)
+        {
+            Quaternion lookRotation = Quaternion.LookRotation(navMeshAgent.velocity.normalized);
+            transform.rotation = Quaternion.Slerp(transform.rotation, lookRotation, Time.deltaTime * rotationSpeed);
+        }
+        else if (PartyAIManager.instance.ActivePlayer != null)
+        {
+            // Idle: align with leader
+            Quaternion targetRotation = PartyAIManager.instance.ActivePlayer.transform.rotation;
+            transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * rotationSpeed);
+        }
+    }
+
+    private void RotateTowards(Vector3 targetPos)
+    {
+        Vector3 direction = (targetPos - transform.position).normalized;
+        if (direction != Vector3.zero)
+        {
+            Quaternion lookRotation = Quaternion.LookRotation(direction);
+            transform.rotation = Quaternion.Slerp(transform.rotation, lookRotation, Time.deltaTime * rotationSpeed);
+        }
+    }
+
+    private bool IsTargetDeadOrInvalid(GameObject target)
+    {
+        if (target == null) return true;
+        Health h = target.GetComponent<Health>();
+        return (h != null && (h.isDowned || h.currentHealth <= 0));
+    }
+
+    private void UpdateStatus(string newStatus)
+    {
+        if (CurrentStatus != newStatus)
+        {
+            CurrentStatus = newStatus;
+            OnStatusChanged?.Invoke(this, CurrentStatus);
+        }
+    }
+
+    private void UpdateAnimator()
+    {
+        if (animator == null || navMeshAgent == null) return;
+        Vector3 localVelocity = transform.InverseTransformDirection(navMeshAgent.velocity);
+        animator.SetFloat("VelocityZ", localVelocity.z / navMeshAgent.speed, animationDampTime, Time.deltaTime);
+        animator.SetFloat("VelocityX", localVelocity.x / navMeshAgent.speed, animationDampTime, Time.deltaTime);
+    }
+
+    public void SetCommand(AICommand newCommand, GameObject target = null, Vector3 position = default)
+    {
+        hasExplicitCommand = (newCommand != AICommand.Follow);
+        currentCommand = newCommand;
+        currentTarget = target;
+        commandMovePosition = position;
+        Act();
+    }
 }

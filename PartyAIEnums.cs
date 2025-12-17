@@ -1,23 +1,16 @@
-// PartyAIEnums.cs
+using UnityEngine;
 
-/// <summary>
-/// Defines the high-level commands a player can issue to NUCs.
-/// </summary>
 public enum AICommand
 {
     Follow,
     AttackTarget,
-    MoveToAndDefend,
-    // --- NEW: Add this command ---
-    HealTarget
+    HealTarget,
+    MoveToAndDefend
 }
 
-/// <summary>
-/// Defines the general behavior or "stance" of an NUC.
-/// </summary>
 public enum AIStance
 {
-    Aggressive,
-    Defensive,
-    Passive
+    Defensive,  // Attack what the player attacks / defend self
+    Aggressive, // Attack enemies in sight freely
+    Passive     // Never attack, just follow (good for sneaking or retreating)
 }
