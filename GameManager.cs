@@ -147,7 +147,6 @@ public class GameManager : MonoBehaviour
             lastSplineReverse = wagon.IsReversing;
             lastKnownLocationNodeID = null;
 
-            // --- UPDATED: Robust Destination Capture ---
             if (wmm != null)
             {
                 var dest = wmm.GetFinalDestination();
@@ -161,7 +160,6 @@ public class GameManager : MonoBehaviour
                     lastLongTermDestinationID = null;
                 }
             }
-            // -------------------------------------------
         }
         else
         {
@@ -244,7 +242,7 @@ public class GameManager : MonoBehaviour
         isTransitioning = false;
     }
 
-    private void ApplySceneRules()
+    public void ApplySceneRules()
     {
         SceneInfo info = FindAnyObjectByType<SceneInfo>();
         currentSceneType = (info != null) ? info.type : SceneType.Dungeon;
@@ -583,14 +581,66 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    private void SetPlayerMovementComponentsActive(bool isActive)
+    /// <summary>
+    /// Enables or disables AI and movement components on the player party.
+    /// UPDATED: Respects Town Mode logic when re-enabling after a sequence.
+    /// </summary>
+    public void SetPlayerMovementComponentsActive(bool isActive)
     {
-        if (playerPartyObject == null) return;
-        foreach (var agent in playerPartyObject.GetComponentsInChildren<NavMeshAgent>(true)) { agent.enabled = isActive; }
-        foreach (var movement in playerPartyObject.GetComponentsInChildren<PlayerMovement>(true)) { movement.enabled = isActive; }
-        foreach (var ai in playerPartyObject.GetComponentsInChildren<PartyMemberAI>(true)) { ai.enabled = isActive; }
-        PartyAIManager partyAI = playerPartyObject.GetComponent<PartyAIManager>();
-        if (partyAI != null) { partyAI.enabled = isActive; }
+        if (playerPartyObject == null || PartyManager.instance == null) return;
+
+        // If we are disabling (e.g., at start of sequence), disable everything
+        if (!isActive)
+        {
+            foreach (var agent in playerPartyObject.GetComponentsInChildren<NavMeshAgent>(true)) { agent.enabled = false; }
+            foreach (var movement in playerPartyObject.GetComponentsInChildren<PlayerMovement>(true)) { movement.enabled = false; }
+            foreach (var ai in playerPartyObject.GetComponentsInChildren<PartyMemberAI>(true)) { ai.enabled = false; }
+            PartyAIManager partyAI = playerPartyObject.GetComponent<PartyAIManager>();
+            if (partyAI != null) { partyAI.enabled = false; }
+            return;
+        }
+
+        // If we are ENABLING (e.g., at end of sequence), check current scene rules
+        if (currentSceneType == SceneType.Town)
+        {
+            // Town Logic: Only re-enable Player 0; disable switching and other party AI
+            for (int i = 0; i < PartyManager.instance.partyMembers.Count; i++)
+            {
+                GameObject member = PartyManager.instance.partyMembers[i];
+                if (member == null) continue;
+
+                NavMeshAgent agent = member.GetComponent<NavMeshAgent>();
+                PlayerMovement movement = member.GetComponent<PlayerMovement>();
+                PartyMemberAI ai = member.GetComponent<PartyMemberAI>();
+
+                if (i == 0)
+                {
+                    if (agent != null) agent.enabled = true;
+                    if (movement != null) movement.enabled = true;
+                    if (ai != null) ai.enabled = false;
+                }
+                else
+                {
+                    // NUCs stay still at spawn/bench
+                    if (agent != null) agent.enabled = true;
+                    if (movement != null) movement.enabled = false;
+                    if (ai != null) ai.enabled = false;
+                }
+            }
+            PartyManager.instance.SetPlayerSwitching(false);
+        }
+        else
+        {
+            // Combat/Dungeon Logic: Enable everything for everyone
+            foreach (var agent in playerPartyObject.GetComponentsInChildren<NavMeshAgent>(true)) { agent.enabled = true; }
+            foreach (var movement in playerPartyObject.GetComponentsInChildren<PlayerMovement>(true)) { movement.enabled = true; }
+            foreach (var ai in playerPartyObject.GetComponentsInChildren<PartyMemberAI>(true)) { ai.enabled = true; }
+            PartyAIManager partyAI = playerPartyObject.GetComponent<PartyAIManager>();
+            if (partyAI != null) { partyAI.enabled = true; }
+
+            // Re-apply specific combat visibility/active logic (benched P0, active NUCs)
+            PartyAIManager.instance?.EnterCombatMode();
+        }
     }
 
     private static string NormalizeSceneName(string s)

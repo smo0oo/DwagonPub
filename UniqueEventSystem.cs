@@ -1,26 +1,46 @@
 using UnityEngine;
-using UnityEngine.EventSystems;
+using System.Collections.Generic;
 
 public class UniqueEventSystem : MonoBehaviour
 {
-    // The static instance that will hold our single EventSystem.
     public static UniqueEventSystem instance;
+
+    // A collection to store unique IDs of completed events/cinematics
+    private HashSet<string> completedEventIDs = new HashSet<string>();
 
     void Awake()
     {
-        // Check if an instance of this script already exists.
         if (instance == null)
         {
-            // If not, this becomes the instance.
             instance = this;
-            // And we make sure it persists across all scenes.
             DontDestroyOnLoad(this.gameObject);
         }
         else
         {
-            // If an instance already exists (our persistent one),
-            // then this new one is a duplicate and must be destroyed.
             Destroy(this.gameObject);
         }
+    }
+
+    /// <summary>
+    /// Records an event as finished so it doesn't trigger again.
+    /// </summary>
+    public void MarkEventAsCompleted(string eventID)
+    {
+        if (string.IsNullOrEmpty(eventID)) return;
+
+        if (!completedEventIDs.Contains(eventID))
+        {
+            completedEventIDs.Add(eventID);
+            Debug.Log($"[UniqueEventSystem] Event Registered: {eventID}");
+        }
+    }
+
+    /// <summary>
+    /// Checks if a specific event ID has already been completed.
+    /// </summary>
+    public bool IsEventCompleted(string eventID)
+    {
+        if (string.IsNullOrEmpty(eventID)) return false;
+        return completedEventIDs.Contains(eventID);
     }
 }
