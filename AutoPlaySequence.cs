@@ -1,5 +1,5 @@
 using UnityEngine;
-using UnityEngine.Playables;
+using System.Collections;
 
 public class AutoPlaySequence : MonoBehaviour
 {
@@ -7,22 +7,30 @@ public class AutoPlaySequence : MonoBehaviour
     public string uniqueEventID;
     public bool playOnlyOnce = true;
 
-    private void Start()
+    private IEnumerator Start()
     {
-        // Check if we should play based on the event system
+        // 1. Check if the system already knows this event is done
         if (playOnlyOnce && UniqueEventSystem.instance != null)
         {
             if (UniqueEventSystem.instance.IsEventCompleted(uniqueEventID))
             {
-                // Already played, don't trigger again
-                return;
+                yield break; // Exit if already played
             }
         }
 
-        // Trigger the integrated sequence (handles pausing/camera override)
+        // 2. WAIT for the scene and Core Scene cameras to settle
+        // A single frame delay is usually enough, but we'll use 0.1s to be safe
+        yield return new WaitForSeconds(0.1f);
+
+        // 3. Trigger the integrated sequence
         if (sequenceController != null)
         {
+            Debug.Log($"[AutoPlay] Starting Sequence: {uniqueEventID}");
             sequenceController.PlaySequence();
+        }
+        else
+        {
+            Debug.LogError("[AutoPlay] SequenceController is missing!");
         }
     }
 }

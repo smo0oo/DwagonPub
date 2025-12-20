@@ -43,6 +43,12 @@ public class GameManager : MonoBehaviour
     public bool lastSplineReverse;
     public string lastLongTermDestinationID; // Tracks final target of multi-leg trip
 
+    [Header("Tithe Settings (Credits)")]
+    [Tooltip("Fuel ADDED to the wagon upon entering a town.")]
+    public int titheFuelCredit = 50;
+    [Tooltip("Rations ADDED to the wagon upon entering a town.")]
+    public int titheRationsCredit = 50;
+
     [Header("Persistent Objects")]
     public GameObject playerPartyObject;
     public CinemachineVirtualCamera worldMapCamera;
@@ -325,7 +331,10 @@ public class GameManager : MonoBehaviour
             if (!string.IsNullOrEmpty(fromNodeID)) { lastKnownLocationNodeID = fromNodeID; }
             SetPlayerModelsActive(true);
             SetPlayerMovementComponentsActive(true);
+
+            // 1. Position the party FIRST
             MovePartyToSpawnPoint(spawnPointID);
+
             if (InventoryUIController.instance != null) InventoryUIController.instance.RefreshAllPlayerDisplays(PartyManager.instance.ActivePlayer);
         }
 
@@ -338,10 +347,21 @@ public class GameManager : MonoBehaviour
 
         FindAnyObjectByType<UIPartyPortraitsManager>()?.RefreshAllPortraits();
 
+        // 2. Start fading out UI/Loading Screen before firing Tithe
+        LoadingScreenManager.instance.HideLoadingScreen(fadeDuration);
+
+        // 3. Brief delay to let the screen clear so the text is visible
+        yield return new WaitForSeconds(0.2f);
+
+        // 4. Fire Tithe logic now that the party is moved and screen is clearing
+        if (currentSceneType == SceneType.Town)
+        {
+            ApplyTithePayment();
+        }
+
         float elapsedTime = Time.realtimeSinceStartup - startTime;
         if (elapsedTime < minimumLoadingScreenTime) yield return new WaitForSeconds(minimumLoadingScreenTime - elapsedTime);
 
-        LoadingScreenManager.instance.HideLoadingScreen(fadeDuration);
         isTransitioning = false;
     }
 
@@ -582,28 +602,51 @@ public class GameManager : MonoBehaviour
     }
 
     /// <summary>
-    /// Enables or disables AI and movement components on the player party.
-    /// UPDATED: Respects Town Mode logic when re-enabling after a sequence.
+    /// Credits resources to the Wagon upon reaching civilization.
     /// </summary>
+    private void ApplyTithePayment()
+    {
+        if (WagonResourceManager.instance == null) return;
+
+        WagonResourceManager.instance.AddResource(ResourceType.Fuel, titheFuelCredit);
+        WagonResourceManager.instance.AddResource(ResourceType.Rations, titheRationsCredit);
+
+        Debug.Log($"[Tithe] Credited wagon with {titheFuelCredit} Fuel and {titheRationsCredit} Rations.");
+
+        // Feedback is visible now that party is moved and screen has cleared
+        if (FloatingTextManager.instance != null && playerPartyObject != null)
+        {
+            FloatingTextManager.instance.ShowEvent($"Tithe Received: +{titheFuelCredit} Fuel, +{titheRationsCredit} Rations", playerPartyObject.transform.position);
+        }
+    }
+
     public void SetPlayerMovementComponentsActive(bool isActive)
     {
         if (playerPartyObject == null || PartyManager.instance == null) return;
 
-        // If we are disabling (e.g., at start of sequence), disable everything
         if (!isActive)
         {
-            foreach (var agent in playerPartyObject.GetComponentsInChildren<NavMeshAgent>(true)) { agent.enabled = false; }
+            foreach (var animator in playerPartyObject.GetComponentsInChildren<Animator>(true))
+            {
+                animator.SetFloat("Speed", 0f);
+                animator.SetBool("IsMoving", false);
+            }
+
+            foreach (var agent in playerPartyObject.GetComponentsInChildren<NavMeshAgent>(true))
+            {
+                if (agent.isActiveAndEnabled) agent.ResetPath();
+                agent.enabled = false;
+            }
             foreach (var movement in playerPartyObject.GetComponentsInChildren<PlayerMovement>(true)) { movement.enabled = false; }
             foreach (var ai in playerPartyObject.GetComponentsInChildren<PartyMemberAI>(true)) { ai.enabled = false; }
+
             PartyAIManager partyAI = playerPartyObject.GetComponent<PartyAIManager>();
             if (partyAI != null) { partyAI.enabled = false; }
             return;
         }
 
-        // If we are ENABLING (e.g., at end of sequence), check current scene rules
         if (currentSceneType == SceneType.Town)
         {
-            // Town Logic: Only re-enable Player 0; disable switching and other party AI
             for (int i = 0; i < PartyManager.instance.partyMembers.Count; i++)
             {
                 GameObject member = PartyManager.instance.partyMembers[i];
@@ -613,15 +656,14 @@ public class GameManager : MonoBehaviour
                 PlayerMovement movement = member.GetComponent<PlayerMovement>();
                 PartyMemberAI ai = member.GetComponent<PartyMemberAI>();
 
-                if (i == 0)
+                if (i == 0) // Leader
                 {
                     if (agent != null) agent.enabled = true;
                     if (movement != null) movement.enabled = true;
                     if (ai != null) ai.enabled = false;
                 }
-                else
+                else // Others stay still
                 {
-                    // NUCs stay still at spawn/bench
                     if (agent != null) agent.enabled = true;
                     if (movement != null) movement.enabled = false;
                     if (ai != null) ai.enabled = false;
@@ -631,14 +673,13 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            // Combat/Dungeon Logic: Enable everything for everyone
             foreach (var agent in playerPartyObject.GetComponentsInChildren<NavMeshAgent>(true)) { agent.enabled = true; }
             foreach (var movement in playerPartyObject.GetComponentsInChildren<PlayerMovement>(true)) { movement.enabled = true; }
             foreach (var ai in playerPartyObject.GetComponentsInChildren<PartyMemberAI>(true)) { ai.enabled = true; }
             PartyAIManager partyAI = playerPartyObject.GetComponent<PartyAIManager>();
             if (partyAI != null) { partyAI.enabled = true; }
 
-            // Re-apply specific combat visibility/active logic (benched P0, active NUCs)
+            PartyManager.instance.SetPlayerSwitching(true);
             PartyAIManager.instance?.EnterCombatMode();
         }
     }
