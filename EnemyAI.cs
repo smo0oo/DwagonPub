@@ -26,6 +26,9 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     [Header("Line of Sight")]
     public float lostSightSearchDuration = 5f;
+    private float lastLostSightCheckTime;
+    private const float LOS_CHECK_INTERVAL = 0.2f; // Check LOS 5 times per second instead of 10
+    private bool cachedHasLOS = false;
 
     [Header("Combat Style")]
     public AIArchetype archetype;
@@ -116,11 +119,10 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         HandleHealthChanged();
     }
 
-    // --- NEW: Optimization Coroutine ---
     private IEnumerator AIThinkRoutine()
     {
+        yield return new WaitForSeconds(UnityEngine.Random.Range(0f, 0.2f)); // Stagger starts
         WaitForSeconds wait = new WaitForSeconds(0.1f); // 10 ticks per second
-        yield return new WaitForSeconds(UnityEngine.Random.Range(0f, 0.2f)); // Offset
 
         while (!isDead && this.enabled)
         {
@@ -131,7 +133,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     void Update()
     {
-        // Update() handles smooth rotation and validation, but not decision making (Think)
         HandleRotation();
 
         bool isSpecialMovementActive = movementHandler != null && movementHandler.IsSpecialMovementActive;
@@ -139,8 +140,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         {
             if (abilityHolder.IsCasting)
             {
-                navMeshAgent.velocity = Vector3.zero;
-                if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
+                StopMovement();
             }
             if (abilityHolder.ActiveBeam != null && currentTarget != null)
             {
@@ -150,7 +150,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
-    // --- NEW: Think Method contains the State Machine Logic ---
     private void Think()
     {
         switch (currentState)
@@ -201,21 +200,13 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             return;
         }
 
-        // --- Aggro Validation ---
-        Health targetHealth = null;
-        CharacterRoot root = currentTarget.GetComponentInParent<CharacterRoot>();
-        if (root != null) targetHealth = root.Health;
-        else targetHealth = currentTarget.GetComponent<Health>() ?? currentTarget.GetComponentInParent<Health>();
-
-        if (targetHealth != null && (targetHealth.isDowned || targetHealth.currentHealth <= 0))
+        if (IsTargetInvalid(currentTarget))
         {
             ResetCombatState();
             currentState = AIState.Idle;
             return;
         }
-        // ------------------------
 
-        // Check Self Preservation
         if (health.currentHealth / (float)health.maxHealth < retreatHealthThreshold)
         {
             if (UnityEngine.Random.value < retreatChance)
@@ -231,29 +222,29 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             }
         }
 
-        if (HasLineOfSight(currentTarget))
+        float distToTarget = Vector3.Distance(transform.position, currentTarget.position);
+        if (Time.time - lastLostSightCheckTime > LOS_CHECK_INTERVAL || distToTarget < meleeAttackRange)
+        {
+            cachedHasLOS = HasLineOfSight(currentTarget);
+            lastLostSightCheckTime = Time.time;
+        }
+
+        if (cachedHasLOS)
         {
             lastKnownPosition = currentTarget.position;
             timeSinceLostSight = 0f;
 
             Ability abilityToUse = abilitySelector.SelectBestAbility(currentTarget, hasUsedInitialAbilities);
             bool isReady = abilityToUse != null;
-            float distanceToTarget = Vector3.Distance(transform.position, currentTarget.position);
             float effectiveRange = isReady ? abilityToUse.range : meleeAttackRange;
-            bool isInRange = distanceToTarget <= effectiveRange;
 
-            if (isReady && isInRange)
+            if (isReady && distToTarget <= effectiveRange)
             {
-                navMeshAgent.ResetPath();
-                navMeshAgent.velocity = Vector3.zero;
-
+                StopMovement();
                 SetAIStatus("Combat", $"Attacking: {abilityToUse.displayName}");
                 abilityHolder.UseAbility(abilityToUse, currentTarget.gameObject);
 
-                if (abilitySelector.initialAbilities.Contains(abilityToUse))
-                {
-                    hasUsedInitialAbilities = true;
-                }
+                if (abilitySelector.initialAbilities.Contains(abilityToUse)) hasUsedInitialAbilities = true;
             }
             else
             {
@@ -263,11 +254,17 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         else
         {
             if (isTimid) { currentTarget = null; return; }
-            timeSinceLostSight += 0.1f; // Approximated since we are in a coroutine
+            timeSinceLostSight += 0.1f;
             SetAIStatus("Combat", "Searching...");
             if (timeSinceLostSight > lostSightSearchDuration) currentTarget = null;
             else navMeshAgent.SetDestination(lastKnownPosition);
         }
+    }
+
+    private bool IsTargetInvalid(Transform target)
+    {
+        Health h = target.GetComponentInParent<Health>() ?? target.GetComponent<Health>();
+        return h == null || h.isDowned || h.currentHealth <= 0;
     }
 
     private void HandleCombatMovement(bool isReady, Ability abilityToUse)
@@ -286,12 +283,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         {
             switch (archetype)
             {
-                case AIArchetype.Melee:
-                    ExecuteMeleeMovement();
-                    break;
-                case AIArchetype.Ranged:
-                    ExecuteRangedMovement();
-                    break;
+                case AIArchetype.Melee: ExecuteMeleeMovement(); break;
+                case AIArchetype.Ranged: ExecuteRangedMovement(); break;
                 case AIArchetype.Hybrid:
                     if (isReady && abilityToUse.range <= meleeAttackRange)
                         ExecuteClosingMovement(abilityToUse);
@@ -328,11 +321,18 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         SetAIStatus("Combat", "Advancing on Dome");
     }
 
-    private void ExecuteMeleeMovement() { navMeshAgent.speed = originalSpeed; if (assignedSurroundPoint == null) assignedSurroundPoint = SurroundPointManager.instance.RequestPoint(this, currentTarget); Vector3 destination = assignedSurroundPoint != null ? assignedSurroundPoint.position : currentTarget.position; navMeshAgent.stoppingDistance = 0.5f; navMeshAgent.SetDestination(destination); SetAIStatus("Combat", assignedSurroundPoint != null ? "Circling" : "Waiting"); }
+    private void ExecuteMeleeMovement()
+    {
+        navMeshAgent.speed = originalSpeed;
+        if (assignedSurroundPoint == null) assignedSurroundPoint = SurroundPointManager.instance.RequestPoint(this, currentTarget);
+        Vector3 destination = assignedSurroundPoint != null ? assignedSurroundPoint.position : currentTarget.position;
+        navMeshAgent.stoppingDistance = 0.5f;
+        navMeshAgent.SetDestination(destination);
+        SetAIStatus("Combat", assignedSurroundPoint != null ? "Circling" : "Waiting");
+    }
 
     private void UpdateIdleState()
     {
-        // --- MODIFIED: Pass currentTarget (null) to FindBestTarget, but we could pass lastTarget if we wanted memory ---
         currentTarget = targeting.FindBestTarget(null);
 
         if (currentTarget != null)
@@ -350,28 +350,14 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             return;
         }
 
-        // Patrol Logic
         if (isWaitingAtPatrolPoint)
         {
             SetAIStatus("Idle", "Waiting");
-            waitTimer -= 0.1f; // Decrease by tick rate
+            waitTimer -= 0.1f;
             if (waitTimer <= 0)
             {
                 isWaitingAtPatrolPoint = false;
-                PatrolPoint lastPoint = collectedPatrolPoints[currentPatrolIndex];
-                if (lastPoint.nextPointOverride != null)
-                {
-                    int nextIndex = Array.IndexOf(collectedPatrolPoints, lastPoint.nextPointOverride);
-                    currentPatrolIndex = (nextIndex >= 0) ? nextIndex : 0;
-                }
-                else if (lastPoint.jumpToRandomPoint)
-                {
-                    currentPatrolIndex = UnityEngine.Random.Range(0, collectedPatrolPoints.Length);
-                }
-                else
-                {
-                    currentPatrolIndex = (currentPatrolIndex + 1) % collectedPatrolPoints.Length;
-                }
+                AdvancePatrolIndex();
                 navMeshAgent.SetDestination(collectedPatrolPoints[currentPatrolIndex].transform.position);
             }
         }
@@ -386,19 +372,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             }
             else
             {
-                if (currentPoint.nextPointOverride != null)
-                {
-                    int nextIndex = Array.IndexOf(collectedPatrolPoints, currentPoint.nextPointOverride);
-                    currentPatrolIndex = (nextIndex >= 0) ? nextIndex : 0;
-                }
-                else if (currentPoint.jumpToRandomPoint)
-                {
-                    currentPatrolIndex = UnityEngine.Random.Range(0, collectedPatrolPoints.Length);
-                }
-                else
-                {
-                    currentPatrolIndex = (currentPatrolIndex + 1) % collectedPatrolPoints.Length;
-                }
+                AdvancePatrolIndex();
                 navMeshAgent.SetDestination(collectedPatrolPoints[currentPatrolIndex].transform.position);
             }
         }
@@ -408,14 +382,30 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
+    private void AdvancePatrolIndex()
+    {
+        PatrolPoint lastPoint = collectedPatrolPoints[currentPatrolIndex];
+        if (lastPoint.nextPointOverride != null)
+        {
+            int nextIndex = Array.IndexOf(collectedPatrolPoints, lastPoint.nextPointOverride);
+            currentPatrolIndex = (nextIndex >= 0) ? nextIndex : 0;
+        }
+        else if (lastPoint.jumpToRandomPoint)
+        {
+            currentPatrolIndex = UnityEngine.Random.Range(0, collectedPatrolPoints.Length);
+        }
+        else
+        {
+            currentPatrolIndex = (currentPatrolIndex + 1) % collectedPatrolPoints.Length;
+        }
+    }
+
     private void UpdateReturningState()
     {
         navMeshAgent.speed = originalSpeed;
         SetAIStatus("Returning", "Leashing");
 
-        // --- MODIFIED: Pass currentTarget (which is null here usually) to FindBestTarget ---
         currentTarget = targeting.FindBestTarget(null);
-
         if (currentTarget != null)
         {
             currentState = AIState.Combat;
@@ -445,6 +435,15 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
+    private void StopMovement()
+    {
+        if (navMeshAgent.isOnNavMesh)
+        {
+            navMeshAgent.velocity = Vector3.zero;
+            if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
+        }
+    }
+
     private void ResetCombatState() { hasUsedInitialAbilities = false; if (assignedSurroundPoint != null) { SurroundPointManager.instance.ReleasePoint(this); assignedSurroundPoint = null; } if (abilityHolder.ActiveBeam != null) abilityHolder.ActiveBeam.Interrupt(); currentTarget = null; }
     private void ExecuteRangedMovement() { float distanceToTarget = Vector3.Distance(transform.position, currentTarget.position); if (distanceToTarget < minimumRangedAttackRange) { navMeshAgent.speed = retreatAndKiteSpeed; RetreatFromTarget(); } else { navMeshAgent.speed = originalSpeed; if (distanceToTarget > preferredCombatRange) { Vector3 destination = currentTarget.position - (currentTarget.position - transform.position).normalized * preferredCombatRange; navMeshAgent.SetDestination(destination); SetAIStatus("Combat", "Advancing"); } else { navMeshAgent.ResetPath(); SetAIStatus("Combat", "In Range"); } } }
     private void RetreatFromTarget() { if (currentTarget == null) return; Vector3 directionAwayFromTarget = (transform.position - currentTarget.position).normalized; float bestPathLength = 0; Vector3 bestRetreatPoint = Vector3.zero; bool foundRetreatPoint = false; int numSamples = 8; float retreatArc = 120f; for (int i = 0; i < numSamples; i++) { float angle = (i / (float)(numSamples - 1) - 0.5f) * retreatArc; Vector3 sampleDirection = Quaternion.Euler(0, angle, 0) * directionAwayFromTarget; Vector3 potentialDestination = transform.position + sampleDirection * kiteDistance; if (NavMesh.SamplePosition(potentialDestination, out NavMeshHit hit, 2.0f, NavMesh.AllAreas)) { NavMeshPath path = new NavMeshPath(); if (navMeshAgent.CalculatePath(hit.position, path) && path.status == NavMeshPathStatus.PathComplete) { float pathLength = 0f; for (int j = 1; j < path.corners.Length; j++) { pathLength += Vector3.Distance(path.corners[j - 1], path.corners[j]); } if (pathLength > bestPathLength) { bestPathLength = pathLength; bestRetreatPoint = hit.position; foundRetreatPoint = true; } } } } if (foundRetreatPoint) { navMeshAgent.SetDestination(bestRetreatPoint); } }
@@ -456,7 +455,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public void ActivateAI() { if (this.enabled) return; this.enabled = true; if (navMeshAgent != null) navMeshAgent.enabled = true; if (animator != null) animator.enabled = true; StartCoroutine(AIThinkRoutine()); }
     public void DeactivateAI() { if (!this.enabled) return; if (navMeshAgent != null && navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath(); this.enabled = false; if (navMeshAgent != null) navMeshAgent.enabled = false; if (animator != null) animator.enabled = false; StopAllCoroutines(); }
 
-    // Interface Implementation
     public void ExecuteLeap(Vector3 destination, Action onLandAction) { movementHandler?.ExecuteLeap(destination, onLandAction); }
     public void ExecuteCharge(GameObject target, Ability chargeAbility) { if (abilitySelector.abilities.Contains(chargeAbility)) movementHandler?.ExecuteCharge(target, chargeAbility); }
     public void ExecuteTeleport(Vector3 destination) { if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(destination); else transform.position = destination; }
@@ -464,5 +462,4 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private void SetAIStatus(string state, string action) { string newMessage = $"{state} :: {action}"; if (lastStatusMessage == newMessage) return; lastStatusMessage = newMessage; enemyHealthUI?.UpdateStatus(state, action); if (FloatingTextManager.instance != null) FloatingTextManager.instance.ShowAIStatus(action, transform.position + Vector3.up * 3.5f); }
     private void CollectPatrolPoints() { if (patrolPaths == null || patrolPaths.Length == 0) return; List<PatrolPoint> points = new List<PatrolPoint>(); foreach (PatrolPath path in patrolPaths) { if (path == null) continue; Collider pathCollider = path.GetComponent<Collider>(); if (pathCollider == null) continue; Collider[] collidersInVolume = Physics.OverlapBox(path.transform.position, pathCollider.bounds.extents, path.transform.rotation); foreach (Collider col in collidersInVolume) { if (col.TryGetComponent<PatrolPoint>(out PatrolPoint point)) { if (!points.Contains(point)) points.Add(point); } } } collectedPatrolPoints = points.OrderBy(p => p.gameObject.name).ToArray(); }
     void OnDestroy() { if (assignedSurroundPoint != null && SurroundPointManager.instance != null) { SurroundPointManager.instance.ReleasePoint(this); } if (health != null) health.OnHealthChanged -= HandleHealthChanged; if (abilityHolder != null) { abilityHolder.OnCastStarted -= HandleCastStarted; abilityHolder.OnCastFinished -= HandleCastFinished; } }
-    void OnDrawGizmosSelected() { Gizmos.color = Color.red; Gizmos.DrawWireSphere(transform.position, meleeAttackRange); Gizmos.color = Color.cyan; Gizmos.DrawWireSphere(transform.position, preferredCombatRange); Vector3 leashCenter = Application.isPlaying ? (currentState == AIState.Combat ? combatStartPosition : startPosition) : transform.position; Gizmos.color = Color.blue; Gizmos.DrawWireSphere(leashCenter, chaseLeashRadius); }
 }

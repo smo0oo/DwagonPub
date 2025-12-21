@@ -29,37 +29,30 @@ public class Inventory : MonoBehaviour
     public enum SortType { Default, Rarity, Value, Type }
     private List<ItemStack> originalOrder;
 
-    // --- THIS METHOD HAS BEEN UPDATED WITH SMARTER LOGIC ---
     void Awake()
     {
         foreach (var item in items)
         {
             if (item == null) continue;
 
-            // If an item asset is assigned in the editor...
             if (item.itemData != null)
             {
-                // For non-stackable items, the quantity should ALWAYS be 1.
-                // This corrects items added in the editor with a default quantity of 0.
                 if (!item.itemData.isStackable)
                 {
                     item.quantity = 1;
                 }
-                // If a stackable item has 0 quantity, it's invalid "ghost" data. Clear it.
                 else if (item.quantity <= 0)
                 {
                     item.itemData = null;
                     item.quantity = 0;
                 }
             }
-            // If no item data is assigned, ensure quantity is also 0.
             else
             {
                 item.quantity = 0;
             }
         }
 
-        // Pad the list with empty slots
         while (items.Count < inventorySize)
         {
             items.Add(new ItemStack(null, 0));
@@ -67,13 +60,16 @@ public class Inventory : MonoBehaviour
         originalOrder = new List<ItemStack>(items);
     }
 
+    /// <summary>
+    /// Adds items to the inventory, correctly handling stacking and distributing 
+    /// multiple non-stackable items across separate slots.
+    /// </summary>
     public bool AddItem(ItemData itemToAdd, int amount = 1)
     {
         bool itemAdded = false;
+        int remainingToAdd = amount;
 
-        // --- This logic uses isStackable from ItemData now ---
-        int amountToAdd = itemToAdd.isStackable ? amount : 1;
-
+        // 1. Attempt to stack with existing items
         if (itemToAdd.isStackable)
         {
             foreach (ItemStack stack in items)
@@ -81,34 +77,41 @@ public class Inventory : MonoBehaviour
                 if (stack.itemData == itemToAdd && stack.quantity < itemToAdd.GetMaxStackSize())
                 {
                     int spaceLeft = itemToAdd.GetMaxStackSize() - stack.quantity;
-                    int amountToStack = Mathf.Min(amountToAdd, spaceLeft);
+                    int amountToStack = Mathf.Min(remainingToAdd, spaceLeft);
 
                     stack.quantity += amountToStack;
-                    amountToAdd -= amountToStack;
+                    remainingToAdd -= amountToStack;
                     itemAdded = true;
 
-                    if (amountToAdd <= 0) break;
+                    if (remainingToAdd <= 0) break;
                 }
             }
         }
 
-        if (amountToAdd > 0)
+        // 2. Place remaining items in empty slots
+        while (remainingToAdd > 0)
         {
-            for (int i = 0; i < items.Count; i++)
-            {
-                if (items[i].itemData == null || items[i].quantity <= 0)
-                {
-                    items[i].itemData = itemToAdd;
-                    items[i].quantity = amountToAdd;
-                    itemAdded = true;
-                    amountToAdd = 0;
+            int emptySlotIndex = items.FindIndex(s => s.itemData == null || s.quantity <= 0);
 
-                    if (i < originalOrder.Count)
-                    {
-                        originalOrder[i] = items[i];
-                    }
-                    break;
+            if (emptySlotIndex != -1)
+            {
+                int quantityForThisSlot = itemToAdd.isStackable ?
+                    Mathf.Min(remainingToAdd, itemToAdd.GetMaxStackSize()) : 1;
+
+                items[emptySlotIndex].itemData = itemToAdd;
+                items[emptySlotIndex].quantity = quantityForThisSlot;
+                remainingToAdd -= quantityForThisSlot;
+                itemAdded = true;
+
+                if (emptySlotIndex < originalOrder.Count)
+                {
+                    originalOrder[emptySlotIndex] = new ItemStack(items[emptySlotIndex].itemData, items[emptySlotIndex].quantity);
                 }
+            }
+            else
+            {
+                Debug.LogWarning($"{this.gameObject.name} Inventory Full! Could not fit {remainingToAdd} x {itemToAdd.displayName}");
+                break;
             }
         }
 
@@ -118,11 +121,50 @@ public class Inventory : MonoBehaviour
             return true;
         }
 
-        Debug.LogWarning($"{this.gameObject.name}'s inventory is full. Could not add {itemToAdd.displayName}.");
         return false;
     }
 
-    #region Unchanged Code
+    /// <summary>
+    /// Forces an item into a specific slot. Used by Equipment and Trading systems.
+    /// </summary>
+    public void SetItemStack(int index, ItemStack stack)
+    {
+        if (index < 0 || index >= items.Count) return;
+
+        items[index] = stack;
+        // Also update the original order to prevent data loss during default sorting
+        if (index < originalOrder.Count)
+        {
+            originalOrder[index] = stack;
+        }
+
+        OnInventoryChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Attempts to add an item specifically to a new empty slot.
+    /// </summary>
+    public bool AddItemToNewStack(ItemData itemToAdd, int amount)
+    {
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (items[i].itemData == null || items[i].quantity <= 0)
+            {
+                items[i].itemData = itemToAdd;
+                items[i].quantity = amount;
+
+                if (i < originalOrder.Count)
+                {
+                    originalOrder[i] = new ItemStack(itemToAdd, amount);
+                }
+
+                OnInventoryChanged?.Invoke();
+                return true;
+            }
+        }
+        return false;
+    }
+
     public void SortItems(SortType sortType)
     {
         if (sortType == SortType.Default)
@@ -158,6 +200,7 @@ public class Inventory : MonoBehaviour
 
         OnInventoryChanged?.Invoke();
     }
+
     private int GetItemTypeSortOrder(ItemType type)
     {
         switch (type)
@@ -172,21 +215,7 @@ public class Inventory : MonoBehaviour
             default: return 7;
         }
     }
-    public bool AddItemToNewStack(ItemData itemToAdd, int amount)
-    {
-        for (int i = 0; i < items.Count; i++)
-        {
-            if (items[i].itemData == null || items[i].quantity <= 0)
-            {
-                items[i].itemData = itemToAdd;
-                items[i].quantity = amount;
-                if (i < originalOrder.Count) originalOrder[i] = new ItemStack(itemToAdd, amount);
-                OnInventoryChanged?.Invoke();
-                return true;
-            }
-        }
-        return false;
-    }
+
     public void SwapItems(int indexA, int indexB)
     {
         if (indexA < 0 || indexA >= items.Count || indexB < 0 || indexB >= items.Count) return;
@@ -195,13 +224,7 @@ public class Inventory : MonoBehaviour
         (originalOrder[indexA], originalOrder[indexB]) = (originalOrder[indexB], originalOrder[indexA]);
         OnInventoryChanged?.Invoke();
     }
-    public void SetItemStack(int index, ItemStack stack)
-    {
-        if (index < 0 || index >= items.Count) return;
-        items[index] = stack;
-        originalOrder[index] = stack;
-        OnInventoryChanged?.Invoke();
-    }
+
     public void RemoveItem(int slotIndex, int amount)
     {
         if (slotIndex < 0 || slotIndex >= items.Count) return;
@@ -218,5 +241,4 @@ public class Inventory : MonoBehaviour
             OnInventoryChanged?.Invoke();
         }
     }
-    #endregion
 }

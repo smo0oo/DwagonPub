@@ -14,14 +14,27 @@ public class DraggablePortraitCommand : MonoBehaviour, IBeginDragHandler, IDragH
 
     void Awake()
     {
-        // We still try to get the instances here for efficiency.
         partyAIManager = PartyAIManager.instance;
         dragDropController = FindAnyObjectByType<UIDragDropController>();
     }
 
     public void OnBeginDrag(PointerEventData eventData)
     {
+        // 1. Scene Rule Check: If switching is disabled (Town/WorldMap), block all dragging.
+        if (PartyManager.instance != null && !PartyManager.instance.playerSwitchingEnabled)
+        {
+            return;
+        }
+
+        // 2. Active Player Check: Do not drag the portrait of the currently controlled player.
         if (representedPlayer == InventoryUIController.instance.ActivePlayer) return;
+
+        // --- NEW: Inactive Member Check ---
+        // 3. Activity Check: If the character is disabled (e.g., Player 0 in a Dungeon), block dragging.
+        if (representedPlayer != null && !representedPlayer.activeInHierarchy)
+        {
+            return;
+        }
 
         if (uiManager != null && representedPlayer != null)
         {
@@ -38,26 +51,30 @@ public class DraggablePortraitCommand : MonoBehaviour, IBeginDragHandler, IDragH
 
     public void OnDrag(PointerEventData eventData) { }
 
-    // --- MODIFIED METHOD ---
     public void OnEndDrag(PointerEventData eventData)
     {
-        if (representedPlayer == InventoryUIController.instance.ActivePlayer) return;
-
-        // --- ADDED SAFETY CHECK ---
-        // If the partyAIManager is null (due to script execution order), try to get it again.
-        if (partyAIManager == null)
+        // Safety checks for scene rules and active state
+        if (PartyManager.instance != null && !PartyManager.instance.playerSwitchingEnabled)
         {
-            partyAIManager = PartyAIManager.instance;
+            CancelDrag();
+            return;
         }
-        // If it's still null, we cannot proceed. Log an error and exit.
+
+        if (representedPlayer == InventoryUIController.instance.ActivePlayer ||
+            (representedPlayer != null && !representedPlayer.activeInHierarchy))
+        {
+            CancelDrag();
+            return;
+        }
+
+        if (partyAIManager == null) partyAIManager = PartyAIManager.instance;
+
         if (partyAIManager == null)
         {
             Debug.LogError("DraggablePortraitCommand: Could not find PartyAIManager instance!", this);
-            if (dragDropController != null) dragDropController.OnEndDrag();
-            StartCoroutine(UnlockInputAfterFrame());
+            CancelDrag();
             return;
         }
-        // --- END SAFETY CHECK ---
 
         Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
         if (Physics.Raycast(ray, out RaycastHit hit, 200f))
@@ -70,16 +87,17 @@ public class DraggablePortraitCommand : MonoBehaviour, IBeginDragHandler, IDragH
             }
             else if (hitObject.layer == LayerMask.NameToLayer("Terrain"))
             {
-                // This line will now be safe to call.
                 partyAIManager.IssueCommandMoveToSingle(representedPlayer, hit.point);
             }
         }
 
-        if (dragDropController != null)
-        {
-            dragDropController.OnEndDrag();
-        }
+        if (dragDropController != null) dragDropController.OnEndDrag();
+        StartCoroutine(UnlockInputAfterFrame());
+    }
 
+    private void CancelDrag()
+    {
+        if (dragDropController != null) dragDropController.OnEndDrag();
         StartCoroutine(UnlockInputAfterFrame());
     }
 

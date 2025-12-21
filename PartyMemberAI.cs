@@ -90,8 +90,6 @@ public class PartyMemberAI : MonoBehaviour
         }
         hasExplicitCommand = false;
         UpdateStatus("Following");
-
-        // --- NEW: Start the Thinking Loop ---
         StartCoroutine(AIThinkRoutine());
     }
 
@@ -101,7 +99,6 @@ public class PartyMemberAI : MonoBehaviour
 
         UpdateAnimator();
 
-        // If player is controlling this character, disable AI pathing but keep components ready
         if (PartyManager.instance != null && PartyManager.instance.ActivePlayer == this.gameObject)
         {
             if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
@@ -110,15 +107,12 @@ public class PartyMemberAI : MonoBehaviour
 
         if (navMeshAgent == null || !navMeshAgent.isOnNavMesh || health == null || health.currentHealth <= 0) return;
 
-        // Note: Think() is now handled in Coroutine. Update() only handles smooth execution (Act).
         Act();
     }
 
-    // --- NEW: Optimization Coroutine (Runs 10 times/sec instead of every frame) ---
     private IEnumerator AIThinkRoutine()
     {
         WaitForSeconds wait = new WaitForSeconds(0.1f);
-        // Random offset to prevent all AI thinking on the exact same frame
         yield return new WaitForSeconds(UnityEngine.Random.Range(0f, 0.2f));
 
         while (true)
@@ -134,7 +128,6 @@ public class PartyMemberAI : MonoBehaviour
 
     private void Think()
     {
-        // 1. Explicit Command Override
         if (hasExplicitCommand)
         {
             if ((currentCommand == AICommand.AttackTarget || currentCommand == AICommand.HealTarget) &&
@@ -144,17 +137,16 @@ public class PartyMemberAI : MonoBehaviour
             }
             else
             {
-                return; // Keep following explicit command
+                return;
             }
         }
 
-        // 2. Self-Preservation (Retreat)
         float hpPercent = health.currentHealth / (float)health.maxHealth;
         if (hpPercent < retreatThreshold)
         {
             isRetreating = true;
         }
-        else if (hpPercent > retreatThreshold + 0.15f) // Hysteresis: wait until decent HP before re-engaging
+        else if (hpPercent > retreatThreshold + 0.15f)
         {
             isRetreating = false;
         }
@@ -167,7 +159,6 @@ public class PartyMemberAI : MonoBehaviour
             return;
         }
 
-        // 3. Passive Stance Check
         if (currentStance == AIStance.Passive)
         {
             currentCommand = AICommand.Follow;
@@ -176,7 +167,6 @@ public class PartyMemberAI : MonoBehaviour
             return;
         }
 
-        // 4. Support Logic (Healing)
         if (playerStats.characterClass.aiRole == PlayerClass.AILogicRole.Support)
         {
             PartyMemberAI allyToHeal = targeting.FindWoundedAlly();
@@ -188,7 +178,6 @@ public class PartyMemberAI : MonoBehaviour
             }
         }
 
-        // 5. Combat Targeting
         GameObject enemyTarget = null;
         if (currentStance == AIStance.Defensive)
         {
@@ -196,7 +185,6 @@ public class PartyMemberAI : MonoBehaviour
         }
         else if (currentStance == AIStance.Aggressive)
         {
-            // Aggressive looks for party focus first, then nearest enemy
             enemyTarget = PartyAIManager.instance.GetPartyFocusTarget() ?? targeting.FindNearestEnemy();
         }
 
@@ -227,8 +215,6 @@ public class PartyMemberAI : MonoBehaviour
     {
         navMeshAgent.speed = originalNavMeshSpeed;
         Vector3 destination = PartyAIManager.instance.GetFormationPositionFor(this);
-
-        // If retreating or passive, follow closer
         navMeshAgent.stoppingDistance = (isRetreating || currentStance == AIStance.Passive) ? 1.0f : followStoppingDistance;
 
         if (Vector3.Distance(navMeshAgent.destination, destination) > 0.5f)
@@ -255,13 +241,11 @@ public class PartyMemberAI : MonoBehaviour
 
             float distanceToTarget = Vector3.Distance(transform.position, currentTarget.transform.position);
 
-            // Move into range
             if (distanceToTarget > abilityToUse.range)
             {
                 navMeshAgent.SetDestination(currentTarget.transform.position);
                 UpdateStatus("Closing In");
             }
-            // Stop and Cast
             else
             {
                 navMeshAgent.ResetPath();
@@ -271,7 +255,6 @@ public class PartyMemberAI : MonoBehaviour
         }
         else
         {
-            // Reposition to get Line of Sight
             navMeshAgent.SetDestination(currentTarget.transform.position);
             UpdateStatus("Repositioning");
         }
@@ -328,9 +311,10 @@ public class PartyMemberAI : MonoBehaviour
             Quaternion lookRotation = Quaternion.LookRotation(navMeshAgent.velocity.normalized);
             transform.rotation = Quaternion.Slerp(transform.rotation, lookRotation, Time.deltaTime * rotationSpeed);
         }
-        else if (PartyAIManager.instance.ActivePlayer != null)
+        // MODIFIED: If character has an explicit command and isn't moving, do NOT match player rotation
+        else if (!hasExplicitCommand && PartyAIManager.instance.ActivePlayer != null)
         {
-            // Idle: align with leader
+            // Idle: align with leader ONLY if just following
             Quaternion targetRotation = PartyAIManager.instance.ActivePlayer.transform.rotation;
             transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * rotationSpeed);
         }
