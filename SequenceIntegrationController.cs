@@ -42,12 +42,8 @@ public class SequenceIntegrationController : MonoBehaviour
 
         if (GameManager.instance != null)
         {
-            // This now handles resetting animators to idle before disabling
-            GameManager.instance.SetPlayerMovementComponentsActive(false);
-
-            // Hide the gameplay HUD
-            if (GameManager.instance.sharedCanvasGroup != null)
-                GameManager.instance.sharedCanvasGroup.alpha = 0f;
+            // NEW: Use the centralized method to hide objects/HUD and stop movement
+            GameManager.instance.SetSequenceMode(true);
         }
 
         // 4. Start the Timeline
@@ -98,12 +94,8 @@ public class SequenceIntegrationController : MonoBehaviour
 
         if (GameManager.instance != null)
         {
-            // Re-enables AI/Movement according to scene rules (Town vs Dungeon)
-            GameManager.instance.SetPlayerMovementComponentsActive(true);
-
-            // Show the HUD again
-            if (GameManager.instance.sharedCanvasGroup != null)
-                GameManager.instance.sharedCanvasGroup.alpha = 1f;
+            // NEW: Restore the game state via GameManager
+            GameManager.instance.SetSequenceMode(false);
         }
 
         Debug.Log("[SequenceIntegration] Sequence Finished. Control returned to player.");

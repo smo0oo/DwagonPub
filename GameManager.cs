@@ -64,6 +64,10 @@ public class GameManager : MonoBehaviour
     [Header("UI Element Visibility")]
     public List<GameObject> worldMapHiddenElements;
 
+    [Header("Sequence Visibility")]
+    [Tooltip("CanvasGroups in this list will have their Alpha set to 0 (and input disabled) when a Sequence starts.")]
+    public List<CanvasGroup> canvasGroupsHiddenDuringSequence;
+
     [Header("Core Scene")]
     public string coreSceneName = "CoreScene";
     public SceneType currentSceneType { get; private set; }
@@ -71,6 +75,9 @@ public class GameManager : MonoBehaviour
 
     private bool isTransitioning;
     public bool IsTransitioning => isTransitioning;
+
+    // NEW: Tracks if a sequence is currently overriding game state
+    public bool IsSequenceModeActive { get; private set; }
 
     private bool isDebugExpanded = true;
 
@@ -89,6 +96,7 @@ public class GameManager : MonoBehaviour
         {
             GUI.Box(new Rect(0, 25, 350, 225), "");
             GUILayout.Label($"Scene: {currentLevelScene} ({currentSceneType})");
+            GUILayout.Label($"Sequence Mode: {IsSequenceModeActive}");
             GUILayout.Label($"Return Point: {previousSceneName}");
             GUILayout.Label($"Last Loc Type: {lastLocationType}");
             GUILayout.Label($"Just Exited Dungeon: {justExitedDungeon}");
@@ -183,6 +191,7 @@ public class GameManager : MonoBehaviour
     private IEnumerator TransitionToWorldMap()
     {
         isTransitioning = true;
+        IsSequenceModeActive = false; // Reset sequence state on transition
 
         NodeType typeBeforeExit = lastLocationType;
         string sceneBeforeExit = currentLevelScene;
@@ -279,6 +288,7 @@ public class GameManager : MonoBehaviour
     {
         if (isTransitioning) yield break;
         isTransitioning = true;
+        IsSequenceModeActive = false; // Reset sequence state on transition
 
         if (currentSceneType == SceneType.WorldMap)
         {
@@ -356,7 +366,6 @@ public class GameManager : MonoBehaviour
         // 4. Fire Tithe logic now that the party is moved and screen is clearing
         if (currentSceneType == SceneType.Town)
         {
-            // MODIFIED: Pass the SceneInfo we found earlier
             ApplyTithePayment(info);
         }
 
@@ -370,6 +379,8 @@ public class GameManager : MonoBehaviour
     {
         if (isTransitioning) yield break;
         isTransitioning = true;
+        IsSequenceModeActive = false; // Reset sequence state
+
         float startTime = Time.realtimeSinceStartup;
         yield return LoadingScreenManager.instance.ShowLoadingScreen(fadeDuration);
 
@@ -633,7 +644,7 @@ public class GameManager : MonoBehaviour
 
             Debug.Log($"[Tithe] Credited wagon with {finalFuel} Fuel and {finalRations} Rations.");
 
-            // Feedback is visible now that party is moved and screen has cleared
+            // Feedback is visible now that party is moved and screen is clearing
             if (FloatingTextManager.instance != null && playerPartyObject != null)
             {
                 FloatingTextManager.instance.ShowEvent($"Tithe Received: +{finalFuel} Fuel, +{finalRations} Rations", playerPartyObject.transform.position);
@@ -643,6 +654,37 @@ public class GameManager : MonoBehaviour
         {
             Debug.Log($"[Tithe] Scene {currentLevelScene} does not provide a tithe.");
         }
+    }
+
+    /// <summary>
+    /// Toggles the game state for Cutscenes/Sequences.
+    /// Hides HUD, disables Player Control, and hides specific CanvasGroups by setting Alpha to 0.
+    /// </summary>
+    /// <param name="isSequenceActive">True to enter Sequence mode (Alpha 0), False to return to Gameplay (Alpha 1).</param>
+    public void SetSequenceMode(bool isSequenceActive)
+    {
+        // 1. Update the internal flag so other systems (like SetUIVisibility) respect it
+        IsSequenceModeActive = isSequenceActive;
+
+        // 2. Toggle specific CanvasGroups (Hide if sequence is active, Show if not)
+        if (canvasGroupsHiddenDuringSequence != null)
+        {
+            foreach (var group in canvasGroupsHiddenDuringSequence)
+            {
+                // If sequence is active, we want visible=false (Alpha 0)
+                ConfigureGroup(group, !isSequenceActive);
+            }
+        }
+
+        // 3. Toggle HUD Visibility
+        if (sharedCanvasGroup != null)
+        {
+            // Re-using the helper to cleanly toggle alpha and interactions
+            ConfigureGroup(sharedCanvasGroup, !isSequenceActive);
+        }
+
+        // 4. Toggle Player Movement & AI
+        SetPlayerMovementComponentsActive(!isSequenceActive);
     }
 
     public void SetPlayerMovementComponentsActive(bool isActive)
@@ -720,10 +762,13 @@ public class GameManager : MonoBehaviour
 
     private void SetUIVisibility(string sceneType)
     {
+        // FIX: If a sequence is active (from AutoPlaySequence), enforce HUD hidden (Alpha 0)
+        bool isHUDVisible = !IsSequenceModeActive;
+
         switch (sceneType)
         {
             case "WorldMap":
-                ConfigureGroup(sharedCanvasGroup, true);
+                ConfigureGroup(sharedCanvasGroup, isHUDVisible); // Use flag
                 ConfigureGroup(battleCanvasGroup, false);
                 ConfigureGroup(worldMapCanvasGroup, true);
                 ConfigureGroup(inGameMenuCanvasGroup, true, false);
@@ -733,7 +778,7 @@ public class GameManager : MonoBehaviour
                 if (worldMapCamera != null) worldMapCamera.gameObject.SetActive(true);
                 break;
             case "InGame":
-                ConfigureGroup(sharedCanvasGroup, true);
+                ConfigureGroup(sharedCanvasGroup, isHUDVisible); // Use flag
                 ConfigureGroup(battleCanvasGroup, true);
                 ConfigureGroup(worldMapCanvasGroup, false);
                 ConfigureGroup(inGameMenuCanvasGroup, true, false);
