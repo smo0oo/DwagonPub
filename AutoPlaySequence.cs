@@ -18,9 +18,9 @@ public class AutoPlaySequence : MonoBehaviour
             }
         }
 
-        // 2. WAIT for the scene and Core Scene cameras to settle
-        // A single frame delay is usually enough, but we'll use 0.1s to be safe
-        yield return new WaitForSeconds(0.1f);
+        // 2. REMOVED WAIT
+        // Removing this prevents PlayerMovement from overriding the spawn position 
+        // with stale NavMesh data before the sequence takes control.
 
         // 3. Trigger the integrated sequence
         if (sequenceController != null)

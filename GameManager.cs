@@ -785,6 +785,10 @@ public class GameManager : MonoBehaviour
             if (agent != null)
             {
                 agent.enabled = true;
+                // [FIX APPLIED] Force the agent to acknowledge the transform change immediately
+                // This prevents the agent's 'nextPosition' (stuck at 0,0,0) from overriding 
+                // the transform when PlayerMovement updates.
+                agent.Warp(member.transform.position);
             }
         }
     }
