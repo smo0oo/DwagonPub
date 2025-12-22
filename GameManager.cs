@@ -44,9 +44,9 @@ public class GameManager : MonoBehaviour
     public string lastLongTermDestinationID; // Tracks final target of multi-leg trip
 
     [Header("Tithe Settings (Credits)")]
-    [Tooltip("Fuel ADDED to the wagon upon entering a town.")]
+    [Tooltip("Default Fuel ADDED to the wagon upon entering a town if SceneInfo is missing.")]
     public int titheFuelCredit = 50;
-    [Tooltip("Rations ADDED to the wagon upon entering a town.")]
+    [Tooltip("Default Rations ADDED to the wagon upon entering a town if SceneInfo is missing.")]
     public int titheRationsCredit = 50;
 
     [Header("Persistent Objects")]
@@ -356,7 +356,8 @@ public class GameManager : MonoBehaviour
         // 4. Fire Tithe logic now that the party is moved and screen is clearing
         if (currentSceneType == SceneType.Town)
         {
-            ApplyTithePayment();
+            // MODIFIED: Pass the SceneInfo we found earlier
+            ApplyTithePayment(info);
         }
 
         float elapsedTime = Time.realtimeSinceStartup - startTime;
@@ -603,20 +604,44 @@ public class GameManager : MonoBehaviour
 
     /// <summary>
     /// Credits resources to the Wagon upon reaching civilization.
+    /// Uses SceneInfo values if available, otherwise defaults to GameManager values.
     /// </summary>
-    private void ApplyTithePayment()
+    private void ApplyTithePayment(SceneInfo info = null)
     {
         if (WagonResourceManager.instance == null) return;
 
-        WagonResourceManager.instance.AddResource(ResourceType.Fuel, titheFuelCredit);
-        WagonResourceManager.instance.AddResource(ResourceType.Rations, titheRationsCredit);
+        // Default to the settings in GameManager
+        int finalFuel = titheFuelCredit;
+        int finalRations = titheRationsCredit;
+        bool shouldPay = true;
 
-        Debug.Log($"[Tithe] Credited wagon with {titheFuelCredit} Fuel and {titheRationsCredit} Rations.");
-
-        // Feedback is visible now that party is moved and screen has cleared
-        if (FloatingTextManager.instance != null && playerPartyObject != null)
+        // If SceneInfo is available, use its settings
+        if (info != null)
         {
-            FloatingTextManager.instance.ShowEvent($"Tithe Received: +{titheFuelCredit} Fuel, +{titheRationsCredit} Rations", playerPartyObject.transform.position);
+            shouldPay = info.givesTithe;
+            if (shouldPay)
+            {
+                finalFuel = info.titheFuelAmount;
+                finalRations = info.titheRationsAmount;
+            }
+        }
+
+        if (shouldPay)
+        {
+            WagonResourceManager.instance.AddResource(ResourceType.Fuel, finalFuel);
+            WagonResourceManager.instance.AddResource(ResourceType.Rations, finalRations);
+
+            Debug.Log($"[Tithe] Credited wagon with {finalFuel} Fuel and {finalRations} Rations.");
+
+            // Feedback is visible now that party is moved and screen has cleared
+            if (FloatingTextManager.instance != null && playerPartyObject != null)
+            {
+                FloatingTextManager.instance.ShowEvent($"Tithe Received: +{finalFuel} Fuel, +{finalRations} Rations", playerPartyObject.transform.position);
+            }
+        }
+        else
+        {
+            Debug.Log($"[Tithe] Scene {currentLevelScene} does not provide a tithe.");
         }
     }
 
