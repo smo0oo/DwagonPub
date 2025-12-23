@@ -82,7 +82,30 @@ public class PartyMemberAI : MonoBehaviour
 
     private IEnumerator InitializeAgent()
     {
-        while (navMeshAgent != null && !navMeshAgent.isOnNavMesh) { yield return null; }
+        // Safety Check for NavMesh Binding:
+        // If the agent is enabled but not bound to the NavMesh, attempt to find a valid spot.
+        if (navMeshAgent != null && !navMeshAgent.isOnNavMesh)
+        {
+            if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 3.0f, NavMesh.AllAreas))
+            {
+                navMeshAgent.Warp(hit.position);
+            }
+        }
+
+        // Wait up to 1 second for the agent to bind.
+        float timeout = 1.0f;
+        while (navMeshAgent != null && !navMeshAgent.isOnNavMesh && timeout > 0)
+        {
+            timeout -= Time.deltaTime;
+            yield return null;
+        }
+
+        if (navMeshAgent != null && !navMeshAgent.isOnNavMesh)
+        {
+            UpdateStatus("Stuck (Off NavMesh)");
+            yield break;
+        }
+
         if (navMeshAgent != null)
         {
             if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
@@ -99,9 +122,10 @@ public class PartyMemberAI : MonoBehaviour
 
         UpdateAnimator();
 
+        // Safety: If this object is the active player, do not run AI logic
         if (PartyManager.instance != null && PartyManager.instance.ActivePlayer == this.gameObject)
         {
-            if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
+            if (navMeshAgent != null && navMeshAgent.hasPath) navMeshAgent.ResetPath();
             return;
         }
 
@@ -113,10 +137,12 @@ public class PartyMemberAI : MonoBehaviour
     private IEnumerator AIThinkRoutine()
     {
         WaitForSeconds wait = new WaitForSeconds(0.1f);
+        // Random offset to prevent all AIs thinking on the exact same frame
         yield return new WaitForSeconds(UnityEngine.Random.Range(0f, 0.2f));
 
         while (true)
         {
+            // Only think if NOT the active player
             if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != this.gameObject
                 && health != null && health.currentHealth > 0)
             {
@@ -202,6 +228,14 @@ public class PartyMemberAI : MonoBehaviour
 
     private void Act()
     {
+        // FIX: Safety Check. 
+        // Prevents "GetRemainingDistance" error if Manager issues a command 
+        // while this agent is disabled, off-mesh, or still initializing.
+        if (navMeshAgent == null || !navMeshAgent.isActiveAndEnabled || !navMeshAgent.isOnNavMesh)
+        {
+            return;
+        }
+
         switch (currentCommand)
         {
             case AICommand.Follow: HandleFollowState(); break;
@@ -311,7 +345,6 @@ public class PartyMemberAI : MonoBehaviour
             Quaternion lookRotation = Quaternion.LookRotation(navMeshAgent.velocity.normalized);
             transform.rotation = Quaternion.Slerp(transform.rotation, lookRotation, Time.deltaTime * rotationSpeed);
         }
-        // MODIFIED: If character has an explicit command and isn't moving, do NOT match player rotation
         else if (!hasExplicitCommand && PartyAIManager.instance.ActivePlayer != null)
         {
             // Idle: align with leader ONLY if just following
