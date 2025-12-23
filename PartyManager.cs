@@ -205,6 +205,54 @@ public class PartyManager : MonoBehaviour
 
         activePlayerIndex = index;
         ActivePlayer = partyMembers[activePlayerIndex];
+
+        // --- COMPONENT TOGGLE LOGIC ---
+        foreach (GameObject member in partyMembers)
+        {
+            if (member == null) continue;
+
+            bool isMemberActive = (member == ActivePlayer);
+
+            // 1. Toggle PlayerMovement
+            PlayerMovement pm = member.GetComponent<PlayerMovement>();
+            if (pm != null)
+            {
+                pm.enabled = isMemberActive;
+            }
+
+            // 2. Toggle PartyMemberAI
+            PartyMemberAI ai = member.GetComponent<PartyMemberAI>();
+            if (ai != null)
+            {
+                ai.enabled = !isMemberActive;
+            }
+
+            // 3. Toggle PartyMemberTargeting
+            PartyMemberTargeting targeting = member.GetComponent<PartyMemberTargeting>();
+            if (targeting != null)
+            {
+                targeting.enabled = !isMemberActive;
+            }
+
+            // 4. Toggle PartyMemberAbilitySelector
+            PartyMemberAbilitySelector selector = member.GetComponent<PartyMemberAbilitySelector>();
+            if (selector != null)
+            {
+                selector.enabled = !isMemberActive;
+            }
+
+            // 5. Safety: Reset path when becoming the active player to prevent ghost-walking
+            if (isMemberActive)
+            {
+                NavMeshAgent agent = member.GetComponent<NavMeshAgent>();
+                if (agent != null && agent.isOnNavMesh && agent.hasPath)
+                {
+                    agent.ResetPath();
+                }
+            }
+        }
+        // -----------------------------
+
         OnActivePlayerChanged?.Invoke(ActivePlayer);
     }
 
