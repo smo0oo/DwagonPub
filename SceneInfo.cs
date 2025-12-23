@@ -1,7 +1,7 @@
 using UnityEngine;
 
-// The enum is now correctly defined here as the authoritative source.
-public enum SceneType { Town, Dungeon, WorldMap, MainMenu, DomeBattle }
+// Added "Cinematic" to the enum
+public enum SceneType { Town, Dungeon, WorldMap, MainMenu, DomeBattle, Cinematic }
 
 public class SceneInfo : MonoBehaviour
 {

@@ -266,6 +266,8 @@ public class GameManager : MonoBehaviour
         {
             case SceneType.Town:
                 PartyManager.instance.SetPlayerSwitching(false);
+                // Force Active Player to 0 BEFORE fade-in to ensure UI is ready
+                PartyManager.instance.SetActivePlayer(0);
                 PartyAIManager.instance.EnterTownMode();
                 break;
             case SceneType.DomeBattle:
@@ -275,6 +277,7 @@ public class GameManager : MonoBehaviour
                 PartyAIManager.instance.EnterCombatMode();
                 break;
             case SceneType.Dungeon:
+            case SceneType.Cinematic:
                 PartyManager.instance.SetPlayerSwitching(true);
                 PartyAIManager.instance.EnterCombatMode();
                 break;
@@ -323,6 +326,27 @@ public class GameManager : MonoBehaviour
         SceneInfo info = FindAnyObjectByType<SceneInfo>();
         if (info == null) { currentSceneType = SceneType.Dungeon; } else { currentSceneType = info.type; }
 
+        // --- ORDER OF OPERATIONS IS CRITICAL HERE ---
+
+        // 1. Apply Rules (This sets the Active Player to 0 for Town scenes)
+        ApplySceneRules();
+
+        if (DualModeManager.instance != null)
+        {
+            DualModeManager.instance.ApplyTeamState(currentSceneType);
+        }
+
+        // 2. Refresh UI (Now that Active Player is correct, update UI while still hidden)
+        if (currentSceneType != SceneType.MainMenu && currentSceneType != SceneType.WorldMap)
+        {
+            if (InventoryUIController.instance != null && PartyManager.instance != null)
+            {
+                InventoryUIController.instance.RefreshAllPlayerDisplays(PartyManager.instance.ActivePlayer);
+            }
+        }
+        FindAnyObjectByType<UIPartyPortraitsManager>()?.RefreshAllPortraits();
+
+        // 3. Set UI Visibility & Position Party
         if (currentSceneType == SceneType.WorldMap)
         {
             SetUIVisibility("WorldMap");
@@ -337,42 +361,125 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            SetUIVisibility("InGame");
+            if (currentSceneType == SceneType.Cinematic)
+            {
+                SetUIVisibility("Cinematic");
+            }
+            else
+            {
+                SetUIVisibility("InGame");
+            }
+
             if (!string.IsNullOrEmpty(fromNodeID)) { lastKnownLocationNodeID = fromNodeID; }
             SetPlayerModelsActive(true);
             SetPlayerMovementComponentsActive(true);
 
-            // 1. Position the party FIRST
+            // IMPORTANT: MovePartyToSpawnPoint now handles Town Positions AND Dungeon Team Splitting
             MovePartyToSpawnPoint(spawnPointID);
-
-            if (InventoryUIController.instance != null) InventoryUIController.instance.RefreshAllPlayerDisplays(PartyManager.instance.ActivePlayer);
         }
 
-        ApplySceneRules();
+        // 4. Wait for minimum load time
+        float elapsedTime = Time.realtimeSinceStartup - startTime;
+        if (elapsedTime < minimumLoadingScreenTime) yield return new WaitForSeconds(minimumLoadingScreenTime - elapsedTime);
 
-        if (DualModeManager.instance != null)
-        {
-            DualModeManager.instance.ApplyTeamState(currentSceneType);
-        }
-
-        FindAnyObjectByType<UIPartyPortraitsManager>()?.RefreshAllPortraits();
-
-        // 2. Start fading out UI/Loading Screen before firing Tithe
+        // 5. Fade Out (Reveal the scene and UI)
         LoadingScreenManager.instance.HideLoadingScreen(fadeDuration);
 
-        // 3. Brief delay to let the screen clear so the text is visible
-        yield return new WaitForSeconds(0.2f);
-
-        // 4. Fire Tithe logic now that the party is moved and screen is clearing
+        // 6. Fire Tithe logic (Visual notification appears after fade)
         if (currentSceneType == SceneType.Town)
         {
             ApplyTithePayment(info);
         }
 
-        float elapsedTime = Time.realtimeSinceStartup - startTime;
-        if (elapsedTime < minimumLoadingScreenTime) yield return new WaitForSeconds(minimumLoadingScreenTime - elapsedTime);
-
         isTransitioning = false;
+    }
+
+    private void MovePartyToSpawnPoint(string spawnPointID)
+    {
+        if (string.IsNullOrEmpty(spawnPointID)) return;
+
+        // Find the main spawn point in the scene
+        PlayerSpawnPoint spawnPoint = FindObjectsByType<PlayerSpawnPoint>(FindObjectsSortMode.None)
+            .FirstOrDefault(sp => sp.spawnPointID == spawnPointID);
+
+        if (spawnPoint == null)
+        {
+            Debug.LogWarning($"Could not find spawn point with ID: {spawnPointID}");
+            return;
+        }
+
+        PartyManager partyManager = PartyManager.instance;
+        if (playerPartyObject == null || partyManager == null) return;
+
+        // 1. Move the Root Container
+        playerPartyObject.transform.position = spawnPoint.transform.position;
+        playerPartyObject.transform.rotation = spawnPoint.transform.rotation;
+
+        // 2. Prepare Town Spawn Points (if applicable)
+        TownCharacterSpawnPoint[] townSpawns = null;
+        if (currentSceneType == SceneType.Town)
+        {
+            townSpawns = FindObjectsByType<TownCharacterSpawnPoint>(FindObjectsSortMode.None);
+        }
+
+        // 3. Position Each Member
+        for (int i = 0; i < partyManager.partyMembers.Count; i++)
+        {
+            GameObject member = partyManager.partyMembers[i];
+            if (member == null) continue;
+
+            // -- DUAL MODE CHECK --
+            // If in Dungeon, ONLY position/enable members who are on the Dungeon Team.
+            // Wagon Team members should be hidden and ignored here.
+            if (currentSceneType == SceneType.Dungeon && DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
+            {
+                if (!DualModeManager.instance.dungeonTeamIndices.Contains(i))
+                {
+                    // This member is on the Wagon team (or dead). 
+                    // Ensure they are inactive and skip moving them to the dungeon spawn.
+                    member.SetActive(false);
+                    continue;
+                }
+            }
+
+            // Disable agent temporarily to warp
+            NavMeshAgent agent = member.GetComponent<NavMeshAgent>();
+            if (agent != null) agent.enabled = false;
+
+            // -- TOWN POSITIONING CHECK --
+            bool positionedInTown = false;
+            if (currentSceneType == SceneType.Town && townSpawns != null && townSpawns.Length > 0)
+            {
+                // Find a spawn point designated for this specific member index
+                TownCharacterSpawnPoint mySpawn = townSpawns.FirstOrDefault(t => t.partyMemberIndex == i);
+                if (mySpawn != null)
+                {
+                    // Warp to specific town spot (World Space)
+                    member.transform.position = mySpawn.transform.position;
+                    member.transform.rotation = mySpawn.transform.rotation;
+                    positionedInTown = true;
+                }
+            }
+
+            // -- DEFAULT POSITIONING (Stack on Leader) --
+            if (!positionedInTown)
+            {
+                // Reset local position to 0,0,0 relative to the Party Root (which is at the SpawnPoint)
+                member.transform.localPosition = Vector3.zero;
+                member.transform.localRotation = Quaternion.identity;
+            }
+
+            // Re-enable Agent and Warp
+            if (agent != null)
+            {
+                agent.enabled = true;
+                // Warp is crucial to sync the agent with the transform immediately
+                agent.Warp(member.transform.position);
+            }
+
+            // Ensure member is active (unless handled by DualMode above)
+            member.SetActive(true);
+        }
     }
 
     private IEnumerator LoadGameSequence()
@@ -420,6 +527,10 @@ public class GameManager : MonoBehaviour
 
         bool isWorldMapScene = finalSceneToLoad.StartsWith("WorldMap");
 
+        // Resolve Scene Type for loaded scene
+        SceneInfo info = FindAnyObjectByType<SceneInfo>();
+        currentSceneType = (info != null) ? info.type : SceneType.Dungeon;
+
         PartyManager pm = PartyManager.instance;
         if (pm != null)
         {
@@ -448,9 +559,7 @@ public class GameManager : MonoBehaviour
             wagonMgr.OnResourcesChanged?.Invoke();
         }
 
-        SetUIVisibility(isWorldMapScene ? "WorldMap" : "InGame");
-        SetPlayerModelsActive(!isWorldMapScene);
-        SetPlayerMovementComponentsActive(!isWorldMapScene);
+        // Apply Logic BEFORE Showing UI
         ApplySceneRules();
 
         List<GameObject> partyMembers = pm.partyMembers;
@@ -545,6 +654,23 @@ public class GameManager : MonoBehaviour
         {
             InventoryUIController.instance.RefreshAllPlayerDisplays(PartyManager.instance.ActivePlayer);
         }
+
+        // === VISIBILITY CHECK ===
+        if (isWorldMapScene)
+        {
+            SetUIVisibility("WorldMap");
+        }
+        else if (currentSceneType == SceneType.Cinematic)
+        {
+            SetUIVisibility("Cinematic");
+        }
+        else
+        {
+            SetUIVisibility("InGame");
+        }
+
+        SetPlayerModelsActive(!isWorldMapScene);
+        SetPlayerMovementComponentsActive(!isWorldMapScene);
 
         float finalElapsed = Time.realtimeSinceStartup - startTime;
         if (finalElapsed < minimumLoadingScreenTime) yield return new WaitForSeconds(minimumLoadingScreenTime - finalElapsed);
@@ -683,7 +809,13 @@ public class GameManager : MonoBehaviour
             ConfigureGroup(sharedCanvasGroup, !isSequenceActive);
         }
 
-        // 4. Toggle Player Movement & AI
+        // 4. Toggle Battle UI (Important for returning from Cinematic scenes)
+        if (battleCanvasGroup != null)
+        {
+            ConfigureGroup(battleCanvasGroup, !isSequenceActive);
+        }
+
+        // 5. Toggle Player Movement & AI
         SetPlayerMovementComponentsActive(!isSequenceActive);
     }
 
@@ -762,7 +894,7 @@ public class GameManager : MonoBehaviour
 
     private void SetUIVisibility(string sceneType)
     {
-        // FIX: If a sequence is active (from AutoPlaySequence), enforce HUD hidden (Alpha 0)
+        // Enforce sequence flag if active
         bool isHUDVisible = !IsSequenceModeActive;
 
         switch (sceneType)
@@ -776,6 +908,17 @@ public class GameManager : MonoBehaviour
                 ConfigureGroup(domeUICanvasGroup, false);
                 SetElementsVisibility(worldMapHiddenElements, false);
                 if (worldMapCamera != null) worldMapCamera.gameObject.SetActive(true);
+                break;
+            case "Cinematic":
+                // HUD and Battle UI hidden by default (Alpha 0)
+                ConfigureGroup(sharedCanvasGroup, false);
+                ConfigureGroup(battleCanvasGroup, false);
+                ConfigureGroup(worldMapCanvasGroup, false);
+                ConfigureGroup(inGameMenuCanvasGroup, false); // Don't show menu button during cinematic
+                ConfigureGroup(wagonHotbarCanvasGroup, false);
+                ConfigureGroup(domeUICanvasGroup, false);
+                SetElementsVisibility(worldMapHiddenElements, true);
+                if (worldMapCamera != null) worldMapCamera.gameObject.SetActive(false);
                 break;
             case "InGame":
                 ConfigureGroup(sharedCanvasGroup, isHUDVisible); // Use flag
@@ -798,43 +941,6 @@ public class GameManager : MonoBehaviour
                 SetElementsVisibility(worldMapHiddenElements, false);
                 if (worldMapCamera != null) worldMapCamera.gameObject.SetActive(false);
                 break;
-        }
-    }
-
-    private void MovePartyToSpawnPoint(string spawnPointID)
-    {
-        if (string.IsNullOrEmpty(spawnPointID)) return;
-        PlayerSpawnPoint spawnPoint = FindObjectsByType<PlayerSpawnPoint>(FindObjectsSortMode.None)
-            .FirstOrDefault(sp => sp.spawnPointID == spawnPointID);
-
-        if (spawnPoint == null)
-        {
-            Debug.LogWarning($"Could not find spawn point with ID: {spawnPointID}");
-            return;
-        }
-
-        PartyManager partyManager = PartyManager.instance;
-        if (playerPartyObject == null || partyManager == null) return;
-
-        playerPartyObject.transform.position = spawnPoint.transform.position;
-        playerPartyObject.transform.rotation = spawnPoint.transform.rotation;
-
-        foreach (GameObject member in partyManager.partyMembers)
-        {
-            if (member.TryGetComponent<NavMeshAgent>(out NavMeshAgent agent))
-            {
-                agent.enabled = false;
-            }
-            member.transform.localPosition = Vector3.zero;
-            member.transform.localRotation = Quaternion.identity;
-            if (agent != null)
-            {
-                agent.enabled = true;
-                // [FIX APPLIED] Force the agent to acknowledge the transform change immediately
-                // This prevents the agent's 'nextPosition' (stuck at 0,0,0) from overriding 
-                // the transform when PlayerMovement updates.
-                agent.Warp(member.transform.position);
-            }
         }
     }
 
