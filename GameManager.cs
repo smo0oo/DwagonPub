@@ -68,9 +68,13 @@ public class GameManager : MonoBehaviour
 
     [Header("Core Scene")]
     public string coreSceneName = "CoreScene";
-    public SceneType currentSceneType { get; private set; }
-    private string currentLevelScene;
 
+    // --- CACHED SCENE STATE ---
+    public SceneType currentSceneType { get; private set; }
+    private SceneType cachedSceneType = SceneType.Dungeon;
+    private SceneInfo cachedSceneInfo;
+
+    private string currentLevelScene;
     private bool isTransitioning;
     public bool IsTransitioning => isTransitioning;
 
@@ -120,8 +124,131 @@ public class GameManager : MonoBehaviour
         currentLevelScene = NormalizeSceneName(SceneManager.GetActiveScene().name);
     }
 
-    public void SetLocationType(NodeType type) { lastLocationType = type; justExitedDungeon = false; }
-    public void SetJustExitedDungeon(bool state) { justExitedDungeon = state; }
+    void Start()
+    {
+        UpdateCachedSceneInfo();
+    }
+
+    // --- State Setters (Restored) ---
+    public void SetLocationType(NodeType type)
+    {
+        lastLocationType = type;
+        justExitedDungeon = false;
+    }
+
+    public void SetJustExitedDungeon(bool state)
+    {
+        justExitedDungeon = state;
+    }
+
+    // --- Scene Caching Logic ---
+    private void UpdateCachedSceneInfo()
+    {
+        cachedSceneInfo = FindAnyObjectByType<SceneInfo>();
+        if (cachedSceneInfo != null)
+        {
+            cachedSceneType = cachedSceneInfo.type;
+        }
+        else
+        {
+            if (currentLevelScene.Contains("WorldMap")) cachedSceneType = SceneType.WorldMap;
+            else if (currentLevelScene.Contains("MainMenu")) cachedSceneType = SceneType.MainMenu;
+            else cachedSceneType = SceneType.Dungeon;
+        }
+        currentSceneType = cachedSceneType;
+    }
+
+    public void ApplySceneRules()
+    {
+        UpdateCachedSceneInfo();
+
+        if (currentSceneType == SceneType.WorldMap)
+        {
+            foreach (var member in PartyManager.instance.partyMembers)
+            {
+                if (member != null) member.SetActive(false);
+            }
+            PartyManager.instance.SetPlayerSwitching(false);
+            return;
+        }
+
+        if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
+        {
+            DualModeManager.instance.ApplyTeamState(currentSceneType);
+
+            if (currentSceneType == SceneType.Town)
+            {
+                PartyManager.instance.SetPlayerSwitching(false);
+                PartyManager.instance.SetActivePlayer(0);
+                PartyAIManager.instance.EnterTownMode();
+            }
+            else
+            {
+                PartyManager.instance.SetPlayerSwitching(true);
+                PartyAIManager.instance.EnterCombatMode();
+            }
+            return;
+        }
+
+        bool anyControllable = false;
+
+        for (int i = 0; i < PartyManager.instance.partyMembers.Count; i++)
+        {
+            GameObject member = PartyManager.instance.partyMembers[i];
+            if (member == null) continue;
+
+            PlayerSceneState state = PlayerSceneState.Active;
+            if (cachedSceneInfo != null && i < cachedSceneInfo.playerConfigs.Count)
+                state = cachedSceneInfo.playerConfigs[i].state;
+
+            switch (state)
+            {
+                case PlayerSceneState.Active:
+                    member.SetActive(true);
+                    SetMemberControl(member, true);
+                    anyControllable = true;
+                    break;
+
+                case PlayerSceneState.Inactive:
+                case PlayerSceneState.SpawnAtMarker:
+                    member.SetActive(true);
+                    SetMemberControl(member, false);
+                    break;
+
+                case PlayerSceneState.Hidden:
+                    member.SetActive(false);
+                    break;
+            }
+        }
+
+        if (currentSceneType == SceneType.Town)
+        {
+            PartyManager.instance.SetPlayerSwitching(false);
+            PartyAIManager.instance.EnterTownMode();
+            PartyManager.instance.SetActivePlayer(0);
+        }
+        else
+        {
+            PartyManager.instance.SetPlayerSwitching(anyControllable);
+            if (anyControllable) PartyAIManager.instance.EnterCombatMode();
+            else PartyAIManager.instance.EnterTownMode();
+        }
+    }
+
+    private void SetMemberControl(GameObject member, bool enabled)
+    {
+        var agent = member.GetComponent<NavMeshAgent>();
+        var movement = member.GetComponent<PlayerMovement>();
+        var ai = member.GetComponent<PartyMemberAI>();
+
+        if (agent != null) agent.enabled = enabled;
+        if (movement != null) movement.enabled = enabled;
+
+        bool shouldAIBeActive = enabled;
+        if (cachedSceneType == SceneType.Town) shouldAIBeActive = false;
+
+        if (ai != null) ai.enabled = shouldAIBeActive;
+    }
 
     public void CaptureWagonState()
     {
@@ -166,6 +293,8 @@ public class GameManager : MonoBehaviour
         yield return SwitchToSceneExact(worldMapSceneName);
         yield return null;
 
+        UpdateCachedSceneInfo();
+
         WorldMapManager wmm = FindAnyObjectByType<WorldMapManager>();
         WagonController wagon = FindAnyObjectByType<WagonController>();
         bool positionRestored = false;
@@ -207,99 +336,6 @@ public class GameManager : MonoBehaviour
         isTransitioning = false;
     }
 
-    public void ApplySceneRules()
-    {
-        SceneInfo info = FindAnyObjectByType<SceneInfo>();
-        currentSceneType = (info != null) ? info.type : SceneType.Dungeon;
-
-        // 1. WORLD MAP OVERRIDE (Highest Priority)
-        if (currentSceneType == SceneType.WorldMap)
-        {
-            foreach (var member in PartyManager.instance.partyMembers)
-            {
-                if (member != null) member.SetActive(false);
-            }
-            PartyManager.instance.SetPlayerSwitching(false);
-            return;
-        }
-
-        // 2. DUAL MODE PRIORITY
-        if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
-        {
-            DualModeManager.instance.ApplyTeamState(currentSceneType);
-
-            if (currentSceneType == SceneType.Town)
-            {
-                PartyManager.instance.SetPlayerSwitching(false);
-                PartyManager.instance.SetActivePlayer(0);
-                PartyAIManager.instance.EnterTownMode();
-            }
-            else
-            {
-                PartyManager.instance.SetPlayerSwitching(true);
-                PartyAIManager.instance.EnterCombatMode();
-            }
-            return;
-        }
-
-        // 3. APPLY PER-PLAYER CONFIG (Standard)
-        bool anyControllable = false;
-
-        for (int i = 0; i < PartyManager.instance.partyMembers.Count; i++)
-        {
-            GameObject member = PartyManager.instance.partyMembers[i];
-            if (member == null) continue;
-
-            PlayerSceneState state = PlayerSceneState.Active;
-            if (info != null && i < info.playerConfigs.Count)
-                state = info.playerConfigs[i].state;
-
-            switch (state)
-            {
-                case PlayerSceneState.Active:
-                    member.SetActive(true);
-                    SetMemberControl(member, true);
-                    anyControllable = true;
-                    break;
-
-                case PlayerSceneState.Inactive:
-                case PlayerSceneState.SpawnAtMarker:
-                    member.SetActive(true);
-                    SetMemberControl(member, false);
-                    break;
-
-                case PlayerSceneState.Hidden:
-                    member.SetActive(false);
-                    break;
-            }
-        }
-
-        // 4. SCENE TYPE OVERRIDES
-        if (currentSceneType == SceneType.Town)
-        {
-            PartyManager.instance.SetPlayerSwitching(false);
-            PartyAIManager.instance.EnterTownMode();
-            PartyManager.instance.SetActivePlayer(0);
-        }
-        else
-        {
-            PartyManager.instance.SetPlayerSwitching(anyControllable);
-            if (anyControllable) PartyAIManager.instance.EnterCombatMode();
-            else PartyAIManager.instance.EnterTownMode();
-        }
-    }
-
-    private void SetMemberControl(GameObject member, bool enabled)
-    {
-        var agent = member.GetComponent<NavMeshAgent>();
-        var movement = member.GetComponent<PlayerMovement>();
-        var ai = member.GetComponent<PartyMemberAI>();
-
-        if (agent != null) agent.enabled = enabled;
-        if (movement != null) movement.enabled = enabled;
-        if (ai != null) ai.enabled = enabled;
-    }
-
     private IEnumerator TransitionLevel(string sceneName, string spawnPointID, string fromNodeID = null)
     {
         if (isTransitioning) yield break;
@@ -321,11 +357,10 @@ public class GameManager : MonoBehaviour
 
         yield return SwitchToSceneExact(sceneName);
 
+        UpdateCachedSceneInfo();
+
         if (SceneStateManager.instance != null && FindAnyObjectByType<InventoryManager>() != null)
             SceneStateManager.instance.RestoreSceneState(sceneName, FindAnyObjectByType<InventoryManager>().worldItemPrefab);
-
-        SceneInfo info = FindAnyObjectByType<SceneInfo>();
-        if (info == null) { currentSceneType = SceneType.Dungeon; } else { currentSceneType = info.type; }
 
         ApplySceneRules();
 
@@ -362,7 +397,7 @@ public class GameManager : MonoBehaviour
         if (elapsedTime < minimumLoadingScreenTime) yield return new WaitForSeconds(minimumLoadingScreenTime - elapsedTime);
 
         LoadingScreenManager.instance.HideLoadingScreen(fadeDuration);
-        if (currentSceneType == SceneType.Town) ApplyTithePayment(info);
+        if (currentSceneType == SceneType.Town) ApplyTithePayment(cachedSceneInfo);
         isTransitioning = false;
     }
 
@@ -388,7 +423,6 @@ public class GameManager : MonoBehaviour
         playerPartyObject.transform.position = spawnPoint.transform.position;
         playerPartyObject.transform.rotation = spawnPoint.transform.rotation;
 
-        SceneInfo info = FindAnyObjectByType<SceneInfo>();
         TownCharacterSpawnPoint[] townSpawns = (currentSceneType == SceneType.Town) ?
             FindObjectsByType<TownCharacterSpawnPoint>(FindObjectsSortMode.None) : null;
 
@@ -405,7 +439,7 @@ public class GameManager : MonoBehaviour
             }
 
             PlayerSceneState state = PlayerSceneState.Active;
-            if (info != null && i < info.playerConfigs.Count) state = info.playerConfigs[i].state;
+            if (cachedSceneInfo != null && i < cachedSceneInfo.playerConfigs.Count) state = cachedSceneInfo.playerConfigs[i].state;
 
             if (state == PlayerSceneState.Hidden && !(DualModeManager.instance != null && DualModeManager.instance.isDualModeActive))
             {
@@ -459,9 +493,10 @@ public class GameManager : MonoBehaviour
         if (targetNode == null) { isTransitioning = false; LoadingScreenManager.instance.HideLoadingScreen(fadeDuration); yield break; }
         string finalSceneToLoad = NormalizeSceneName(targetNode.sceneToLoad);
         if (finalSceneToLoad != startingSceneName) yield return SwitchToSceneExact(finalSceneToLoad);
+
+        UpdateCachedSceneInfo();
+
         bool isWorldMapScene = finalSceneToLoad.StartsWith("WorldMap");
-        SceneInfo info = FindAnyObjectByType<SceneInfo>();
-        currentSceneType = (info != null) ? info.type : SceneType.Dungeon;
         PartyManager pm = PartyManager.instance;
         if (pm != null) { pm.partyLevel = data.partyLevel; pm.currentXP = data.currentXP; pm.xpToNextLevel = data.xpToNextLevel; pm.currencyGold = data.currencyGold; }
         if (isWorldMapScene) { var wmm = FindAnyObjectByType<WorldMapManager>(); if (wmm != null) { wmm.timeOfDay = data.timeOfDay; wmm.SetCurrentLocation(targetNode, true); } }
@@ -490,69 +525,85 @@ public class GameManager : MonoBehaviour
         LoadingScreenManager.instance.HideLoadingScreen(fadeDuration); isTransitioning = false;
     }
 
-    public void LoadLevel(string sceneName, string spawnPointID = null, string fromNodeID = null) { if (isTransitioning) return; lastSpawnPointID = spawnPointID; sceneName = NormalizeSceneName(sceneName); var alreadyLoaded = SceneManager.GetSceneByName(sceneName).isLoaded; if (alreadyLoaded && currentLevelScene == sceneName && SceneManager.GetActiveScene().name == sceneName) return; StartCoroutine(TransitionLevel(sceneName, spawnPointID, fromNodeID)); }
-    public void ReloadCurrentLevel(string spawnPointID = null) { if (isTransitioning) return; lastSpawnPointID = spawnPointID; StartCoroutine(TransitionLevel(currentLevelScene, spawnPointID)); }
-    public void StartNewGame() { lastLocationType = NodeType.Scene; justExitedDungeon = false; LoadLevel(startingSceneName); }
-    public void LoadSavedGame() { if (isTransitioning) return; StartCoroutine(LoadGameSequence()); }
-    public void ReturnToMainMenu() { Time.timeScale = 1f; lastLocationType = NodeType.Scene; justExitedDungeon = false; LoadLevel("MainMenu"); }
-    public void RegisterInitialScene(string sceneName) { currentLevelScene = NormalizeSceneName(sceneName); }
-    private void SetPlayerModelsActive(bool isActive) { if (playerPartyObject == null) return; var allChildren = playerPartyObject.GetComponentsInChildren<Transform>(true); foreach (var child in allChildren) { if (child.CompareTag("PlayerModel")) { child.gameObject.SetActive(isActive); } } }
-    private void ApplyTithePayment(SceneInfo info = null) { if (WagonResourceManager.instance == null) return; int finalFuel = titheFuelCredit; int finalRations = titheRationsCredit; bool shouldPay = true; if (info != null) { shouldPay = info.givesTithe; if (shouldPay) { finalFuel = info.titheFuelAmount; finalRations = info.titheRationsAmount; } } if (shouldPay) { WagonResourceManager.instance.AddResource(ResourceType.Fuel, finalFuel); WagonResourceManager.instance.AddResource(ResourceType.Rations, finalRations); Debug.Log($"[Tithe] Credited wagon with {finalFuel} Fuel and {finalRations} Rations."); if (FloatingTextManager.instance != null && playerPartyObject != null) { FloatingTextManager.instance.ShowEvent($"Tithe Received: +{finalFuel} Fuel, +{finalRations} Rations", playerPartyObject.transform.position); } } }
-
     public void SetSequenceMode(bool isSequenceActive)
     {
         IsSequenceModeActive = isSequenceActive;
         if (canvasGroupsHiddenDuringSequence != null) foreach (var group in canvasGroupsHiddenDuringSequence) ConfigureGroup(group, !isSequenceActive);
         if (sharedCanvasGroup != null) ConfigureGroup(sharedCanvasGroup, !isSequenceActive);
         if (battleCanvasGroup != null) ConfigureGroup(battleCanvasGroup, !isSequenceActive);
-        SetPlayerMovementComponentsActive(!isSequenceActive);
+
+        if (isSequenceActive)
+        {
+            SetPlayerMovementComponentsActive(false);
+        }
+        else
+        {
+            RestoreControlsSafely();
+        }
     }
 
-    // --- NEW: Dedicated Dialogue State Handling (Prevents Warping) ---
     public void SetDialogueState(bool isInDialogue)
     {
         if (isInDialogue)
         {
-            // Enter Dialogue: Behave like a Sequence (Disable all inputs/AI)
             SetPlayerMovementComponentsActive(false);
-
-            // Hide HUD elements if desired
             if (sharedCanvasGroup != null) ConfigureGroup(sharedCanvasGroup, false);
             if (battleCanvasGroup != null) ConfigureGroup(battleCanvasGroup, false);
         }
         else
         {
-            // Exit Dialogue: Manually restore controls WITHOUT calling ApplySceneRules() 
-            // ApplySceneRules() is responsible for warping players to spawn points, which we want to avoid here.
+            RestoreControlsSafely();
 
-            if (playerPartyObject != null)
-            {
-                // 1. Re-enable PartyAIManager (so NUCs can eventually think)
-                PartyAIManager partyAI = playerPartyObject.GetComponent<PartyAIManager>();
-                if (partyAI != null) partyAI.enabled = true;
-
-                // 2. Re-enable NavMeshAgents (so they can physically move)
-                foreach (var agent in playerPartyObject.GetComponentsInChildren<NavMeshAgent>(true))
-                {
-                    if (agent.gameObject.activeInHierarchy)
-                    {
-                        agent.enabled = true;
-                        agent.isStopped = false;
-                    }
-                }
-
-                // 3. Re-assign Active Player Control Logic
-                if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
-                {
-                    int index = PartyManager.instance.partyMembers.IndexOf(PartyManager.instance.ActivePlayer);
-                    if (index != -1) PartyManager.instance.SetActivePlayer(index);
-                }
-            }
-
-            // 4. Restore UI Visibility based on scene
             if (currentSceneType == SceneType.WorldMap) SetUIVisibility("WorldMap");
             else if (currentSceneType == SceneType.Cinematic) SetUIVisibility("Cinematic");
             else SetUIVisibility("InGame");
+        }
+    }
+
+    private void RestoreControlsSafely()
+    {
+        UpdateCachedSceneInfo();
+
+        if (playerPartyObject != null)
+        {
+            // 1. Re-enable PartyAIManager
+            PartyAIManager partyAI = playerPartyObject.GetComponent<PartyAIManager>();
+            if (partyAI != null) partyAI.enabled = true;
+
+            // 2. Re-enable Agents 
+            foreach (var agent in playerPartyObject.GetComponentsInChildren<NavMeshAgent>(true))
+            {
+                if (agent.gameObject.activeInHierarchy)
+                {
+                    agent.enabled = true;
+                    agent.isStopped = false;
+                }
+            }
+
+            // 3. Restore Player Controls and FORCE AI States
+            if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
+            {
+                GameObject activePlayer = PartyManager.instance.ActivePlayer;
+
+                var pm = activePlayer.GetComponent<PlayerMovement>();
+                if (pm != null) pm.enabled = true;
+
+                bool isTown = (cachedSceneType == SceneType.Town);
+
+                foreach (var member in PartyManager.instance.partyMembers)
+                {
+                    if (member == null) continue;
+                    var ai = member.GetComponent<PartyMemberAI>();
+                    if (ai != null)
+                    {
+                        bool isLeader = (member == activePlayer);
+                        bool aiShouldBeActive = !isLeader && !isTown;
+                        ai.enabled = aiShouldBeActive;
+                    }
+                }
+
+                if (partyAI != null) partyAI.ForceUpdateState(isTown);
+            }
         }
     }
 
@@ -562,19 +613,15 @@ public class GameManager : MonoBehaviour
 
         if (!isActive)
         {
-            // FIX: Use the correct Animator parameters (VelocityX, VelocityZ) 
-            // instead of Speed/IsMoving to stop animations cleanly.
             foreach (var animator in playerPartyObject.GetComponentsInChildren<Animator>(true))
             {
                 if (animator.runtimeAnimatorController != null)
                 {
-                    // Reset blend tree parameters to 0 (Idle)
                     animator.SetFloat("VelocityX", 0f);
                     animator.SetFloat("VelocityZ", 0f);
                 }
             }
 
-            // Correctly disable Agents without error
             foreach (var agent in playerPartyObject.GetComponentsInChildren<NavMeshAgent>(true))
             {
                 if (agent.isActiveAndEnabled)
@@ -586,47 +633,29 @@ public class GameManager : MonoBehaviour
                 agent.enabled = false;
             }
 
-            foreach (var movement in playerPartyObject.GetComponentsInChildren<PlayerMovement>(true))
-            {
-                movement.enabled = false;
-            }
-
-            foreach (var ai in playerPartyObject.GetComponentsInChildren<PartyMemberAI>(true))
-            {
-                ai.enabled = false;
-            }
+            foreach (var movement in playerPartyObject.GetComponentsInChildren<PlayerMovement>(true)) movement.enabled = false;
+            foreach (var ai in playerPartyObject.GetComponentsInChildren<PartyMemberAI>(true)) ai.enabled = false;
 
             PartyAIManager partyAI = playerPartyObject.GetComponent<PartyAIManager>();
-            if (partyAI != null)
-            {
-                partyAI.enabled = false;
-            }
+            if (partyAI != null) partyAI.enabled = false;
 
             return;
         }
 
-        // NOTE: This causes warping/spawn-point resetting, so we DON'T use it for ending dialogue.
-        // We only use ApplySceneRules() for full scene loads or resets.
-        ApplySceneRules();
+        RestoreControlsSafely();
     }
 
+    // --- Standard Helpers ---
+    public void LoadLevel(string sceneName, string spawnPointID = null, string fromNodeID = null) { if (isTransitioning) return; lastSpawnPointID = spawnPointID; sceneName = NormalizeSceneName(sceneName); var alreadyLoaded = SceneManager.GetSceneByName(sceneName).isLoaded; if (alreadyLoaded && currentLevelScene == sceneName && SceneManager.GetActiveScene().name == sceneName) return; StartCoroutine(TransitionLevel(sceneName, spawnPointID, fromNodeID)); }
+    public void ReloadCurrentLevel(string spawnPointID = null) { if (isTransitioning) return; lastSpawnPointID = spawnPointID; StartCoroutine(TransitionLevel(currentLevelScene, spawnPointID)); }
+    public void StartNewGame() { lastLocationType = NodeType.Scene; justExitedDungeon = false; LoadLevel(startingSceneName); }
+    public void LoadSavedGame() { if (isTransitioning) return; StartCoroutine(LoadGameSequence()); }
+    public void ReturnToMainMenu() { Time.timeScale = 1f; lastLocationType = NodeType.Scene; justExitedDungeon = false; LoadLevel("MainMenu"); }
+    public void RegisterInitialScene(string sceneName) { currentLevelScene = NormalizeSceneName(sceneName); UpdateCachedSceneInfo(); }
+    private void SetPlayerModelsActive(bool isActive) { if (playerPartyObject == null) return; var allChildren = playerPartyObject.GetComponentsInChildren<Transform>(true); foreach (var child in allChildren) { if (child.CompareTag("PlayerModel")) { child.gameObject.SetActive(isActive); } } }
+    private void ApplyTithePayment(SceneInfo info = null) { if (WagonResourceManager.instance == null) return; int finalFuel = titheFuelCredit; int finalRations = titheRationsCredit; bool shouldPay = true; if (info != null) { shouldPay = info.givesTithe; if (shouldPay) { finalFuel = info.titheFuelAmount; finalRations = info.titheRationsAmount; } } if (shouldPay) { WagonResourceManager.instance.AddResource(ResourceType.Fuel, finalFuel); WagonResourceManager.instance.AddResource(ResourceType.Rations, finalRations); Debug.Log($"[Tithe] Credited wagon with {finalFuel} Fuel and {finalRations} Rations."); if (FloatingTextManager.instance != null && playerPartyObject != null) { FloatingTextManager.instance.ShowEvent($"Tithe Received: +{finalFuel} Fuel, +{finalRations} Rations", playerPartyObject.transform.position); } } }
     private static string NormalizeSceneName(string s) { if (string.IsNullOrEmpty(s)) return s; if (s.EndsWith(".unity")) s = Path.GetFileNameWithoutExtension(s); int slash = s.LastIndexOf('/'); if (slash >= 0 && slash < s.Length - 1) s = s[(slash + 1)..]; return s; }
-    private void SetUIVisibility(string sceneType)
-    {
-        bool isHUDVisible = !IsSequenceModeActive;
-        switch (sceneType)
-        {
-            case "WorldMap":
-                ConfigureGroup(sharedCanvasGroup, isHUDVisible); ConfigureGroup(battleCanvasGroup, false); ConfigureGroup(worldMapCanvasGroup, true); ConfigureGroup(inGameMenuCanvasGroup, true, false); ConfigureGroup(wagonHotbarCanvasGroup, false); ConfigureGroup(domeUICanvasGroup, false); SetElementsVisibility(worldMapHiddenElements, false); if (worldMapCamera != null) worldMapCamera.gameObject.SetActive(true); break;
-            case "Cinematic":
-                ConfigureGroup(sharedCanvasGroup, false); ConfigureGroup(battleCanvasGroup, false); ConfigureGroup(worldMapCanvasGroup, false); ConfigureGroup(inGameMenuCanvasGroup, false); ConfigureGroup(wagonHotbarCanvasGroup, false); ConfigureGroup(domeUICanvasGroup, false); SetElementsVisibility(worldMapHiddenElements, true); if (worldMapCamera != null) worldMapCamera.gameObject.SetActive(false); break;
-            case "InGame":
-                ConfigureGroup(sharedCanvasGroup, isHUDVisible); ConfigureGroup(battleCanvasGroup, true); ConfigureGroup(worldMapCanvasGroup, false); ConfigureGroup(inGameMenuCanvasGroup, true, false); ConfigureGroup(wagonHotbarCanvasGroup, currentSceneType == SceneType.DomeBattle); ConfigureGroup(domeUICanvasGroup, currentSceneType == SceneType.DomeBattle); SetElementsVisibility(worldMapHiddenElements, true); if (worldMapCamera != null) worldMapCamera.gameObject.SetActive(false); break;
-            case "MainMenu":
-            default:
-                ConfigureGroup(sharedCanvasGroup, false); ConfigureGroup(battleCanvasGroup, false); ConfigureGroup(worldMapCanvasGroup, false); ConfigureGroup(inGameMenuCanvasGroup, false); ConfigureGroup(wagonHotbarCanvasGroup, false); ConfigureGroup(domeUICanvasGroup, false); SetElementsVisibility(worldMapHiddenElements, false); if (worldMapCamera != null) worldMapCamera.gameObject.SetActive(false); break;
-        }
-    }
+    private void SetUIVisibility(string sceneType) { bool isHUDVisible = !IsSequenceModeActive; switch (sceneType) { case "WorldMap": ConfigureGroup(sharedCanvasGroup, isHUDVisible); ConfigureGroup(battleCanvasGroup, false); ConfigureGroup(worldMapCanvasGroup, true); ConfigureGroup(inGameMenuCanvasGroup, true, false); ConfigureGroup(wagonHotbarCanvasGroup, false); ConfigureGroup(domeUICanvasGroup, false); SetElementsVisibility(worldMapHiddenElements, false); if (worldMapCamera != null) worldMapCamera.gameObject.SetActive(true); break; case "Cinematic": ConfigureGroup(sharedCanvasGroup, false); ConfigureGroup(battleCanvasGroup, false); ConfigureGroup(worldMapCanvasGroup, false); ConfigureGroup(inGameMenuCanvasGroup, false); ConfigureGroup(wagonHotbarCanvasGroup, false); ConfigureGroup(domeUICanvasGroup, false); SetElementsVisibility(worldMapHiddenElements, true); if (worldMapCamera != null) worldMapCamera.gameObject.SetActive(false); break; case "InGame": ConfigureGroup(sharedCanvasGroup, isHUDVisible); ConfigureGroup(battleCanvasGroup, true); ConfigureGroup(worldMapCanvasGroup, false); ConfigureGroup(inGameMenuCanvasGroup, true, false); ConfigureGroup(wagonHotbarCanvasGroup, currentSceneType == SceneType.DomeBattle); ConfigureGroup(domeUICanvasGroup, currentSceneType == SceneType.DomeBattle); SetElementsVisibility(worldMapHiddenElements, true); if (worldMapCamera != null) worldMapCamera.gameObject.SetActive(false); break; case "MainMenu": default: ConfigureGroup(sharedCanvasGroup, false); ConfigureGroup(battleCanvasGroup, false); ConfigureGroup(worldMapCanvasGroup, false); ConfigureGroup(inGameMenuCanvasGroup, false); ConfigureGroup(wagonHotbarCanvasGroup, false); ConfigureGroup(domeUICanvasGroup, false); SetElementsVisibility(worldMapHiddenElements, false); if (worldMapCamera != null) worldMapCamera.gameObject.SetActive(false); break; } }
     private void ConfigureGroup(CanvasGroup group, bool visible, bool interactable = true) { if (group == null) return; group.alpha = visible ? 1f : 0f; group.interactable = visible && interactable; group.blocksRaycasts = visible && interactable; }
     private void SetElementsVisibility(List<GameObject> elements, bool isVisible) { if (elements == null) return; foreach (var element in elements) { if (element != null) { element.SetActive(isVisible); } } }
     private IEnumerator SwitchToSceneExact(string sceneName) { sceneName = NormalizeSceneName(sceneName); var target = SceneManager.GetSceneByName(sceneName); bool targetAlreadyLoaded = target.isLoaded; var toUnload = new List<Scene>(); for (int i = 0; i < SceneManager.sceneCount; i++) { var s = SceneManager.GetSceneAt(i); if (!s.isLoaded) continue; bool isCore = !string.IsNullOrEmpty(coreSceneName) && NormalizeSceneName(s.name) == coreSceneName; bool isTarget = NormalizeSceneName(s.name) == sceneName; if (!isCore && !isTarget) toUnload.Add(s); } foreach (var s in toUnload) { yield return SceneManager.UnloadSceneAsync(s); } if (!targetAlreadyLoaded) { yield return SceneManager.LoadSceneAsync(sceneName, LoadSceneMode.Additive); target = SceneManager.GetSceneByName(sceneName); } if (target.IsValid()) { SceneManager.SetActiveScene(target); } currentLevelScene = sceneName; yield return null; }

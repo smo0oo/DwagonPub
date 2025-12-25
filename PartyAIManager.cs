@@ -31,10 +31,14 @@ public class PartyAIManager : MonoBehaviour
         else { instance = this; }
     }
 
+    void Start()
+    {
+        StartCoroutine(InitialPopulate());
+    }
+
     void OnEnable()
     {
         PartyManager.OnActivePlayerChanged += HandleActivePlayerChanged;
-        StartCoroutine(InitialPopulate());
     }
 
     void OnDisable()
@@ -47,6 +51,27 @@ public class PartyAIManager : MonoBehaviour
         yield return null;
         RefreshAIList();
         AssignFormationSlots();
+
+        if (ActivePlayer != null)
+        {
+            HandleActivePlayerChanged(ActivePlayer);
+        }
+    }
+
+    // FIX 2: Exposed method to force state update from GameManager explicitly
+    public void ForceUpdateState(bool isTownMode)
+    {
+        RefreshAIList();
+        AssignFormationSlots();
+
+        foreach (var member in partyManager.partyMembers)
+        {
+            if (member == null) continue;
+            bool isLeader = (member == ActivePlayer);
+
+            bool shouldAIBeActive = !isLeader && !isTownMode;
+            SetAIComponentsActive(member, shouldAIBeActive);
+        }
     }
 
     public void EnterTownMode()
@@ -65,7 +90,6 @@ public class PartyAIManager : MonoBehaviour
             {
                 member.SetActive(true);
                 if (agent != null) agent.enabled = true;
-
                 SetAIComponentsActive(member, false);
             }
             else // Followers
@@ -77,9 +101,6 @@ public class PartyAIManager : MonoBehaviour
                     agent.enabled = true;
                     agent.Warp(point.transform.position);
                 }
-
-                // FIX: In Town Mode, we assume followers are static NPCs, so we force AI OFF.
-                // This prevents them from trying to pathfind to the player.
                 SetAIComponentsActive(member, false);
             }
         }
@@ -106,7 +127,7 @@ public class PartyAIManager : MonoBehaviour
             {
                 member.SetActive(true);
                 if (agent != null) agent.enabled = true;
-                SetAIComponentsActive(member, true); // AI is ON for combat/dungeon
+                SetAIComponentsActive(member, true);
             }
         }
 
@@ -124,8 +145,6 @@ public class PartyAIManager : MonoBehaviour
         RefreshAIList();
         AssignFormationSlots();
 
-        // FIX: Check the current Scene Type. 
-        // If we are in Town, NO ONE should have AI enabled ( Followers should be inactive/static ).
         bool isTownMode = false;
         if (GameManager.instance != null)
         {
@@ -136,11 +155,6 @@ public class PartyAIManager : MonoBehaviour
         {
             if (member == null) continue;
             bool isLeader = (member == newActivePlayer);
-
-            // Logic:
-            // 1. Leader always has AI OFF (Controlled by Input).
-            // 2. If Town Mode, Followers have AI OFF (Static/NPC).
-            // 3. If NOT Town Mode (Dungeon/Combat), Followers have AI ON (Following).
 
             bool shouldAIBeActive = !isLeader && !isTownMode;
             SetAIComponentsActive(member, shouldAIBeActive);
