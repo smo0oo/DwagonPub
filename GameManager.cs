@@ -243,8 +243,6 @@ public class GameManager : MonoBehaviour
         }
 
         // 3. APPLY PER-PLAYER CONFIG (Standard)
-        // If info is null, we assume standard Active state for everyone (Dungeon/Combat default)
-
         bool anyControllable = false;
 
         for (int i = 0; i < PartyManager.instance.partyMembers.Count; i++)
@@ -252,7 +250,6 @@ public class GameManager : MonoBehaviour
             GameObject member = PartyManager.instance.partyMembers[i];
             if (member == null) continue;
 
-            // Default to Active if info is missing or list is short
             PlayerSceneState state = PlayerSceneState.Active;
             if (info != null && i < info.playerConfigs.Count)
                 state = info.playerConfigs[i].state;
@@ -277,26 +274,18 @@ public class GameManager : MonoBehaviour
             }
         }
 
-        // 4. SCENE TYPE OVERRIDES (The Fix!)
-        // Even if config says "Active", the Scene Type determines the rules of engagement and switching.
-
+        // 4. SCENE TYPE OVERRIDES
         if (currentSceneType == SceneType.Town)
         {
-            // Towns: Force switching OFF, Force AI Passive, Ensure Leader is controlled.
             PartyManager.instance.SetPlayerSwitching(false);
             PartyAIManager.instance.EnterTownMode();
-
-            // We want the leader (0) active. 
-            // The config loop above set them Active/Controllable, but we ensure focus is here.
             PartyManager.instance.SetActivePlayer(0);
         }
         else
         {
-            // Dungeons/Combat: Respect the "Controllable" flag calculated above.
             PartyManager.instance.SetPlayerSwitching(anyControllable);
-
             if (anyControllable) PartyAIManager.instance.EnterCombatMode();
-            else PartyAIManager.instance.EnterTownMode(); // Fallback for pure cutscene setups
+            else PartyAIManager.instance.EnterTownMode();
         }
     }
 
@@ -338,12 +327,10 @@ public class GameManager : MonoBehaviour
         SceneInfo info = FindAnyObjectByType<SceneInfo>();
         if (info == null) { currentSceneType = SceneType.Dungeon; } else { currentSceneType = info.type; }
 
-        // --- 1. Apply Rules (Initial State) ---
         ApplySceneRules();
 
         if (DualModeManager.instance != null) DualModeManager.instance.ApplyTeamState(currentSceneType);
 
-        // --- 2. Refresh UI ---
         if (currentSceneType != SceneType.MainMenu && currentSceneType != SceneType.WorldMap)
         {
             if (InventoryUIController.instance != null && PartyManager.instance != null)
@@ -351,7 +338,6 @@ public class GameManager : MonoBehaviour
         }
         FindAnyObjectByType<UIPartyPortraitsManager>()?.RefreshAllPortraits();
 
-        // --- 3. UI Visibility & Positioning ---
         if (currentSceneType == SceneType.WorldMap)
         {
             SetUIVisibility("WorldMap");
@@ -368,10 +354,7 @@ public class GameManager : MonoBehaviour
         {
             SetUIVisibility((currentSceneType == SceneType.Cinematic) ? "Cinematic" : "InGame");
             if (!string.IsNullOrEmpty(fromNodeID)) lastKnownLocationNodeID = fromNodeID;
-
             SetPlayerModelsActive(true);
-
-            // IMPORTANT: MovePartyToSpawnPoint now strictly enforces visibility to prevent re-enabling hidden members
             MovePartyToSpawnPoint(spawnPointID);
         }
 
@@ -379,15 +362,12 @@ public class GameManager : MonoBehaviour
         if (elapsedTime < minimumLoadingScreenTime) yield return new WaitForSeconds(minimumLoadingScreenTime - elapsedTime);
 
         LoadingScreenManager.instance.HideLoadingScreen(fadeDuration);
-
         if (currentSceneType == SceneType.Town) ApplyTithePayment(info);
-
         isTransitioning = false;
     }
 
     private void MovePartyToSpawnPoint(string spawnPointID)
     {
-        // Fallback Logic for missing IDs
         PlayerSpawnPoint spawnPoint = null;
         if (!string.IsNullOrEmpty(spawnPointID))
         {
@@ -397,7 +377,6 @@ public class GameManager : MonoBehaviour
 
         if (spawnPoint == null)
         {
-            Debug.LogWarning($"[GameManager] Spawn Point '{spawnPointID}' not found. Falling back to default.");
             spawnPoint = FindObjectsByType<PlayerSpawnPoint>(FindObjectsSortMode.None).FirstOrDefault();
         }
 
@@ -418,63 +397,26 @@ public class GameManager : MonoBehaviour
             GameObject member = partyManager.partyMembers[i];
             if (member == null) continue;
 
-            // --- 1. DUAL MODE OVERRIDE (Strict Visibility Check) ---
             if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
             {
-                // Player 0 is always hidden in Dual Mode
-                if (i == 0)
-                {
-                    member.SetActive(false);
-                    continue;
-                }
-
-                if (currentSceneType == SceneType.Dungeon)
-                {
-                    // Hide if not in Dungeon Team
-                    if (!DualModeManager.instance.dungeonTeamIndices.Contains(i))
-                    {
-                        member.SetActive(false);
-                        continue;
-                    }
-                }
-                else if (currentSceneType == SceneType.DomeBattle)
-                {
-                    // If we just exited dungeon (Reunion), we allow activation (except P0).
-                    // If we did NOT just exit (DoorController Switch), we MUST hide Dungeon Team.
-                    if (!justExitedDungeon)
-                    {
-                        if (DualModeManager.instance.dungeonTeamIndices.Contains(i))
-                        {
-                            member.SetActive(false);
-                            continue;
-                        }
-                    }
-                }
+                if (i == 0) { member.SetActive(false); continue; }
+                if (currentSceneType == SceneType.Dungeon) { if (!DualModeManager.instance.dungeonTeamIndices.Contains(i)) { member.SetActive(false); continue; } }
+                else if (currentSceneType == SceneType.DomeBattle) { if (!justExitedDungeon) { if (DualModeManager.instance.dungeonTeamIndices.Contains(i)) { member.SetActive(false); continue; } } }
             }
 
-            // --- 2. SCENE INFO STATE CHECK ---
             PlayerSceneState state = PlayerSceneState.Active;
-            if (info != null && i < info.playerConfigs.Count)
-            {
-                state = info.playerConfigs[i].state;
-            }
+            if (info != null && i < info.playerConfigs.Count) state = info.playerConfigs[i].state;
 
-            // Dual Mode Hidden logic handles its own above, but if standard logic says Hidden, obey it.
-            // (Unless Dual Mode is Active, which we checked first, so this is safe).
             if (state == PlayerSceneState.Hidden && !(DualModeManager.instance != null && DualModeManager.instance.isDualModeActive))
             {
                 member.SetActive(false);
                 continue;
             }
 
-            // --- 3. POSITIONING ---
             NavMeshAgent agent = member.GetComponent<NavMeshAgent>();
             if (agent != null) agent.enabled = false;
 
             bool positioned = false;
-
-            // ONLY look for custom markers if NOT player 0 (who always stays at main spawn)
-            // or if specific state dictates it.
             if (i != 0 && (state == PlayerSceneState.SpawnAtMarker || (currentSceneType == SceneType.Town && townSpawns != null && townSpawns.Length > 0)))
             {
                 TownCharacterSpawnPoint mySpawn = townSpawns.FirstOrDefault(t => t.partyMemberIndex == i);
@@ -492,24 +434,14 @@ public class GameManager : MonoBehaviour
                 member.transform.localRotation = Quaternion.identity;
             }
 
-            // --- 4. RESTORE COMPONENT STATE ---
             bool shouldBeActive = true;
-            // Inactive/SpawnAtMarker players are visible but have disabled agents
             bool shouldHaveControl = (state == PlayerSceneState.Active);
-
             member.SetActive(shouldBeActive);
 
             if (agent != null)
             {
-                if (shouldHaveControl)
-                {
-                    agent.enabled = true;
-                    agent.Warp(member.transform.position);
-                }
-                else
-                {
-                    agent.enabled = false;
-                }
+                if (shouldHaveControl) { agent.enabled = true; agent.Warp(member.transform.position); }
+                else { agent.enabled = false; }
             }
         }
     }
@@ -553,7 +485,6 @@ public class GameManager : MonoBehaviour
         }
         if (SaveManager.instance != null) SaveManager.instance.RestoreDualModeState(data);
         if (InventoryUIController.instance != null) InventoryUIController.instance.RefreshAllPlayerDisplays(PartyManager.instance.ActivePlayer);
-
         if (isWorldMapScene) SetUIVisibility("WorldMap"); else if (currentSceneType == SceneType.Cinematic) SetUIVisibility("Cinematic"); else SetUIVisibility("InGame");
         SetPlayerModelsActive(!isWorldMapScene); SetPlayerMovementComponentsActive(!isWorldMapScene);
         LoadingScreenManager.instance.HideLoadingScreen(fadeDuration); isTransitioning = false;
@@ -577,19 +508,106 @@ public class GameManager : MonoBehaviour
         SetPlayerMovementComponentsActive(!isSequenceActive);
     }
 
+    // --- NEW: Dedicated Dialogue State Handling (Prevents Warping) ---
+    public void SetDialogueState(bool isInDialogue)
+    {
+        if (isInDialogue)
+        {
+            // Enter Dialogue: Behave like a Sequence (Disable all inputs/AI)
+            SetPlayerMovementComponentsActive(false);
+
+            // Hide HUD elements if desired
+            if (sharedCanvasGroup != null) ConfigureGroup(sharedCanvasGroup, false);
+            if (battleCanvasGroup != null) ConfigureGroup(battleCanvasGroup, false);
+        }
+        else
+        {
+            // Exit Dialogue: Manually restore controls WITHOUT calling ApplySceneRules() 
+            // ApplySceneRules() is responsible for warping players to spawn points, which we want to avoid here.
+
+            if (playerPartyObject != null)
+            {
+                // 1. Re-enable PartyAIManager (so NUCs can eventually think)
+                PartyAIManager partyAI = playerPartyObject.GetComponent<PartyAIManager>();
+                if (partyAI != null) partyAI.enabled = true;
+
+                // 2. Re-enable NavMeshAgents (so they can physically move)
+                foreach (var agent in playerPartyObject.GetComponentsInChildren<NavMeshAgent>(true))
+                {
+                    if (agent.gameObject.activeInHierarchy)
+                    {
+                        agent.enabled = true;
+                        agent.isStopped = false;
+                    }
+                }
+
+                // 3. Re-assign Active Player Control Logic
+                if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
+                {
+                    int index = PartyManager.instance.partyMembers.IndexOf(PartyManager.instance.ActivePlayer);
+                    if (index != -1) PartyManager.instance.SetActivePlayer(index);
+                }
+            }
+
+            // 4. Restore UI Visibility based on scene
+            if (currentSceneType == SceneType.WorldMap) SetUIVisibility("WorldMap");
+            else if (currentSceneType == SceneType.Cinematic) SetUIVisibility("Cinematic");
+            else SetUIVisibility("InGame");
+        }
+    }
+
     public void SetPlayerMovementComponentsActive(bool isActive)
     {
         if (playerPartyObject == null || PartyManager.instance == null) return;
+
         if (!isActive)
         {
-            foreach (var animator in playerPartyObject.GetComponentsInChildren<Animator>(true)) { animator.SetFloat("Speed", 0f); animator.SetBool("IsMoving", false); }
-            foreach (var agent in playerPartyObject.GetComponentsInChildren<NavMeshAgent>(true)) { if (agent.isActiveAndEnabled) agent.ResetPath(); agent.enabled = false; }
-            foreach (var movement in playerPartyObject.GetComponentsInChildren<PlayerMovement>(true)) { movement.enabled = false; }
-            foreach (var ai in playerPartyObject.GetComponentsInChildren<PartyMemberAI>(true)) { ai.enabled = false; }
-            PartyAIManager partyAI = playerPartyObject.GetComponent<PartyAIManager>(); if (partyAI != null) { partyAI.enabled = false; }
+            // FIX: Use the correct Animator parameters (VelocityX, VelocityZ) 
+            // instead of Speed/IsMoving to stop animations cleanly.
+            foreach (var animator in playerPartyObject.GetComponentsInChildren<Animator>(true))
+            {
+                if (animator.runtimeAnimatorController != null)
+                {
+                    // Reset blend tree parameters to 0 (Idle)
+                    animator.SetFloat("VelocityX", 0f);
+                    animator.SetFloat("VelocityZ", 0f);
+                }
+            }
+
+            // Correctly disable Agents without error
+            foreach (var agent in playerPartyObject.GetComponentsInChildren<NavMeshAgent>(true))
+            {
+                if (agent.isActiveAndEnabled)
+                {
+                    agent.ResetPath();
+                    agent.velocity = Vector3.zero;
+                    agent.isStopped = true;
+                }
+                agent.enabled = false;
+            }
+
+            foreach (var movement in playerPartyObject.GetComponentsInChildren<PlayerMovement>(true))
+            {
+                movement.enabled = false;
+            }
+
+            foreach (var ai in playerPartyObject.GetComponentsInChildren<PartyMemberAI>(true))
+            {
+                ai.enabled = false;
+            }
+
+            PartyAIManager partyAI = playerPartyObject.GetComponent<PartyAIManager>();
+            if (partyAI != null)
+            {
+                partyAI.enabled = false;
+            }
+
             return;
         }
-        ApplySceneRules(); // Re-apply current scene rules to ensure correct active/inactive states
+
+        // NOTE: This causes warping/spawn-point resetting, so we DON'T use it for ending dialogue.
+        // We only use ApplySceneRules() for full scene loads or resets.
+        ApplySceneRules();
     }
 
     private static string NormalizeSceneName(string s) { if (string.IsNullOrEmpty(s)) return s; if (s.EndsWith(".unity")) s = Path.GetFileNameWithoutExtension(s); int slash = s.LastIndexOf('/'); if (slash >= 0 && slash < s.Length - 1) s = s[(slash + 1)..]; return s; }
