@@ -1,6 +1,7 @@
 using UnityEngine;
+using UnityEngine.Events; // Required for UnityEvent
 
-[RequireComponent(typeof(SphereCollider))] // This now specifies a concrete collider type.
+[RequireComponent(typeof(SphereCollider))]
 public class PatrolPoint : MonoBehaviour
 {
     [Header("Patrol Behavior")]
@@ -11,17 +12,20 @@ public class PatrolPoint : MonoBehaviour
     public float maxWaitTime = 0f;
 
     [Header("Pathing Override")]
-    [Tooltip("OPTIONAL: Forcing the AI to go to a specific point next. Overrides both linear and random pathing.")]
     public PatrolPoint nextPointOverride;
-
-    [Tooltip("If 'Next Point Override' is not set, checking this will make the AI move to a random point from its list instead of the next one in order.")]
     public bool jumpToRandomPoint = false;
 
-    [Header("Animation")]
-    [Tooltip("The name of an animation trigger to play when the AI arrives.")]
+    [Header("Events")]
+    [Tooltip("The name of an animation trigger to play (e.g. 'Wave', 'Sit').")]
     public string animationTriggerName;
 
-    private void Awake()
+    [Tooltip("Calls a method with this name on the NPC script itself (e.g. 'HealSelf').")]
+    public string sendMessageToNPC;
+
+    [Tooltip("Generic events to fire when any NPC arrives here (e.g. Open Door, Play Sound).")]
+    public UnityEvent onArrive; // The "Event" list in Inspector
+
+private void Awake()
     {
         // This will find the SphereCollider and ensure it's a trigger.
         Collider col = GetComponent<Collider>();

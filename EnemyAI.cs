@@ -27,7 +27,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     [Header("Line of Sight")]
     public float lostSightSearchDuration = 5f;
     private float lastLostSightCheckTime;
-    private const float LOS_CHECK_INTERVAL = 0.2f; // Check LOS 5 times per second instead of 10
+    private const float LOS_CHECK_INTERVAL = 0.2f;
     private bool cachedHasLOS = false;
 
     [Header("Combat Style")]
@@ -121,8 +121,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     private IEnumerator AIThinkRoutine()
     {
-        yield return new WaitForSeconds(UnityEngine.Random.Range(0f, 0.2f)); // Stagger starts
-        WaitForSeconds wait = new WaitForSeconds(0.1f); // 10 ticks per second
+        yield return new WaitForSeconds(UnityEngine.Random.Range(0f, 0.2f));
+        WaitForSeconds wait = new WaitForSeconds(0.1f);
 
         while (!isDead && this.enabled)
         {
@@ -331,6 +331,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         SetAIStatus("Combat", assignedSurroundPoint != null ? "Circling" : "Waiting");
     }
 
+    // --- UPDATED: Idle/Patrol Logic with Event Support ---
     private void UpdateIdleState()
     {
         currentTarget = targeting.FindBestTarget(null);
@@ -364,6 +365,26 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         else if (!navMeshAgent.pathPending && navMeshAgent.remainingDistance < 0.5f)
         {
             PatrolPoint currentPoint = collectedPatrolPoints[currentPatrolIndex];
+
+            // 1. Play Animation
+            if (!string.IsNullOrEmpty(currentPoint.animationTriggerName) && animator != null)
+            {
+                animator.SetTrigger(currentPoint.animationTriggerName);
+            }
+
+            // 2. Fire Unity Events
+            if (currentPoint.onArrive != null)
+            {
+                currentPoint.onArrive.Invoke();
+            }
+
+            // 3. Send Message to Self
+            if (!string.IsNullOrEmpty(currentPoint.sendMessageToNPC))
+            {
+                SendMessage(currentPoint.sendMessageToNPC, SendMessageOptions.DontRequireReceiver);
+            }
+
+            // 4. Handle Wait Logic
             float waitTime = UnityEngine.Random.Range(currentPoint.minWaitTime, currentPoint.maxWaitTime);
             if (waitTime > 0)
             {
