@@ -10,4 +10,18 @@ public class StatefulEntity : MonoBehaviour
     {
         uniqueId = System.Guid.NewGuid().ToString();
     }
+
+    // --- REGISTRY LOGIC ---
+    // We register as soon as the object wakes up.
+    // We only unregister if the object is destroyed (scene unload), 
+    // NOT when it is just disabled (SetActive false).
+    void Awake()
+    {
+        SceneStateManager.RegisterEntity(this);
+    }
+
+    void OnDestroy()
+    {
+        SceneStateManager.UnregisterEntity(this);
+    }
 }

@@ -7,7 +7,7 @@ public class ObjectState
 {
     public Vector3 Position;
     public Quaternion Rotation;
-    public bool IsActive; // NEW: Store whether it is on or off
+    public bool IsActive;
 }
 
 [System.Serializable]
@@ -23,6 +23,27 @@ public class SceneStateManager : MonoBehaviour
 {
     public static SceneStateManager instance;
 
+    // --- THE REGISTRY ---
+    // Holds references to all tracked objects in the current scene, active or inactive.
+    private static HashSet<StatefulEntity> registeredEntities = new HashSet<StatefulEntity>();
+
+    public static void RegisterEntity(StatefulEntity entity)
+    {
+        if (entity != null && !registeredEntities.Contains(entity))
+        {
+            registeredEntities.Add(entity);
+        }
+    }
+
+    public static void UnregisterEntity(StatefulEntity entity)
+    {
+        if (registeredEntities.Contains(entity))
+        {
+            registeredEntities.Remove(entity);
+        }
+    }
+    // --------------------
+
     private Dictionary<string, Dictionary<string, ObjectState>> sceneObjectStates = new Dictionary<string, Dictionary<string, ObjectState>>();
     private Dictionary<string, List<DroppedItemState>> sceneDroppedItemStates = new Dictionary<string, List<DroppedItemState>>();
 
@@ -35,22 +56,29 @@ public class SceneStateManager : MonoBehaviour
     public void CaptureSceneState(string sceneName, GameObject worldItemPrefab)
     {
         // --- Capture Stateful Entities ---
-        // FIX: Added 'FindObjectsInactive.Include' to find the NPC you just disabled
-        var entities = FindObjectsByType<StatefulEntity>(FindObjectsInactive.Include, FindObjectsSortMode.None);
-
+        // New Logic: Iterate over the registry instead of searching the scene.
+        // This ensures we catch objects even if they were disabled script-wise.
         var entityStates = new Dictionary<string, ObjectState>();
-        foreach (var entity in entities)
+
+        foreach (var entity in registeredEntities)
         {
-            entityStates[entity.uniqueId] = new ObjectState
+            if (entity == null) continue;
+
+            if (!string.IsNullOrEmpty(entity.uniqueId))
             {
-                Position = entity.transform.position,
-                Rotation = entity.transform.rotation,
-                IsActive = entity.gameObject.activeSelf // NEW: Save the active state
-            };
+                entityStates[entity.uniqueId] = new ObjectState
+                {
+                    Position = entity.transform.position,
+                    Rotation = entity.transform.rotation,
+                    IsActive = entity.gameObject.activeSelf // Save the disabled state correctly
+                };
+            }
         }
         sceneObjectStates[sceneName] = entityStates;
 
         // --- Capture Dropped WorldItems ---
+        // WorldItems are dynamic, so we still find them, but we might want to register them too eventually.
+        // For now, finding them is fine as they are usually active when dropped.
         var worldItems = FindObjectsByType<WorldItem>(FindObjectsSortMode.None);
         var droppedItemsList = new List<DroppedItemState>();
         foreach (var item in worldItems)
@@ -72,17 +100,20 @@ public class SceneStateManager : MonoBehaviour
         // --- Restore Stateful Entities ---
         if (sceneObjectStates.TryGetValue(sceneName, out var entityStates))
         {
-            // FIX: Search inactive objects too so we can find them and ensure they stay disabled
-            var entities = FindObjectsByType<StatefulEntity>(FindObjectsInactive.Include, FindObjectsSortMode.None);
-
-            foreach (var entity in entities)
+            // Iterate over the registry. 
+            // Since the scene just loaded, all default NPCs have Awoken and Registered themselves (Active).
+            foreach (var entity in registeredEntities)
             {
+                if (entity == null) continue;
+
                 if (entityStates.TryGetValue(entity.uniqueId, out var savedState))
                 {
+                    // Restore position
                     entity.transform.position = savedState.Position;
                     entity.transform.rotation = savedState.Rotation;
 
-                    // NEW: Apply the saved active state
+                    // Restore Active State
+                    // If 'savedState.IsActive' is false, this will immediately hide the NPC.
                     entity.gameObject.SetActive(savedState.IsActive);
                 }
             }
