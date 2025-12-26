@@ -1,6 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
 using System.Linq;
+using PixelCrushers.DialogueSystem; // Required for Lua checks
 
 [System.Serializable]
 public class ObjectState
@@ -25,6 +26,7 @@ public class SceneStateManager : MonoBehaviour
 
     // --- THE REGISTRY ---
     // Holds references to all tracked objects in the current scene, active or inactive.
+    // Populated by StatefulEntity.Awake()
     private static HashSet<StatefulEntity> registeredEntities = new HashSet<StatefulEntity>();
 
     public static void RegisterEntity(StatefulEntity entity)
@@ -56,7 +58,7 @@ public class SceneStateManager : MonoBehaviour
     public void CaptureSceneState(string sceneName, GameObject worldItemPrefab)
     {
         // --- Capture Stateful Entities ---
-        // New Logic: Iterate over the registry instead of searching the scene.
+        // Iterate over the registry instead of searching the scene.
         // This ensures we catch objects even if they were disabled script-wise.
         var entityStates = new Dictionary<string, ObjectState>();
 
@@ -70,15 +72,14 @@ public class SceneStateManager : MonoBehaviour
                 {
                     Position = entity.transform.position,
                     Rotation = entity.transform.rotation,
-                    IsActive = entity.gameObject.activeSelf // Save the disabled state correctly
+                    IsActive = entity.gameObject.activeSelf // Save the current active/inactive state
                 };
             }
         }
         sceneObjectStates[sceneName] = entityStates;
 
         // --- Capture Dropped WorldItems ---
-        // WorldItems are dynamic, so we still find them, but we might want to register them too eventually.
-        // For now, finding them is fine as they are usually active when dropped.
+        // WorldItems are dynamic, so we find them in the scene.
         var worldItems = FindObjectsByType<WorldItem>(FindObjectsSortMode.None);
         var droppedItemsList = new List<DroppedItemState>();
         foreach (var item in worldItems)
@@ -90,6 +91,7 @@ public class SceneStateManager : MonoBehaviour
                 Position = item.transform.position,
                 Rotation = item.transform.rotation
             });
+            // We destroy them here because they will be respawned by RestoreSceneState next time
             Destroy(item.gameObject);
         }
         sceneDroppedItemStates[sceneName] = droppedItemsList;
@@ -97,26 +99,42 @@ public class SceneStateManager : MonoBehaviour
 
     public void RestoreSceneState(string sceneName, GameObject worldItemPrefab)
     {
-        // --- Restore Stateful Entities ---
-        if (sceneObjectStates.TryGetValue(sceneName, out var entityStates))
+        // 1. Get the save data for this scene (it might be null if we haven't visited it yet)
+        sceneObjectStates.TryGetValue(sceneName, out var entityStates);
+
+        // 2. Iterate over ALL entities currently in the scene
+        // Since the scene just loaded, all entities (active or inactive) have run Awake() and registered themselves.
+        foreach (var entity in registeredEntities)
         {
-            // Iterate over the registry. 
-            // Since the scene just loaded, all default NPCs have Awoken and Registered themselves (Active).
-            foreach (var entity in registeredEntities)
+            if (entity == null) continue;
+
+            // --- LOGIC GATE (New) ---
+            // If the entity has an 'NPCSpawnCondition' script, we check that FIRST.
+            // This allows the Dialogue System (Variables) to veto the existence of an object.
+            if (entity.TryGetComponent<NPCSpawnCondition>(out var condition))
             {
-                if (entity == null) continue;
-
-                if (entityStates.TryGetValue(entity.uniqueId, out var savedState))
+                if (!condition.ShouldSpawn())
                 {
-                    // Restore position
-                    entity.transform.position = savedState.Position;
-                    entity.transform.rotation = savedState.Rotation;
-
-                    // Restore Active State
-                    // If 'savedState.IsActive' is false, this will immediately hide the NPC.
-                    entity.gameObject.SetActive(savedState.IsActive);
+                    // The Lua condition failed (e.g. "Quest_Complete" is false).
+                    // Force the object to be disabled and SKIP restoring saved data.
+                    entity.gameObject.SetActive(false);
+                    continue;
                 }
             }
+
+            // --- RESTORE SAVED STATE ---
+            // If we passed the logic gate, we check if we have saved data (Position/Rotation/Active).
+            if (entityStates != null && entityStates.TryGetValue(entity.uniqueId, out var savedState))
+            {
+                entity.transform.position = savedState.Position;
+                entity.transform.rotation = savedState.Rotation;
+
+                // Restore the state from the save file.
+                // Note: If savedState.IsActive is false (e.g. you killed them), they stay hidden.
+                entity.gameObject.SetActive(savedState.IsActive);
+            }
+            // If no save data exists, the object remains in its default Scene state (Position/Active).
+            // Since the logic gate passed (or didn't exist), it is allowed to exist.
         }
 
         // --- Restore Dropped WorldItems ---

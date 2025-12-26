@@ -3,6 +3,14 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
+[System.Serializable]
+public class DefaultLoadoutItem
+{
+    public ItemData item;
+    public EquipmentType targetSlot;
+    public int quantity = 1;
+}
+
 public class PlayerEquipment : MonoBehaviour
 {
     public event Action<EquipmentType> OnEquipmentChanged;
@@ -17,8 +25,9 @@ public class PlayerEquipment : MonoBehaviour
     public Transform leftHandAttachPoint;
 
     [Header("Defaults")]
-    [Tooltip("Assign ItemData for the 'Naked' version of slots (e.g., Naked Chest, Naked Feet).")]
-    public List<ItemData> defaultEquipment;
+    [Tooltip("Define items and exactly which slot they go into (e.g., Sword -> RightHand).")]
+    // RENAMED to force Unity to reset the serialization data for this field
+    public List<DefaultLoadoutItem> startingLoadout;
 
     private Dictionary<EquipmentType, GameObject> equippedVisuals = new Dictionary<EquipmentType, GameObject>();
     private Inventory playerInventory;
@@ -36,113 +45,42 @@ public class PlayerEquipment : MonoBehaviour
         // Initialize dictionary
         foreach (EquipmentType slot in Enum.GetValues(typeof(EquipmentType)))
         {
-            equippedItems.Add(slot, null);
+            equippedItems[slot] = null;
             equippedVisuals.Add(slot, null);
         }
     }
 
     void Start()
     {
-        // Apply defaults on startup for any empty slots
         EquipDefaults();
     }
 
     private void EquipDefaults()
     {
-        foreach (EquipmentType slot in Enum.GetValues(typeof(EquipmentType)))
+        if (startingLoadout == null) return;
+
+        foreach (var entry in startingLoadout)
         {
-            if (equippedItems[slot] == null)
-            {
-                // Find a default for this slot
-                ItemData defaultItem = defaultEquipment.FirstOrDefault(x => IsItemForSlot(x, slot));
-                if (defaultItem != null)
-                {
-                    EquipVisual(slot, defaultItem);
-                }
-            }
-        }
-    }
+            if (entry.item == null) continue;
 
-    // Helper to check if an item matches a slot (checks Armour stats)
-    private bool IsItemForSlot(ItemData item, EquipmentType slot)
-    {
-        if (item == null || item.stats is not ItemArmourStats armorStats) return false;
+            // Create and Equip
+            ItemStack newItem = new ItemStack(entry.item, entry.quantity);
 
-        // --- MODIFIED: Removed Shoulders and Arms cases ---
-        switch (armorStats.armourSlot)
-        {
-            case ItemArmourStats.ArmourSlot.Head: return slot == EquipmentType.Head;
-            case ItemArmourStats.ArmourSlot.Chest: return slot == EquipmentType.Chest;
-            case ItemArmourStats.ArmourSlot.Hands: return slot == EquipmentType.Hands;
-            case ItemArmourStats.ArmourSlot.Legs: return slot == EquipmentType.Legs;
-            case ItemArmourStats.ArmourSlot.Feet: return slot == EquipmentType.Feet;
-            default: return false;
-        }
-    }
+            // 1. Update Data
+            equippedItems[entry.targetSlot] = newItem;
 
-    public ItemStack EquipItem(EquipmentType slot, ItemStack itemToEquip)
-    {
-        if (playerInventory == null) return itemToEquip;
-
-        ItemStack previouslyEquippedItem = equippedItems[slot];
-
-        // 1. Remove old visual
-        if (previouslyEquippedItem != null)
-        {
-            DestroyVisual(slot);
-        }
-        else
-        {
-            // If empty, destroy default visual
-            DestroyVisual(slot);
-        }
-
-        // 2. Set Data
-        equippedItems[slot] = itemToEquip;
-
-        // 3. Create new visual
-        if (itemToEquip != null)
-        {
-            EquipVisual(slot, itemToEquip.itemData);
+            // 2. Create Visual
+            EquipVisual(entry.targetSlot, entry.item);
         }
 
         playerStats?.CalculateFinalStats();
-        OnEquipmentChanged?.Invoke(slot);
-
-        return previouslyEquippedItem;
     }
 
-    public bool UnequipItem(EquipmentType slot)
-    {
-        if (playerInventory == null || equippedItems[slot] == null) return false;
-
-        ItemStack itemToUnequip = equippedItems[slot];
-
-        if (playerInventory.AddItem(itemToUnequip.itemData, itemToUnequip.quantity))
-        {
-            // 1. Remove Data
-            equippedItems[slot] = null;
-
-            // 2. Destroy Armor Visual
-            DestroyVisual(slot);
-
-            // 3. Restore Default Visual
-            ItemData defaultItem = defaultEquipment.FirstOrDefault(x => IsItemForSlot(x, slot));
-            if (defaultItem != null)
-            {
-                EquipVisual(slot, defaultItem);
-            }
-
-            playerStats?.CalculateFinalStats();
-            OnEquipmentChanged?.Invoke(slot);
-            return true;
-        }
-        return false;
-    }
+    // --- VISUAL LOGIC ---
 
     private void EquipVisual(EquipmentType slot, ItemData itemData)
     {
-        if (itemData.equippedPrefab == null) return;
+        if (itemData == null || itemData.equippedPrefab == null) return;
 
         DestroyVisual(slot);
 
@@ -180,23 +118,6 @@ public class PlayerEquipment : MonoBehaviour
         }
     }
 
-    public ItemStack RemoveItemFromSlot(EquipmentType slot)
-    {
-        ItemStack removedItem = equippedItems[slot];
-        if (removedItem != null)
-        {
-            equippedItems[slot] = null;
-            DestroyVisual(slot);
-
-            ItemData defaultItem = defaultEquipment.FirstOrDefault(x => IsItemForSlot(x, slot));
-            if (defaultItem != null) EquipVisual(slot, defaultItem);
-
-            playerStats?.CalculateFinalStats();
-            OnEquipmentChanged?.Invoke(slot);
-        }
-        return removedItem;
-    }
-
     private Transform GetAttachPoint(EquipmentType slot)
     {
         switch (slot)
@@ -204,6 +125,104 @@ public class PlayerEquipment : MonoBehaviour
             case EquipmentType.RightHand: return rightHandAttachPoint;
             case EquipmentType.LeftHand: return leftHandAttachPoint;
             default: return null;
+        }
+    }
+
+    // --- EQUIPMENT LOGIC ---
+
+    public ItemStack EquipItem(EquipmentType slot, ItemStack itemToEquip)
+    {
+        ItemStack previouslyEquippedItem = equippedItems[slot];
+
+        // 1. Remove old visual
+        if (previouslyEquippedItem != null)
+        {
+            DestroyVisual(slot);
+        }
+
+        // 2. Set Data
+        equippedItems[slot] = itemToEquip;
+
+        // 3. Create new visual
+        if (itemToEquip != null)
+        {
+            EquipVisual(slot, itemToEquip.itemData);
+        }
+
+        playerStats?.CalculateFinalStats();
+        OnEquipmentChanged?.Invoke(slot);
+
+        return previouslyEquippedItem;
+    }
+
+    public void EquipItem(ItemData item, int quantity = 1)
+    {
+        EquipmentType slot = GetEquipmentSlot(item);
+        EquipItem(slot, new ItemStack(item, quantity));
+    }
+
+    public bool UnequipItem(EquipmentType slot)
+    {
+        if (playerInventory == null || equippedItems[slot] == null) return false;
+
+        ItemStack itemToUnequip = equippedItems[slot];
+
+        if (playerInventory.AddItem(itemToUnequip.itemData, itemToUnequip.quantity))
+        {
+            RemoveItemFromSlot(slot);
+            return true;
+        }
+        return false;
+    }
+
+    public ItemStack RemoveItemFromSlot(EquipmentType slot)
+    {
+        ItemStack removedItem = equippedItems[slot];
+        if (removedItem != null)
+        {
+            equippedItems[slot] = null;
+            DestroyVisual(slot);
+            playerStats?.CalculateFinalStats();
+            OnEquipmentChanged?.Invoke(slot);
+        }
+        return removedItem;
+    }
+
+    private EquipmentType GetEquipmentSlot(ItemData item)
+    {
+        if (item.stats is ItemArmourStats armourStats)
+        {
+            switch (armourStats.armourSlot)
+            {
+                case ItemArmourStats.ArmourSlot.Head: return EquipmentType.Head;
+                case ItemArmourStats.ArmourSlot.Chest: return EquipmentType.Chest;
+                case ItemArmourStats.ArmourSlot.Hands: return EquipmentType.Hands;
+                case ItemArmourStats.ArmourSlot.Belt: return EquipmentType.Belt;
+                case ItemArmourStats.ArmourSlot.Legs: return EquipmentType.Legs;
+                case ItemArmourStats.ArmourSlot.Feet: return EquipmentType.Feet;
+            }
+        }
+        if (item.stats is ItemWeaponStats) return EquipmentType.RightHand;
+        if (item.stats is ItemTrinketStats) return EquipmentType.Ring1;
+
+        return EquipmentType.RightHand;
+    }
+
+    // Support for Load Game
+    public void RestoreEquipment(Dictionary<EquipmentType, ItemStack> savedEquipment)
+    {
+        foreach (EquipmentType slot in Enum.GetValues(typeof(EquipmentType)))
+        {
+            equippedItems[slot] = null;
+        }
+
+        foreach (var kvp in savedEquipment)
+        {
+            if (kvp.Value != null && kvp.Value.itemData != null)
+            {
+                // Re-create the visual and data
+                EquipItem(kvp.Key, kvp.Value);
+            }
         }
     }
 }

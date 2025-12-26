@@ -163,7 +163,8 @@ public class DomeBattleManager : MonoBehaviour
         StartBattle();
     }
 
-    private void StartBattle()
+    // --- CHANGED TO PUBLIC for Timeline Signal Integration ---
+    public void StartBattle()
     {
         IsBattleActive = true;
         if (prepPhasePanel != null) prepPhasePanel.SetActive(false);
