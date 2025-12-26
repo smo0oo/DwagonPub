@@ -19,7 +19,6 @@ public class AITargeting : MonoBehaviour
 
     private Collider[] _targetBuffer = new Collider[50];
 
-    // --- MODIFIED: Accepts the current target to apply sticky bias ---
     public Transform FindBestTarget(Transform currentFocus = null)
     {
         LayerMask combinedMask = playerLayer | domeMarkerLayer;
@@ -47,8 +46,13 @@ public class AITargeting : MonoBehaviour
                 targetHealth = targetCollider.GetComponent<Health>() ?? targetCollider.GetComponentInParent<Health>();
             }
 
+            // --- FIX: Strictly ignore targets with NO Health component ---
+            // This prevents targeting "DomeMarkers" or props that don't have Health scripts
+            if (targetHealth == null) continue;
+            // ------------------------------------------------------------
+
             // 2. Dead/Downed Check
-            if (targetHealth != null && (targetHealth.isDowned || targetHealth.currentHealth <= 0))
+            if (targetHealth.isDowned || targetHealth.currentHealth <= 0)
             {
                 continue;
             }
@@ -60,9 +64,15 @@ public class AITargeting : MonoBehaviour
                 Vector3 targetPos = targetCollider.transform.position + Vector3.up;
                 Vector3 direction = targetPos - origin;
 
-                if (Physics.Raycast(origin, direction.normalized, direction.magnitude, obstacleLayers))
+                // --- FIX: Robust Raycast ---
+                // If we hit something, check if it's NOT the target. If we hit the target, LOS is good.
+                if (Physics.Raycast(origin, direction.normalized, out RaycastHit hit, direction.magnitude, obstacleLayers))
                 {
-                    continue;
+                    // If the ray hit something that isn't the target (and isn't a child of the target), we are blocked.
+                    if (hit.transform != targetCollider.transform && !hit.transform.IsChildOf(targetCollider.transform))
+                    {
+                        continue;
+                    }
                 }
             }
 
@@ -72,7 +82,6 @@ public class AITargeting : MonoBehaviour
 
             if (targetCollider.CompareTag("DomeMarker")) score *= domePriorityMultiplier;
 
-            // --- NEW: Sticky Aggro Bonus ---
             if (currentFocus != null && targetCollider.transform == currentFocus)
             {
                 score *= stickyAggroMultiplier;
