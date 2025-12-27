@@ -70,10 +70,10 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private float waitTimer = 0f;
     private string lastStatusMessage;
 
-    private enum AIState { Idle, Combat, Returning, Retreating }
+    // Track if we have been activated to prevent Start() from overriding Trigger activation
+    private bool hasBeenActivated = false;
 
-    void OnEnable() { PlayerAbilityHolder.OnPlayerAbilityUsed += HandlePlayerAbilityUsed; }
-    void OnDisable() { PlayerAbilityHolder.OnPlayerAbilityUsed -= HandlePlayerAbilityUsed; }
+    private enum AIState { Idle, Combat, Returning, Retreating }
 
     void Awake()
     {
@@ -103,41 +103,99 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         if (navMeshAgent != null) navMeshAgent.updateRotation = false;
 
         CollectPatrolPoints();
-        health.OnHealthChanged += HandleHealthChanged;
 
+        // --- FIX: Logic to prevent Start from disabling an already-active AI ---
+        if (startDeactivated && !hasBeenActivated)
+        {
+            DeactivateAI();
+        }
+        else
+        {
+            ActivateAI();
+        }
+
+        HandleHealthChanged();
+    }
+
+    // --- FIX: Lifecycle Management ---
+    // The Brain (AIThinkRoutine) is now tied to the Component being Enabled.
+    // This prevents the "Zombie" state where the component is checked ON but doing nothing.
+
+    void OnEnable()
+    {
+        PlayerAbilityHolder.OnPlayerAbilityUsed += HandlePlayerAbilityUsed;
+        if (health != null) health.OnHealthChanged += HandleHealthChanged;
         if (abilityHolder != null)
         {
             abilityHolder.OnCastStarted += HandleCastStarted;
             abilityHolder.OnCastFinished += HandleCastFinished;
         }
 
-        // --- UPDATED: Use proper activation logic even on Start ---
-        if (startDeactivated)
-            DeactivateAI();
-        else
-            ActivateAI(); // Changed from StartCoroutine(AIThinkRoutine())
-
-        HandleHealthChanged();
+        // Start thinking whenever we are enabled
+        if (!isDead) StartCoroutine(AIThinkRoutine());
     }
+
+    void OnDisable()
+    {
+        PlayerAbilityHolder.OnPlayerAbilityUsed -= HandlePlayerAbilityUsed;
+        if (health != null) health.OnHealthChanged -= HandleHealthChanged;
+        if (abilityHolder != null)
+        {
+            abilityHolder.OnCastStarted -= HandleCastStarted;
+            abilityHolder.OnCastFinished -= HandleCastFinished;
+        }
+
+        // Stop thinking whenever we are disabled
+        StopAllCoroutines();
+        if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
+        {
+            navMeshAgent.ResetPath();
+            navMeshAgent.velocity = Vector3.zero;
+        }
+    }
+
+    public void ActivateAI()
+    {
+        hasBeenActivated = true;
+        this.enabled = true; // Triggers OnEnable -> Starts Coroutine
+
+        if (navMeshAgent != null) navMeshAgent.enabled = true;
+        if (animator != null) animator.enabled = true;
+    }
+
+    public void DeactivateAI()
+    {
+        this.enabled = false; // Triggers OnDisable -> Stops Coroutine
+
+        if (navMeshAgent != null) navMeshAgent.enabled = false;
+        if (animator != null) animator.enabled = false;
+    }
+    // -------------------------------
 
     private IEnumerator AIThinkRoutine()
     {
-        // --- FIX: Warmup Wait ---
-        // Wait until the NavMeshAgent reports it is actually ON the NavMesh.
-        // This prevents the "SetDestination" error which happens if we try to move 
-        // in the very first frame after enabling the component.
-        while (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && !navMeshAgent.isOnNavMesh)
+        // 1. Warmup / Warp Logic
+        if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && !navMeshAgent.isOnNavMesh)
         {
-            yield return null; // Wait for next frame
+            if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 5.0f, NavMesh.AllAreas))
+            {
+                navMeshAgent.Warp(hit.position);
+            }
         }
-        // -----------------------
+
+        // Wait a few frames for binding
+        int timeout = 10;
+        while (timeout > 0 && navMeshAgent != null && navMeshAgent.isActiveAndEnabled && !navMeshAgent.isOnNavMesh)
+        {
+            timeout--;
+            yield return null;
+        }
 
         yield return new WaitForSeconds(UnityEngine.Random.Range(0f, 0.2f));
         WaitForSeconds wait = new WaitForSeconds(0.1f);
 
         while (!isDead && this.enabled)
         {
-            // Only think if the agent is valid to prevent log spam
             if (navMeshAgent != null && navMeshAgent.isOnNavMesh && navMeshAgent.isActiveAndEnabled)
             {
                 Think();
@@ -188,7 +246,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             targetLookPos = currentTarget.position;
             shouldRotate = true;
         }
-        // Only check velocity if agent is active and valid
         else if (navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh && navMeshAgent.velocity.sqrMagnitude > 0.1f)
         {
             targetLookPos = transform.position + navMeshAgent.velocity;
@@ -391,7 +448,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
                 navMeshAgent.SetDestination(collectedPatrolPoints[currentPatrolIndex].transform.position);
             }
         }
-        else if (!navMeshAgent.pathPending && navMeshAgent.remainingDistance < 0.5f)
+        else if (navMeshAgent.isOnNavMesh && !navMeshAgent.pathPending && navMeshAgent.remainingDistance < 0.5f)
         {
             PatrolPoint currentPoint = collectedPatrolPoints[currentPatrolIndex];
 
@@ -459,8 +516,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             return;
         }
 
-        // This line triggered the error because remainingDistance is accessed before binding
-        if (!navMeshAgent.pathPending && navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance)
+        if (navMeshAgent.isOnNavMesh && !navMeshAgent.pathPending && navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance)
         {
             navMeshAgent.ResetPath();
             currentState = AIState.Idle;
@@ -512,18 +568,13 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     {
         if (targeting != null && !targeting.checkLineOfSight) return true;
         if (target == null) return false;
-
         Vector3 origin = transform.position + Vector3.up;
         Vector3 targetPosition = target.position + Vector3.up;
         Vector3 direction = targetPosition - origin;
         float distance = direction.magnitude;
-
         if (Physics.Raycast(origin, direction.normalized, out RaycastHit hit, distance, targeting.obstacleLayers))
         {
-            if (hit.transform == target || hit.transform.IsChildOf(target))
-            {
-                return true;
-            }
+            if (hit.transform == target || hit.transform.IsChildOf(target)) return true;
             return false;
         }
         return true;
@@ -533,39 +584,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private void HandlePlayerAbilityUsed(PlayerAbilityHolder player, Ability usedAbility) { PlayerMovement playerMovement = player.GetComponentInParent<PlayerMovement>(); if (isDead || abilityHolder.IsCasting || playerMovement == null || playerMovement.TargetObject != this.gameObject) return; if (behaviorProfile != null) { foreach (var trigger in behaviorProfile.reactiveTriggers) { if (trigger.triggerType == usedAbility.abilityType) { if (UnityEngine.Random.value <= trigger.chanceToReact) { abilityHolder.UseAbility(trigger.reactionAbility, player.gameObject); break; } } } } }
     private void HandleCastStarted(string abilityName, float castDuration) { if (enemyHealthUI != null) enemyHealthUI.StartCast(abilityName, castDuration); SetAIStatus("Combat", "Casting"); if (navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath(); }
     private void HandleCastFinished() { if (enemyHealthUI != null) enemyHealthUI.StopCast(); }
-
-    // --- UPDATED: Force Snap to NavMesh on Activation ---
-    public void ActivateAI()
-    {
-        if (this.enabled) return;
-
-        this.enabled = true;
-        if (navMeshAgent != null)
-        {
-            navMeshAgent.enabled = true;
-
-            // Force the agent to snap to the NavMesh immediately. 
-            // This fixes the "SetDestination can only be called..." error 
-            // by ensuring isOnNavMesh is true before the logic runs.
-            if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 2.0f, NavMesh.AllAreas))
-            {
-                navMeshAgent.Warp(hit.position);
-            }
-        }
-
-        if (animator != null) animator.enabled = true;
-        StartCoroutine(AIThinkRoutine());
-    }
-
-    public void DeactivateAI()
-    {
-        if (!this.enabled) return;
-        if (navMeshAgent != null && navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath();
-        this.enabled = false;
-        if (navMeshAgent != null) navMeshAgent.enabled = false;
-        if (animator != null) animator.enabled = false;
-        StopAllCoroutines();
-    }
 
     public void ExecuteLeap(Vector3 destination, Action onLandAction) { movementHandler?.ExecuteLeap(destination, onLandAction); }
     public void ExecuteCharge(GameObject target, Ability chargeAbility) { if (abilitySelector.abilities.Contains(chargeAbility)) movementHandler?.ExecuteCharge(target, chargeAbility); }
