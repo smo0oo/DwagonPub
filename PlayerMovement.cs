@@ -291,13 +291,30 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             if (exit.interactionPoint != null) destination = exit.interactionPoint.position;
             currentInteractionRange = exit.activationDistance;
         }
-        // --- ADDED: Check for DungeonExit ---
         else if (targetObject.TryGetComponent<DungeonExit>(out var dungeonExit))
         {
-            // Use the specific interaction distance from the DungeonExit component
             currentInteractionRange = dungeonExit.interactionDistance;
         }
-        // ------------------------------------
+        // --- UPDATED: NPC Fixed Interaction Point Logic ---
+        else if (targetObject.TryGetComponent<NPCInteraction>(out var npc))
+        {
+            // Use the setting from the NPC itself
+            Vector3 targetSpot = npc.GetInteractionPosition();
+
+            // Validate NavMesh
+            if (NavMesh.SamplePosition(targetSpot, out NavMeshHit hit, 2.0f, NavMesh.AllAreas))
+            {
+                destination = hit.position;
+            }
+            else
+            {
+                destination = targetSpot;
+            }
+
+            // We want to walk *to* the spot exactly
+            currentInteractionRange = 0.2f;
+        }
+        // ----------------------------------------------
 
         navMeshAgent.stoppingDistance = currentInteractionRange;
         navMeshAgent.SetDestination(destination);
@@ -312,6 +329,8 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             yield return null;
         }
 
+        // Snap rotation to face the NPC
+        transform.LookAt(new Vector3(targetObject.transform.position.x, transform.position.y, targetObject.transform.position.z));
         navMeshAgent.ResetPath();
 
         if (targetObject.TryGetComponent<IInteractable>(out var interactable))

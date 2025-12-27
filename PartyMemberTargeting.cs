@@ -12,13 +12,8 @@ public class PartyMemberTargeting : MonoBehaviour
     [Range(0f, 1f)]
     public float healThreshold = 0.75f;
 
-    // --- NEW: Buffer for Non-Allocating Physics ---
     private Collider[] _enemyBuffer = new Collider[50];
 
-    /// <summary>
-    /// Finds the most wounded ally in the party who is below the heal threshold.
-    /// </summary>
-    // --- MODIFIED: Replaced LINQ with 'foreach' loop for zero garbage ---
     public PartyMemberAI FindWoundedAlly()
     {
         if (PartyAIManager.instance == null) return null;
@@ -33,6 +28,9 @@ public class PartyMemberTargeting : MonoBehaviour
             Health healthComponent = ai.GetComponent<Health>();
             if (healthComponent == null) continue;
 
+            // Ignore dead allies
+            if (healthComponent.isDowned || healthComponent.currentHealth <= 0) continue;
+
             float healthPercent = (float)healthComponent.currentHealth / healthComponent.maxHealth;
             if (healthPercent < healThreshold && healthPercent < lowestHealthPercent)
             {
@@ -44,10 +42,6 @@ public class PartyMemberTargeting : MonoBehaviour
         return mostWounded;
     }
 
-    /// <summary>
-    /// Finds the nearest enemy within the scan radius that has a clear line of sight.
-    /// </summary>
-    // --- MODIFIED: Replaced LINQ and OverlapSphere with Non-Alloc version ---
     public GameObject FindNearestEnemy()
     {
         int hitCount = Physics.OverlapSphereNonAlloc(transform.position, aggressiveScanRadius, _enemyBuffer, enemyLayer);
@@ -57,36 +51,52 @@ public class PartyMemberTargeting : MonoBehaviour
 
         for (int i = 0; i < hitCount; i++)
         {
-            if (!HasLineOfSight(_enemyBuffer[i].transform))
+            Collider col = _enemyBuffer[i];
+
+            // 1. Resolve Health (Handle collider on child/parent)
+            Health h = col.GetComponent<Health>() ?? col.GetComponentInParent<Health>();
+
+            // 2. Skip if no health or already dead
+            if (h == null || h.isDowned || h.currentHealth <= 0) continue;
+
+            // 3. Line of Sight Check
+            if (!HasLineOfSight(col.transform))
             {
                 continue;
             }
 
-            float distance = Vector3.Distance(transform.position, _enemyBuffer[i].transform.position);
+            float distance = Vector3.Distance(transform.position, col.transform.position);
             if (distance < minDistance)
             {
                 minDistance = distance;
-                closestEnemy = _enemyBuffer[i].gameObject;
+                closestEnemy = h.gameObject; // Target the object with Health
             }
         }
 
         return closestEnemy;
     }
 
-    /// <summary>
-    /// Checks if there is a clear line of sight to a given target.
-    /// </summary>
     public bool HasLineOfSight(Transform target)
     {
         if (target == null) return false;
         Vector3 origin = transform.position + Vector3.up;
         Vector3 targetPosition = target.position + Vector3.up;
         Vector3 direction = targetPosition - origin;
+        float dist = direction.magnitude;
 
-        if (Physics.Raycast(origin, direction.normalized, direction.magnitude, obstacleLayers))
+        // Perform Raycast
+        if (Physics.Raycast(origin, direction.normalized, out RaycastHit hit, dist, obstacleLayers))
         {
-            return false; // Path is blocked
+            // If we hit the target (or a child of the target), it is NOT blocked.
+            if (hit.transform == target || hit.transform.IsChildOf(target))
+            {
+                return true;
+            }
+
+            // If we hit something else, it IS blocked.
+            return false;
         }
+
         return true; // Path is clear
     }
 }

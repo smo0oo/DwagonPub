@@ -20,7 +20,6 @@ public class Projectile : MonoBehaviour
         // GetComponent<PooledObject>() has been REMOVED from Awake()
     }
 
-    // --- FIX: Added OnEnable() ---
     void OnEnable()
     {
         // Get the component here instead. This runs after the pooler has added it.
@@ -29,7 +28,6 @@ public class Projectile : MonoBehaviour
             pooledObject = GetComponent<PooledObject>();
         }
     }
-    // --- END FIX ---
 
     /// <summary>
     /// Initializes the projectile with fresh data every time it's pulled from the pool.
@@ -60,6 +58,7 @@ public class Projectile : MonoBehaviour
     {
         CharacterRoot hitCharacterRoot = other.GetComponentInParent<CharacterRoot>();
 
+        // 1. Hit Wall / Environment (No CharacterRoot found)
         if (hitCharacterRoot == null)
         {
             if (sourceAbility != null && sourceAbility.hitVFX != null)
@@ -70,6 +69,7 @@ public class Projectile : MonoBehaviour
             return;
         }
 
+        // 2. Hit Caster (Always Ignore)
         if (caster != null && hitCharacterRoot == caster.GetComponentInParent<CharacterRoot>())
         {
             return;
@@ -77,19 +77,30 @@ public class Projectile : MonoBehaviour
 
         if (sourceAbility != null)
         {
+            // Safety check: if caster is missing, just destroy
             if (caster == null)
             {
                 if (pooledObject != null) pooledObject.ReturnToPool();
                 return;
             }
 
+            int targetLayer = hitCharacterRoot.gameObject.layer;
+            bool isAlly = casterLayer == targetLayer;
+
+            // --- FIX START: Pass through allies if there are no friendly effects ---
+            // If we hit an ally, AND this ability does nothing to allies (e.g. no Heal), ignore the collision.
+            if (isAlly && (sourceAbility.friendlyEffects == null || sourceAbility.friendlyEffects.Count == 0))
+            {
+                return; // Return implies "Keep flying, do not destroy"
+            }
+            // --- FIX END ---
+
+            // If we are here, we either hit an Enemy OR an Ally with a valid effect (like a Heal)
             if (sourceAbility.hitVFX != null)
             {
                 ObjectPooler.instance.Get(sourceAbility.hitVFX, transform.position, Quaternion.identity);
             }
 
-            int targetLayer = hitCharacterRoot.gameObject.layer;
-            bool isAlly = casterLayer == targetLayer;
             var effectsToApply = isAlly ? sourceAbility.friendlyEffects : sourceAbility.hostileEffects;
 
             foreach (var effect in effectsToApply)
@@ -99,7 +110,8 @@ public class Projectile : MonoBehaviour
             }
         }
 
-        // This check will also succeed
+        // 3. Destroy Projectile
+        // We only reach this line if we hit a valid target (Enemy) or an Ally we successfully buffed/healed
         if (pooledObject != null) pooledObject.ReturnToPool();
     }
 }

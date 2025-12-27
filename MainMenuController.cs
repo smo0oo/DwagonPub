@@ -12,6 +12,9 @@ public class MainMenuUI : MonoBehaviour
     public Button loadGameButton;
     public Button quitButton;
 
+    [Tooltip("The name of the scene to load when the 'Town' button is clicked.")]
+    public string debugTownSceneName = "Town_Large_A";
+
     void Start()
     {
         // Add listeners to the buttons to call the correct methods
@@ -42,6 +45,19 @@ public class MainMenuUI : MonoBehaviour
         if (SaveManager.instance != null)
         {
             SaveManager.instance.LoadGame();
+        }
+    }
+
+    public void LoadTownScene()
+    {
+        if (GameManager.instance != null)
+        {
+            // Optional: Set specific flags if needed before loading
+            // e.g. Ensure we aren't flagged as 'just exited dungeon' to prevent weird UI popups
+            GameManager.instance.SetJustExitedDungeon(false);
+
+            // Load the town directly
+            GameManager.instance.LoadLevel(debugTownSceneName);
         }
     }
 
