@@ -245,6 +245,22 @@ public class PartyMemberAI : MonoBehaviour
         }
     }
 
+    // --- HELPER METHOD: Centralized Movement Logic ---
+    private void MoveTo(Vector3 destination)
+    {
+        // If we are currently casting or channeling a beam, cancel it before moving.
+        if (abilityHolder != null && (abilityHolder.IsCasting || abilityHolder.ActiveBeam != null))
+        {
+            abilityHolder.CancelCast();
+        }
+
+        if (navMeshAgent.isOnNavMesh)
+        {
+            navMeshAgent.SetDestination(destination);
+        }
+    }
+    // ------------------------------------------------
+
     private void HandleFollowState()
     {
         navMeshAgent.speed = originalNavMeshSpeed;
@@ -253,7 +269,7 @@ public class PartyMemberAI : MonoBehaviour
 
         if (Vector3.Distance(navMeshAgent.destination, destination) > 0.5f)
         {
-            navMeshAgent.SetDestination(destination);
+            MoveTo(destination); // Use wrapper
         }
 
         HandleSmoothRotation();
@@ -277,7 +293,7 @@ public class PartyMemberAI : MonoBehaviour
 
             if (distanceToTarget > abilityToUse.range)
             {
-                navMeshAgent.SetDestination(currentTarget.transform.position);
+                MoveTo(currentTarget.transform.position); // Use wrapper
                 UpdateStatus("Closing In");
             }
             else
@@ -289,7 +305,7 @@ public class PartyMemberAI : MonoBehaviour
         }
         else
         {
-            navMeshAgent.SetDestination(currentTarget.transform.position);
+            MoveTo(currentTarget.transform.position); // Use wrapper
             UpdateStatus("Repositioning");
         }
     }
@@ -308,7 +324,7 @@ public class PartyMemberAI : MonoBehaviour
             float distanceToTarget = Vector3.Distance(transform.position, currentTarget.transform.position);
             if (distanceToTarget > healAbility.range)
             {
-                navMeshAgent.SetDestination(currentTarget.transform.position);
+                MoveTo(currentTarget.transform.position); // Use wrapper
                 UpdateStatus($"Moving to Heal");
             }
             else
@@ -320,14 +336,14 @@ public class PartyMemberAI : MonoBehaviour
         }
         else
         {
-            navMeshAgent.SetDestination(currentTarget.transform.position);
+            MoveTo(currentTarget.transform.position); // Use wrapper
             UpdateStatus("Repositioning to Heal");
         }
     }
 
     private void HandleMoveToAndDefendState()
     {
-        navMeshAgent.SetDestination(commandMovePosition);
+        MoveTo(commandMovePosition); // Use wrapper
         UpdateStatus("Moving to Position");
 
         HandleSmoothRotation();

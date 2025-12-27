@@ -7,6 +7,11 @@ public class Projectile : MonoBehaviour
     public float speed = 20f;
     public float lifetime = 5f;
 
+    [Header("Visuals")]
+    [Tooltip("If true, simulates particle systems forward by 'preWarmSeconds' on spawn. Useful for fireballs that need to look 'full' instantly.")]
+    public bool preWarmVFX = true;
+    public float preWarmSeconds = 0.2f;
+
     // Data is now private
     private Ability sourceAbility;
     private GameObject caster;
@@ -17,7 +22,7 @@ public class Projectile : MonoBehaviour
 
     void Awake()
     {
-        // GetComponent<PooledObject>() has been REMOVED from Awake()
+        // GetComponent<PooledObject>() has been REMOVED from Awake() to avoid race conditions with Pooler
     }
 
     void OnEnable()
@@ -38,6 +43,22 @@ public class Projectile : MonoBehaviour
         this.caster = caster;
         this.casterLayer = layer;
         this.lifetimeTimer = lifetime;
+
+        // --- FIX: Jump-start the VFX so it looks fully formed immediately ---
+        if (preWarmVFX)
+        {
+            ParticleSystem[] particles = GetComponentsInChildren<ParticleSystem>();
+            foreach (var ps in particles)
+            {
+                // Reset first to clear any old state from the pool
+                ps.Clear();
+                ps.Play();
+
+                // Fast-forward the simulation
+                ps.Simulate(preWarmSeconds, true, false);
+            }
+        }
+        // -------------------------------------------------------------------
     }
 
     void Update()
@@ -46,8 +67,8 @@ public class Projectile : MonoBehaviour
         lifetimeTimer -= Time.deltaTime;
         if (lifetimeTimer <= 0f)
         {
-            // This check will now succeed
             if (pooledObject != null) pooledObject.ReturnToPool();
+            else Destroy(gameObject); // Fallback if not pooled
             return;
         }
 
@@ -66,6 +87,7 @@ public class Projectile : MonoBehaviour
                 ObjectPooler.instance.Get(sourceAbility.hitVFX, transform.position, Quaternion.identity);
             }
             if (pooledObject != null) pooledObject.ReturnToPool();
+            else Destroy(gameObject);
             return;
         }
 
@@ -81,21 +103,20 @@ public class Projectile : MonoBehaviour
             if (caster == null)
             {
                 if (pooledObject != null) pooledObject.ReturnToPool();
+                else Destroy(gameObject);
                 return;
             }
 
             int targetLayer = hitCharacterRoot.gameObject.layer;
             bool isAlly = casterLayer == targetLayer;
 
-            // --- FIX START: Pass through allies if there are no friendly effects ---
-            // If we hit an ally, AND this ability does nothing to allies (e.g. no Heal), ignore the collision.
+            // Pass through allies if there are no friendly effects
             if (isAlly && (sourceAbility.friendlyEffects == null || sourceAbility.friendlyEffects.Count == 0))
             {
                 return; // Return implies "Keep flying, do not destroy"
             }
-            // --- FIX END ---
 
-            // If we are here, we either hit an Enemy OR an Ally with a valid effect (like a Heal)
+            // Hit Logic
             if (sourceAbility.hitVFX != null)
             {
                 ObjectPooler.instance.Get(sourceAbility.hitVFX, transform.position, Quaternion.identity);
@@ -111,7 +132,7 @@ public class Projectile : MonoBehaviour
         }
 
         // 3. Destroy Projectile
-        // We only reach this line if we hit a valid target (Enemy) or an Ally we successfully buffed/healed
         if (pooledObject != null) pooledObject.ReturnToPool();
+        else Destroy(gameObject);
     }
 }

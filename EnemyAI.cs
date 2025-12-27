@@ -111,22 +111,37 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             abilityHolder.OnCastFinished += HandleCastFinished;
         }
 
+        // --- UPDATED: Use proper activation logic even on Start ---
         if (startDeactivated)
             DeactivateAI();
         else
-            StartCoroutine(AIThinkRoutine());
+            ActivateAI(); // Changed from StartCoroutine(AIThinkRoutine())
 
         HandleHealthChanged();
     }
 
     private IEnumerator AIThinkRoutine()
     {
+        // --- FIX: Warmup Wait ---
+        // Wait until the NavMeshAgent reports it is actually ON the NavMesh.
+        // This prevents the "SetDestination" error which happens if we try to move 
+        // in the very first frame after enabling the component.
+        while (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && !navMeshAgent.isOnNavMesh)
+        {
+            yield return null; // Wait for next frame
+        }
+        // -----------------------
+
         yield return new WaitForSeconds(UnityEngine.Random.Range(0f, 0.2f));
         WaitForSeconds wait = new WaitForSeconds(0.1f);
 
         while (!isDead && this.enabled)
         {
-            Think();
+            // Only think if the agent is valid to prevent log spam
+            if (navMeshAgent != null && navMeshAgent.isOnNavMesh && navMeshAgent.isActiveAndEnabled)
+            {
+                Think();
+            }
             yield return wait;
         }
     }
@@ -173,7 +188,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             targetLookPos = currentTarget.position;
             shouldRotate = true;
         }
-        else if (navMeshAgent.velocity.sqrMagnitude > 0.1f)
+        // Only check velocity if agent is active and valid
+        else if (navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh && navMeshAgent.velocity.sqrMagnitude > 0.1f)
         {
             targetLookPos = transform.position + navMeshAgent.velocity;
             shouldRotate = true;
@@ -261,34 +277,24 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
-    // --- UPDATED: Fix for Player vs DomeMarker structure conflict ---
     private bool IsTargetInvalid(Transform target)
     {
         if (target == null) return true;
 
         Health h = null;
-
-        // 1. Try to find CharacterRoot (This handles Players correctly)
         CharacterRoot root = target.GetComponent<CharacterRoot>() ?? target.GetComponentInParent<CharacterRoot>();
+
         if (root != null)
         {
             h = root.Health;
         }
         else
         {
-            // 2. Fallback for Dome Markers or Simple Enemies (Health on Root)
-            // Checks Self, Parent, then Children to cover all prefabs
-            h = target.GetComponent<Health>();
-            if (h == null) h = target.GetComponentInParent<Health>();
-            if (h == null) h = target.GetComponentInChildren<Health>();
+            h = target.GetComponent<Health>() ?? target.GetComponentInParent<Health>() ?? target.GetComponentInChildren<Health>();
         }
 
-        // If after all that we still have no health, target is invalid
-        if (h == null) return true;
-
-        return h.isDowned || h.currentHealth <= 0;
+        return h == null || h.isDowned || h.currentHealth <= 0;
     }
-    // -------------------------------------------------------------
 
     private void HandleCombatMovement(bool isReady, Ability abilityToUse)
     {
@@ -363,7 +369,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             hasUsedInitialAbilities = false;
             currentState = AIState.Combat;
             combatStartPosition = transform.position;
-            lastKnownPosition = currentTarget.position; // Ensure we don't move to (0,0,0)
+            lastKnownPosition = currentTarget.position;
             if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
             return;
         }
@@ -452,6 +458,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             combatStartPosition = transform.position;
             return;
         }
+
+        // This line triggered the error because remainingDistance is accessed before binding
         if (!navMeshAgent.pathPending && navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance)
         {
             navMeshAgent.ResetPath();
@@ -502,9 +510,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     private bool HasLineOfSight(Transform target)
     {
-        // 1. Check AITargeting override
         if (targeting != null && !targeting.checkLineOfSight) return true;
-
         if (target == null) return false;
 
         Vector3 origin = transform.position + Vector3.up;
@@ -512,19 +518,14 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         Vector3 direction = targetPosition - origin;
         float distance = direction.magnitude;
 
-        // 2. Perform Raycast
         if (Physics.Raycast(origin, direction.normalized, out RaycastHit hit, distance, targeting.obstacleLayers))
         {
-            // 3. Verify hit object
-            // If we hit the target (or a child of the target), we HAVE line of sight.
             if (hit.transform == target || hit.transform.IsChildOf(target))
             {
                 return true;
             }
             return false;
         }
-
-        // 4. Hit nothing? Clear path.
         return true;
     }
 
@@ -532,8 +533,39 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private void HandlePlayerAbilityUsed(PlayerAbilityHolder player, Ability usedAbility) { PlayerMovement playerMovement = player.GetComponentInParent<PlayerMovement>(); if (isDead || abilityHolder.IsCasting || playerMovement == null || playerMovement.TargetObject != this.gameObject) return; if (behaviorProfile != null) { foreach (var trigger in behaviorProfile.reactiveTriggers) { if (trigger.triggerType == usedAbility.abilityType) { if (UnityEngine.Random.value <= trigger.chanceToReact) { abilityHolder.UseAbility(trigger.reactionAbility, player.gameObject); break; } } } } }
     private void HandleCastStarted(string abilityName, float castDuration) { if (enemyHealthUI != null) enemyHealthUI.StartCast(abilityName, castDuration); SetAIStatus("Combat", "Casting"); if (navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath(); }
     private void HandleCastFinished() { if (enemyHealthUI != null) enemyHealthUI.StopCast(); }
-    public void ActivateAI() { if (this.enabled) return; this.enabled = true; if (navMeshAgent != null) navMeshAgent.enabled = true; if (animator != null) animator.enabled = true; StartCoroutine(AIThinkRoutine()); }
-    public void DeactivateAI() { if (!this.enabled) return; if (navMeshAgent != null && navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath(); this.enabled = false; if (navMeshAgent != null) navMeshAgent.enabled = false; if (animator != null) animator.enabled = false; StopAllCoroutines(); }
+
+    // --- UPDATED: Force Snap to NavMesh on Activation ---
+    public void ActivateAI()
+    {
+        if (this.enabled) return;
+
+        this.enabled = true;
+        if (navMeshAgent != null)
+        {
+            navMeshAgent.enabled = true;
+
+            // Force the agent to snap to the NavMesh immediately. 
+            // This fixes the "SetDestination can only be called..." error 
+            // by ensuring isOnNavMesh is true before the logic runs.
+            if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 2.0f, NavMesh.AllAreas))
+            {
+                navMeshAgent.Warp(hit.position);
+            }
+        }
+
+        if (animator != null) animator.enabled = true;
+        StartCoroutine(AIThinkRoutine());
+    }
+
+    public void DeactivateAI()
+    {
+        if (!this.enabled) return;
+        if (navMeshAgent != null && navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath();
+        this.enabled = false;
+        if (navMeshAgent != null) navMeshAgent.enabled = false;
+        if (animator != null) animator.enabled = false;
+        StopAllCoroutines();
+    }
 
     public void ExecuteLeap(Vector3 destination, Action onLandAction) { movementHandler?.ExecuteLeap(destination, onLandAction); }
     public void ExecuteCharge(GameObject target, Ability chargeAbility) { if (abilitySelector.abilities.Contains(chargeAbility)) movementHandler?.ExecuteCharge(target, chargeAbility); }
