@@ -9,8 +9,11 @@ public class PlayerAbilityHolder : MonoBehaviour
     public static event Action<PlayerAbilityHolder, Ability> OnPlayerAbilityUsed;
 
     [Header("Component References")]
-    [Tooltip("An optional transform to specify where projectiles should spawn from. If not set, the character's pivot point is used.")]
     public Transform projectileSpawnPoint;
+
+    [Header("Targeting Settings")]
+    [Tooltip("Layers that abilities can hit. Uncheck 'Ignore Raycast' or 'Triggers' to prevent hitting aggro zones.")]
+    public LayerMask targetLayers; // FIX: Removed "= LayerMask.GetMask(...)" to prevent crash
 
     [Header("Global Cooldown")]
     public float globalCooldownDuration = 1.0f;
@@ -20,8 +23,6 @@ public class PlayerAbilityHolder : MonoBehaviour
     public ChanneledBeamController ActiveBeam { get; private set; }
     public bool IsCasting { get; private set; } = false;
     public bool IsOnGlobalCooldown() => Time.time < globalCooldownTimer;
-
-    // --- PROPERTY: Used by PlayerMovement to lock input during specific attacks ---
     public bool IsAnimationLocked { get; private set; } = false;
 
     private Dictionary<Ability, float> cooldowns = new Dictionary<Ability, float>();
@@ -33,12 +34,10 @@ public class PlayerAbilityHolder : MonoBehaviour
     private UnityEngine.AI.NavMeshAgent navMeshAgent;
     private Animator animator;
 
-    // Coroutine tracking
     private Coroutine activeCastCoroutine;
     private Coroutine activeMeleeCoroutine;
     private Coroutine activeLockCoroutine;
 
-    // --- Optimization: Buffers & Hashes ---
     private Collider[] _aoeBuffer = new Collider[100];
     private List<CharacterRoot> _affectedCharactersBuffer = new List<CharacterRoot>(100);
 
@@ -61,15 +60,27 @@ public class PlayerAbilityHolder : MonoBehaviour
         movementHandler = GetComponentInParent<IMovementHandler>();
         meleeHitbox = GetComponentInChildren<MeleeHitbox>(true);
 
-        // Cache Animator Hashes
         attackHash = Animator.StringToHash("Attack");
         attackSpeedHash = Animator.StringToHash("AttackSpeedMultiplier");
         attackStyleHash = Animator.StringToHash("AttackStyle");
+
+        // --- FIX: Set Default Mask Here instead of in Declaration ---
+        if (targetLayers.value == 0)
+        {
+            // If the Inspector is empty (Nothing), default to these layers
+            targetLayers = LayerMask.GetMask("Default", "Player", "Enemy");
+        }
+        // ------------------------------------------------------------
+    }
+
+    // --- Helper for Editor: Sets default when you add the component ---
+    void Reset()
+    {
+        targetLayers = LayerMask.GetMask("Default", "Player", "Enemy");
     }
 
     void OnDisable()
     {
-        // cleanup to prevent "Zombie Casting"
         CancelCast();
         if (ActiveBeam != null)
         {
@@ -123,8 +134,6 @@ public class PlayerAbilityHolder : MonoBehaviour
     private IEnumerator PerformCast(Ability ability, GameObject target, Vector3 position, float castTime, bool bypassCooldown)
     {
         IsCasting = true;
-
-        // Stop movement while casting
         if (navMeshAgent != null && navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath();
 
         try
@@ -144,7 +153,6 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     private void ExecuteAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown = false)
     {
-        // Interrupt any active beam
         if (ActiveBeam != null) ActiveBeam.Interrupt();
 
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
@@ -153,7 +161,6 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         OnPlayerAbilityUsed?.Invoke(this, ability);
 
-        // --- Handle Movement Lock ---
         if (ability.movementLockDuration > 0)
         {
             if (activeLockCoroutine != null) StopCoroutine(activeLockCoroutine);
@@ -254,7 +261,6 @@ public class PlayerAbilityHolder : MonoBehaviour
             if (playerStats != null) { animSpeed = playerStats.secondaryStats.attackSpeed; }
             animator.SetFloat(attackSpeedHash, animSpeed);
 
-            // Check for Override vs Style
             if (!string.IsNullOrEmpty(ability.overrideTriggerName))
             {
                 animator.SetTrigger(ability.overrideTriggerName);
@@ -271,15 +277,11 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         if (activeCastCoroutine != null) { StopCoroutine(activeCastCoroutine); activeCastCoroutine = null; }
         IsCasting = false;
-
-        // Clear Lock
         IsAnimationLocked = false;
         if (activeLockCoroutine != null) { StopCoroutine(activeLockCoroutine); activeLockCoroutine = null; }
-
         if (CastingBarUIManager.instance != null) CastingBarUIManager.instance.StopCast();
         if (HotbarManager.instance != null) HotbarManager.instance.LockingAbility = null;
         if (ActiveBeam != null) ActiveBeam.Interrupt();
-
         if (activeMeleeCoroutine != null)
         {
             StopCoroutine(activeMeleeCoroutine);
@@ -287,8 +289,6 @@ public class PlayerAbilityHolder : MonoBehaviour
             if (meleeHitbox != null) meleeHitbox.gameObject.SetActive(false);
         }
     }
-
-    // --- Standard Methods (Optimized) ---
 
     public void PayCostAndStartCooldown(Ability ability, bool bypassCooldown = false)
     {
@@ -315,11 +315,11 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         if (ability.hitVFX != null) ObjectPooler.instance.Get(ability.hitVFX, position, Quaternion.identity);
 
-        // Non-Allocating Physics Check
-        int hitCount = Physics.OverlapSphereNonAlloc(position, ability.aoeRadius, _aoeBuffer);
+        // Using LayerMask to avoid hitting invisible Aggro/Trigger zones
+        int hitCount = Physics.OverlapSphereNonAlloc(position, ability.aoeRadius, _aoeBuffer, targetLayers);
+
         _affectedCharactersBuffer.Clear();
 
-        // FOR Loop (not foreach) to iterate only up to hitCount
         for (int i = 0; i < hitCount; i++)
         {
             var hit = _aoeBuffer[i];
@@ -349,8 +349,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
         else
         {
-            // Non-Allocating Physics Check
-            int hitCount = Physics.OverlapSphereNonAlloc(casterRoot.transform.position, ability.aoeRadius, _aoeBuffer);
+            int hitCount = Physics.OverlapSphereNonAlloc(casterRoot.transform.position, ability.aoeRadius, _aoeBuffer, targetLayers);
             _affectedCharactersBuffer.Clear();
 
             for (int i = 0; i < hitCount; i++)
