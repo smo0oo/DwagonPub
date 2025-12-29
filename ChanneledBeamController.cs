@@ -5,15 +5,13 @@ using System.Collections.Generic;
 public class ChanneledBeamController : MonoBehaviour
 {
     [Header("Beam Settings")]
-    [Tooltip("Layers that block the beam (e.g., Ground, Walls).")]
-    public LayerMask obstacleLayers; // Renamed from 'groundLayer' for clarity
+    public LayerMask obstacleLayers;
 
     [Header("Visuals")]
     [Tooltip("The particle effect to spawn at the target/end point of the beam.")]
     public GameObject endVFXPrefab;
     [Tooltip("Controls the width of the LineRenderer.")]
     public float beamWidth = 1.0f;
-
     [Tooltip("How many meters per second the beam travels. Set to 0 for instant.")]
     public float beamGrowthSpeed = 40f;
 
@@ -26,6 +24,8 @@ public class ChanneledBeamController : MonoBehaviour
 
     private Transform beamTarget;
     private Health targetHealth;
+
+    private Transform emissionPoint;
 
     private GameObject activeEndVFX;
 
@@ -42,10 +42,11 @@ public class ChanneledBeamController : MonoBehaviour
         lineRenderer.widthMultiplier = beamWidth;
     }
 
-    public void Initialize(Ability ability, GameObject casterObject, GameObject targetObject)
+    public void Initialize(Ability ability, GameObject casterObject, GameObject targetObject, Transform customSpawnPoint = null)
     {
         sourceAbility = ability;
         caster = casterObject;
+        emissionPoint = customSpawnPoint;
 
         currentBeamLength = 0f;
 
@@ -77,13 +78,6 @@ public class ChanneledBeamController : MonoBehaviour
         UpdateBeamPosition();
     }
 
-    // --- NEW: Public method to change blocking layers at runtime ---
-    public void SetObstacleLayers(LayerMask newLayerMask)
-    {
-        obstacleLayers = newLayerMask;
-    }
-    // ---------------------------------------------------------------
-
     public void Interrupt()
     {
         Destroy(gameObject);
@@ -93,7 +87,18 @@ public class ChanneledBeamController : MonoBehaviour
     {
         if (activeEndVFX != null)
         {
-            Destroy(activeEndVFX);
+            // --- FIX: Removed reference to missing 'VFXCleaner' ---
+            VFXGraphCleaner graphCleaner = activeEndVFX.GetComponent<VFXGraphCleaner>();
+            if (graphCleaner != null)
+            {
+                graphCleaner.StopAndFade();
+            }
+            else
+            {
+                // Fallback: Hard destroy if no cleaner script is found
+                Destroy(activeEndVFX);
+            }
+            // ------------------------------------------------------
         }
     }
 
@@ -149,8 +154,15 @@ public class ChanneledBeamController : MonoBehaviour
     {
         if (caster == null || sourceAbility == null) return;
 
-        Transform casterTransform = caster.transform;
-        Vector3 worldStartPosition = casterTransform.position + Vector3.up;
+        Vector3 worldStartPosition;
+        if (emissionPoint != null)
+        {
+            worldStartPosition = emissionPoint.position;
+        }
+        else
+        {
+            worldStartPosition = caster.transform.position + Vector3.up;
+        }
 
         Vector3 fullTargetPosition;
         if (beamTarget != null)
@@ -159,7 +171,7 @@ public class ChanneledBeamController : MonoBehaviour
         }
         else
         {
-            fullTargetPosition = worldStartPosition + (casterTransform.forward * sourceAbility.range);
+            fullTargetPosition = worldStartPosition + (caster.transform.forward * sourceAbility.range);
         }
 
         Vector3 direction = (fullTargetPosition - worldStartPosition).normalized;
@@ -167,12 +179,10 @@ public class ChanneledBeamController : MonoBehaviour
 
         float renderDistance = Mathf.Min(currentBeamLength, totalDistance);
 
-        // --- UPDATED: Use the dynamic 'obstacleLayers' variable ---
         if (Physics.Raycast(worldStartPosition, direction, out RaycastHit hit, renderDistance, obstacleLayers))
         {
             renderDistance = hit.distance;
         }
-        // ----------------------------------------------------------
 
         Vector3 worldEndPosition = worldStartPosition + (direction * renderDistance);
 
@@ -196,7 +206,6 @@ public class ChanneledBeamController : MonoBehaviour
 
         if (castDistance < 0.1f) return;
 
-        // Use beamWidth / 2 for the radius to match visual thickness
         float radius = Mathf.Max(0.1f, beamWidth * 0.5f);
 
         int hitCount = Physics.SphereCastNonAlloc(castStart, radius, castDirection, _beamHitBuffer, castDistance);

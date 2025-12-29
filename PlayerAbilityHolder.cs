@@ -9,11 +9,12 @@ public class PlayerAbilityHolder : MonoBehaviour
     public static event Action<PlayerAbilityHolder, Ability> OnPlayerAbilityUsed;
 
     [Header("Component References")]
+    [Tooltip("An optional transform to specify where projectiles should spawn from. If not set, the character's pivot point is used.")]
     public Transform projectileSpawnPoint;
 
     [Header("Targeting Settings")]
-    [Tooltip("Layers that abilities can hit. Uncheck 'Ignore Raycast' or 'Triggers' to prevent hitting aggro zones.")]
-    public LayerMask targetLayers; // FIX: Removed "= LayerMask.GetMask(...)" to prevent crash
+    [Tooltip("Layers that abilities can hit.")]
+    public LayerMask targetLayers;
 
     [Header("Global Cooldown")]
     public float globalCooldownDuration = 1.0f;
@@ -64,16 +65,12 @@ public class PlayerAbilityHolder : MonoBehaviour
         attackSpeedHash = Animator.StringToHash("AttackSpeedMultiplier");
         attackStyleHash = Animator.StringToHash("AttackStyle");
 
-        // --- FIX: Set Default Mask Here instead of in Declaration ---
         if (targetLayers.value == 0)
         {
-            // If the Inspector is empty (Nothing), default to these layers
             targetLayers = LayerMask.GetMask("Default", "Player", "Enemy");
         }
-        // ------------------------------------------------------------
     }
 
-    // --- Helper for Editor: Sets default when you add the component ---
     void Reset()
     {
         targetLayers = LayerMask.GetMask("Default", "Player", "Enemy");
@@ -157,7 +154,19 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
         if (ability.castSound != null) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
-        if (ability.castVFX != null) ObjectPooler.instance.Get(ability.castVFX, transform.position, transform.rotation);
+
+        // --- FIX: Parent VFX to the Spawn Point ---
+        Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
+        if (ability.castVFX != null)
+        {
+            GameObject vfxInstance = ObjectPooler.instance.Get(ability.castVFX, spawnTransform.position, spawnTransform.rotation);
+            if (vfxInstance != null)
+            {
+                // Attaches the VFX to the wand/hand so it moves if the player turns
+                vfxInstance.transform.SetParent(spawnTransform);
+            }
+        }
+        // ------------------------------------------
 
         OnPlayerAbilityUsed?.Invoke(this, ability);
 
@@ -315,7 +324,6 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         if (ability.hitVFX != null) ObjectPooler.instance.Get(ability.hitVFX, position, Quaternion.identity);
 
-        // Using LayerMask to avoid hitting invisible Aggro/Trigger zones
         int hitCount = Physics.OverlapSphereNonAlloc(position, ability.aoeRadius, _aoeBuffer, targetLayers);
 
         _affectedCharactersBuffer.Clear();
@@ -403,10 +411,34 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
+    private void HandleChanneledBeam(Ability ability, GameObject target)
+    {
+        GameObject prefabToSpawn = ability.playerProjectilePrefab != null ? ability.playerProjectilePrefab : ability.enemyProjectilePrefab;
+
+        if (prefabToSpawn != null)
+        {
+            GameObject beamObject = Instantiate(prefabToSpawn, transform.position, transform.rotation, transform);
+            if (beamObject.TryGetComponent<ChanneledBeamController>(out var beam))
+            {
+                beam.Initialize(ability, this.gameObject, target, projectileSpawnPoint);
+
+                ActiveBeam = beam;
+                if (HotbarManager.instance != null)
+                {
+                    if (ability.locksPlayerActivity) HotbarManager.instance.LockingAbility = ability;
+                    HotbarManager.instance.SetActiveBeam(beam);
+                }
+            }
+        }
+        else
+        {
+            Debug.LogError($"Ability '{ability.name}' is a ChanneledBeam but has no prefab assigned to either the Player or Enemy Projectile Prefab slot.", ability);
+        }
+    }
+
     void Update() { if (ActiveBeam != null && ActiveBeam.gameObject == null) { ActiveBeam = null; } }
     public bool GetCooldownStatus(Ability ability, out float remaining) { remaining = 0f; if (cooldowns.TryGetValue(ability, out float endTime)) { if (Time.time < endTime) { remaining = endTime - Time.time; return true; } } return false; }
     public bool CanUseAbility(Ability ability, GameObject target) { if (ability == null || IsCasting) return false; if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false; if (ability.requiresWeaponType && !IsCorrectWeaponEquipped(ability.requiredWeaponCategories)) return false; if ((ability.abilityType == AbilityType.TargetedMelee || ability.abilityType == AbilityType.TargetedProjectile || ability.abilityType == AbilityType.Charge) && target == null) return false; if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false; if (playerStats != null && playerStats.currentMana < ability.manaCost) return false; return true; }
-    private void HandleChanneledBeam(Ability ability, GameObject target) { GameObject prefabToSpawn = ability.playerProjectilePrefab != null ? ability.playerProjectilePrefab : ability.enemyProjectilePrefab; if (prefabToSpawn != null) { GameObject beamObject = Instantiate(prefabToSpawn, transform.position, transform.rotation, transform); if (beamObject.TryGetComponent<ChanneledBeamController>(out var beam)) { beam.Initialize(ability, this.gameObject, target); ActiveBeam = beam; if (HotbarManager.instance != null) { if (ability.locksPlayerActivity) HotbarManager.instance.LockingAbility = ability; HotbarManager.instance.SetActiveBeam(beam); } } } else { Debug.LogError($"Ability '{ability.name}' is a ChanneledBeam but has no prefab assigned to either the Player or Enemy Projectile Prefab slot.", ability); } }
     private float GetCurrentWeaponSpeed() { if (playerEquipment == null) return 2.0f; if (playerEquipment.equippedItems.TryGetValue(EquipmentType.RightHand, out var rightHandItem) && rightHandItem?.itemData.stats is ItemWeaponStats rightWeapon) return rightWeapon.baseAttackTime; if (playerEquipment.equippedItems.TryGetValue(EquipmentType.LeftHand, out var leftHandItem) && leftHandItem?.itemData.stats is ItemWeaponStats leftWeapon) return leftWeapon.baseAttackTime; return 2.0f; }
     public bool IsCorrectWeaponEquipped(List<ItemWeaponStats.WeaponCategory> categories) { if (playerEquipment == null) return false; if (categories == null || categories.Count == 0) return false; if (playerEquipment.equippedItems.TryGetValue(EquipmentType.RightHand, out var rightHandItem) && rightHandItem?.itemData?.stats is ItemWeaponStats rightWeapon && categories.Contains(rightWeapon.weaponCategory)) return true; if (playerEquipment.equippedItems.TryGetValue(EquipmentType.LeftHand, out var leftHandItem) && leftHandItem?.itemData?.stats is ItemWeaponStats leftWeapon && categories.Contains(leftWeapon.weaponCategory)) return true; return false; }
     private void HandleGroundPlacement(Ability ability, Vector3 position) { if (ability.placementPrefab != null) { GameObject trapObject = Instantiate(ability.placementPrefab, position, Quaternion.identity); PlaceableTrap trap = trapObject.GetComponent<PlaceableTrap>(); if (trap != null) { CharacterRoot casterRoot = this.GetComponentInParent<CharacterRoot>(); if (casterRoot != null) { trap.owner = casterRoot.gameObject; } else { Debug.LogError("Could not find CharacterRoot for trap owner assignment!", this); } } } }
