@@ -129,16 +129,20 @@ public class Ability : ScriptableObject
     [Header("Feedback")]
     [Tooltip("The visual effect prefab to spawn on the caster when the ability is executed.")]
     public GameObject castVFX;
+
+    // --- NEW FIELD START ---
+    [Tooltip("The looping visual effect to play WHILE the ability is being cast (Wind-up). Spawns at start of cast, destroys/despawns on execution.")]
+    public GameObject castingVFX;
+    // --- NEW FIELD END ---
+
     [Tooltip("The visual effect prefab to spawn at the impact point (for projectiles, AOEs, etc.).")]
     public GameObject hitVFX;
     [Tooltip("The sound effect to play when the ability is executed.")]
     public AudioClip castSound;
 
-    // --- NEW FIELD ---
     [Header("Legacy / Simple Effects")]
     [Tooltip("List of simple effect IDs (referenced by DualModeManager).")]
     public List<string> effects = new List<string>();
-    // -----------------
 
     [Header("Effects Applied to Allies")]
     [SerializeReference]
