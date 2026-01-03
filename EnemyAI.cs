@@ -68,7 +68,10 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private int currentPatrolIndex = 0;
     private bool isWaitingAtPatrolPoint = false;
     private float waitTimer = 0f;
-    private string lastStatusMessage;
+
+    // Optimized State Strings
+    private string lastState = "";
+    private string lastAction = "";
 
     // Track if we have been activated to prevent Start() from overriding Trigger activation
     private bool hasBeenActivated = false;
@@ -104,7 +107,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
         CollectPatrolPoints();
 
-        // --- FIX: Logic to prevent Start from disabling an already-active AI ---
         if (startDeactivated && !hasBeenActivated)
         {
             DeactivateAI();
@@ -117,10 +119,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         HandleHealthChanged();
     }
 
-    // --- FIX: Lifecycle Management ---
-    // The Brain (AIThinkRoutine) is now tied to the Component being Enabled.
-    // This prevents the "Zombie" state where the component is checked ON but doing nothing.
-
     void OnEnable()
     {
         PlayerAbilityHolder.OnPlayerAbilityUsed += HandlePlayerAbilityUsed;
@@ -131,7 +129,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             abilityHolder.OnCastFinished += HandleCastFinished;
         }
 
-        // Start thinking whenever we are enabled
         if (!isDead) StartCoroutine(AIThinkRoutine());
     }
 
@@ -145,7 +142,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             abilityHolder.OnCastFinished -= HandleCastFinished;
         }
 
-        // Stop thinking whenever we are disabled
         StopAllCoroutines();
         if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
         {
@@ -157,7 +153,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public void ActivateAI()
     {
         hasBeenActivated = true;
-        this.enabled = true; // Triggers OnEnable -> Starts Coroutine
+        this.enabled = true;
 
         if (navMeshAgent != null) navMeshAgent.enabled = true;
         if (animator != null) animator.enabled = true;
@@ -165,16 +161,14 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     public void DeactivateAI()
     {
-        this.enabled = false; // Triggers OnDisable -> Stops Coroutine
+        this.enabled = false;
 
         if (navMeshAgent != null) navMeshAgent.enabled = false;
         if (animator != null) animator.enabled = false;
     }
-    // -------------------------------
 
     private IEnumerator AIThinkRoutine()
     {
-        // 1. Warmup / Warp Logic
         if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && !navMeshAgent.isOnNavMesh)
         {
             if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 5.0f, NavMesh.AllAreas))
@@ -183,7 +177,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             }
         }
 
-        // Wait a few frames for binding
         int timeout = 10;
         while (timeout > 0 && navMeshAgent != null && navMeshAgent.isActiveAndEnabled && !navMeshAgent.isOnNavMesh)
         {
@@ -234,6 +227,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
+    // --- UPDATED: Optimized Rotation ---
     private void HandleRotation()
     {
         if (navMeshAgent == null || isDead) return;
@@ -256,12 +250,14 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         {
             Vector3 direction = (targetLookPos - transform.position).normalized;
             direction.y = 0;
-            if (direction != Vector3.zero)
+            // PERFORMANCE FIX: Only rotate if direction is significant
+            if (direction.sqrMagnitude > 0.01f)
             {
                 transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(direction), Time.deltaTime * 10f);
             }
         }
     }
+    // -----------------------------------
 
     private void UpdateCombatState()
     {
@@ -589,7 +585,23 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public void ExecuteCharge(GameObject target, Ability chargeAbility) { if (abilitySelector.abilities.Contains(chargeAbility)) movementHandler?.ExecuteCharge(target, chargeAbility); }
     public void ExecuteTeleport(Vector3 destination) { if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(destination); else transform.position = destination; }
 
-    private void SetAIStatus(string state, string action) { string newMessage = $"{state} :: {action}"; if (lastStatusMessage == newMessage) return; lastStatusMessage = newMessage; enemyHealthUI?.UpdateStatus(state, action); if (FloatingTextManager.instance != null) FloatingTextManager.instance.ShowAIStatus(action, transform.position + Vector3.up * 3.5f); }
+    // --- UPDATED: Optimized Status String ---
+    private void SetAIStatus(string state, string action)
+    {
+        // PERFORMANCE FIX: Avoid allocating new strings if status is identical
+        if (lastState == state && lastAction == action) return;
+
+        lastState = state;
+        lastAction = action;
+        string newMessage = $"{state} :: {action}";
+
+        enemyHealthUI?.UpdateStatus(state, action);
+
+        if (FloatingTextManager.instance != null)
+            FloatingTextManager.instance.ShowAIStatus(action, transform.position + Vector3.up * 3.5f);
+    }
+    // ----------------------------------------
+
     private void CollectPatrolPoints() { if (patrolPaths == null || patrolPaths.Length == 0) return; List<PatrolPoint> points = new List<PatrolPoint>(); foreach (PatrolPath path in patrolPaths) { if (path == null) continue; Collider pathCollider = path.GetComponent<Collider>(); if (pathCollider == null) continue; Collider[] collidersInVolume = Physics.OverlapBox(path.transform.position, pathCollider.bounds.extents, path.transform.rotation); foreach (Collider col in collidersInVolume) { if (col.TryGetComponent<PatrolPoint>(out PatrolPoint point)) { if (!points.Contains(point)) points.Add(point); } } } collectedPatrolPoints = points.OrderBy(p => p.gameObject.name).ToArray(); }
     void OnDestroy() { if (assignedSurroundPoint != null && SurroundPointManager.instance != null) { SurroundPointManager.instance.ReleasePoint(this); } if (health != null) health.OnHealthChanged -= HandleHealthChanged; if (abilityHolder != null) { abilityHolder.OnCastStarted -= HandleCastStarted; abilityHolder.OnCastFinished -= HandleCastFinished; } }
 }

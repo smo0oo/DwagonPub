@@ -51,6 +51,11 @@ public class PartyMemberAI : MonoBehaviour
     private float originalNavMeshSpeed;
     private Vector3 commandMovePosition;
 
+    // --- OPTIMIZATION VARIABLES ---
+    private float lastPathUpdateTime = 0f;
+    private const float PATH_UPDATE_INTERVAL = 0.25f; // Update path 4 times per second max
+    // ------------------------------
+
     public string CurrentStatus { get; private set; }
 
     void Awake()
@@ -82,8 +87,7 @@ public class PartyMemberAI : MonoBehaviour
 
     private IEnumerator InitializeAgent()
     {
-        // Safety Check for NavMesh Binding:
-        // If the agent is enabled but not bound to the NavMesh, attempt to find a valid spot.
+        // Safety Check for NavMesh Binding
         if (navMeshAgent != null && !navMeshAgent.isOnNavMesh)
         {
             if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 3.0f, NavMesh.AllAreas))
@@ -92,7 +96,6 @@ public class PartyMemberAI : MonoBehaviour
             }
         }
 
-        // Wait up to 1 second for the agent to bind.
         float timeout = 1.0f;
         while (navMeshAgent != null && !navMeshAgent.isOnNavMesh && timeout > 0)
         {
@@ -122,7 +125,6 @@ public class PartyMemberAI : MonoBehaviour
 
         UpdateAnimator();
 
-        // Safety: If this object is the active player, do not run AI logic
         if (PartyManager.instance != null && PartyManager.instance.ActivePlayer == this.gameObject)
         {
             if (navMeshAgent != null && navMeshAgent.hasPath) navMeshAgent.ResetPath();
@@ -137,12 +139,10 @@ public class PartyMemberAI : MonoBehaviour
     private IEnumerator AIThinkRoutine()
     {
         WaitForSeconds wait = new WaitForSeconds(0.1f);
-        // Random offset to prevent all AIs thinking on the exact same frame
         yield return new WaitForSeconds(UnityEngine.Random.Range(0f, 0.2f));
 
         while (true)
         {
-            // Only think if NOT the active player
             if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != this.gameObject
                 && health != null && health.currentHealth > 0)
             {
@@ -228,9 +228,6 @@ public class PartyMemberAI : MonoBehaviour
 
     private void Act()
     {
-        // FIX: Safety Check. 
-        // Prevents "GetRemainingDistance" error if Manager issues a command 
-        // while this agent is disabled, off-mesh, or still initializing.
         if (navMeshAgent == null || !navMeshAgent.isActiveAndEnabled || !navMeshAgent.isOnNavMesh)
         {
             return;
@@ -245,10 +242,9 @@ public class PartyMemberAI : MonoBehaviour
         }
     }
 
-    // --- HELPER METHOD: Centralized Movement Logic ---
+    // --- UPDATED HELPER: Throttled Movement Logic ---
     private void MoveTo(Vector3 destination)
     {
-        // If we are currently casting or channeling a beam, cancel it before moving.
         if (abilityHolder != null && (abilityHolder.IsCasting || abilityHolder.ActiveBeam != null))
         {
             abilityHolder.CancelCast();
@@ -256,7 +252,13 @@ public class PartyMemberAI : MonoBehaviour
 
         if (navMeshAgent.isOnNavMesh)
         {
-            navMeshAgent.SetDestination(destination);
+            // PERFORMANCE FIX: Only calculate a new path if enough time has passed
+            // OR if we don't have a path yet.
+            if (Time.time > lastPathUpdateTime + PATH_UPDATE_INTERVAL || !navMeshAgent.hasPath)
+            {
+                navMeshAgent.SetDestination(destination);
+                lastPathUpdateTime = Time.time;
+            }
         }
     }
     // ------------------------------------------------
@@ -267,10 +269,8 @@ public class PartyMemberAI : MonoBehaviour
         Vector3 destination = PartyAIManager.instance.GetFormationPositionFor(this);
         navMeshAgent.stoppingDistance = (isRetreating || currentStance == AIStance.Passive) ? 1.0f : followStoppingDistance;
 
-        if (Vector3.Distance(navMeshAgent.destination, destination) > 0.5f)
-        {
-            MoveTo(destination); // Use wrapper
-        }
+        // PERFORMANCE FIX: Directly call MoveTo (which handles throttling), removed excessive distance check
+        MoveTo(destination);
 
         HandleSmoothRotation();
 
@@ -293,7 +293,7 @@ public class PartyMemberAI : MonoBehaviour
 
             if (distanceToTarget > abilityToUse.range)
             {
-                MoveTo(currentTarget.transform.position); // Use wrapper
+                MoveTo(currentTarget.transform.position);
                 UpdateStatus("Closing In");
             }
             else
@@ -305,7 +305,7 @@ public class PartyMemberAI : MonoBehaviour
         }
         else
         {
-            MoveTo(currentTarget.transform.position); // Use wrapper
+            MoveTo(currentTarget.transform.position);
             UpdateStatus("Repositioning");
         }
     }
@@ -324,7 +324,7 @@ public class PartyMemberAI : MonoBehaviour
             float distanceToTarget = Vector3.Distance(transform.position, currentTarget.transform.position);
             if (distanceToTarget > healAbility.range)
             {
-                MoveTo(currentTarget.transform.position); // Use wrapper
+                MoveTo(currentTarget.transform.position);
                 UpdateStatus($"Moving to Heal");
             }
             else
@@ -336,14 +336,14 @@ public class PartyMemberAI : MonoBehaviour
         }
         else
         {
-            MoveTo(currentTarget.transform.position); // Use wrapper
+            MoveTo(currentTarget.transform.position);
             UpdateStatus("Repositioning to Heal");
         }
     }
 
     private void HandleMoveToAndDefendState()
     {
-        MoveTo(commandMovePosition); // Use wrapper
+        MoveTo(commandMovePosition);
         UpdateStatus("Moving to Position");
 
         HandleSmoothRotation();
@@ -363,7 +363,6 @@ public class PartyMemberAI : MonoBehaviour
         }
         else if (!hasExplicitCommand && PartyAIManager.instance.ActivePlayer != null)
         {
-            // Idle: align with leader ONLY if just following
             Quaternion targetRotation = PartyAIManager.instance.ActivePlayer.transform.rotation;
             transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * rotationSpeed);
         }

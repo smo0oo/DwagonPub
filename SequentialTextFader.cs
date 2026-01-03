@@ -2,6 +2,7 @@ using UnityEngine;
 using TMPro;
 using System.Collections;
 using System.Collections.Generic;
+using UnityEngine.Events; // Added for UnityEvent
 
 public class SequentialTextFader : MonoBehaviour
 {
@@ -15,65 +16,43 @@ public class SequentialTextFader : MonoBehaviour
     public List<string> textElements;
 
     [Tooltip("Should the sequence restart from the beginning when finished?")]
-    public bool loopSequence = true;
+    public bool loopSequence = false; // Defaulted to false for Intro scenes
 
     [Tooltip("Start playing the sequence automatically on Start.")]
     public bool playOnStart = true;
 
     [Header("Timing Parameters")]
-    [Tooltip("Time (seconds) to fade from invisible to fully visible.")]
     public float fadeInDuration = 1.0f;
-
-    [Tooltip("Time (seconds) the text stays fully visible.")]
     public float stayDuration = 2.0f;
-
-    [Tooltip("Time (seconds) to fade from fully visible to invisible.")]
     public float fadeOutDuration = 1.0f;
-
-    [Tooltip("Time (seconds) to wait after fading out before the next element starts.")]
     public float delayBeforeNext = 0.5f;
+
+    [Header("Events")]
+    public UnityEvent onSequenceComplete; // New Event
 
     private Coroutine sequenceCoroutine;
 
     private void Start()
     {
-        if (targetText == null)
-        {
-            targetText = GetComponent<TextMeshProUGUI>();
-        }
+        if (targetText == null) targetText = GetComponent<TextMeshProUGUI>();
 
         if (targetText != null)
         {
-            // Ensure alpha starts at 0
             targetText.alpha = 0;
-
-            if (playOnStart)
-            {
-                StartSequence();
-            }
-        }
-        else
-        {
-            Debug.LogError("[SequentialTextFader] No TextMeshProUGUI assigned or found!");
+            if (playOnStart) StartSequence();
         }
     }
 
-    /// <summary>
-    /// Starts or Restarts the text sequence.
-    /// </summary>
     [ContextMenu("Play Sequence")]
     public void StartSequence()
     {
-        StopSequence(); // Ensure no duplicates run
+        StopSequence();
         if (textElements != null && textElements.Count > 0)
         {
             sequenceCoroutine = StartCoroutine(RunSequence());
         }
     }
 
-    /// <summary>
-    /// Stops the current sequence immediately.
-    /// </summary>
     public void StopSequence()
     {
         if (sequenceCoroutine != null)
@@ -89,7 +68,7 @@ public class SequentialTextFader : MonoBehaviour
 
         while (true)
         {
-            // 1. Set Content
+            // 1. Check if done
             if (index >= textElements.Count)
             {
                 if (loopSequence)
@@ -98,13 +77,14 @@ public class SequentialTextFader : MonoBehaviour
                 }
                 else
                 {
-                    yield break; // End of sequence
+                    // Trigger the event when finished
+                    onSequenceComplete?.Invoke();
+                    yield break;
                 }
             }
 
+            // 2. Set Content & Fade In
             targetText.text = textElements[index];
-
-            // 2. Fade In
             yield return FadeText(0f, 1f, fadeInDuration);
 
             // 3. Stay
@@ -123,8 +103,6 @@ public class SequentialTextFader : MonoBehaviour
     private IEnumerator FadeText(float startAlpha, float endAlpha, float duration)
     {
         float elapsed = 0f;
-
-        // Ensure starting value is set explicitly
         targetText.alpha = startAlpha;
 
         while (elapsed < duration)
@@ -135,7 +113,6 @@ public class SequentialTextFader : MonoBehaviour
             yield return null;
         }
 
-        // Ensure final value is set explicitly
         targetText.alpha = endAlpha;
     }
 }
