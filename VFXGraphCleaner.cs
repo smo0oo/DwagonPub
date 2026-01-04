@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.VFX;
+using System.Collections; // Required for IEnumerator
 
 [RequireComponent(typeof(VisualEffect))]
 public class VFXGraphCleaner : MonoBehaviour
@@ -10,7 +11,6 @@ public class VFXGraphCleaner : MonoBehaviour
 
     private VisualEffect vfx;
     private PooledObject pooledObj;
-    private float timer;
     private bool stopSignalSent = false;
 
     void Awake()
@@ -21,7 +21,6 @@ public class VFXGraphCleaner : MonoBehaviour
 
     void OnEnable()
     {
-        timer = 0f;
         stopSignalSent = false;
 
         if (vfx != null)
@@ -30,32 +29,54 @@ public class VFXGraphCleaner : MonoBehaviour
             vfx.Reinit();
             vfx.Play();
         }
+
+        // --- OPTIMIZATION: Start logic routines ---
+        if (duration > 0)
+        {
+            StartCoroutine(DurationRoutine());
+        }
+        StartCoroutine(CheckAliveRoutine());
     }
 
-    void Update()
+    // --- OPTIMIZATION: Replaced Update() with Coroutines ---
+
+    private IEnumerator DurationRoutine()
     {
-        if (vfx == null) return;
+        yield return new WaitForSeconds(duration);
+        StopAndFade();
+    }
 
-        timer += Time.deltaTime;
+    private IEnumerator CheckAliveRoutine()
+    {
+        // Wait a tiny bit to let particles spawn initially
+        yield return new WaitForSeconds(0.1f);
 
-        // 1. Handle Explicit Duration (For Constant Spawners)
-        // If the user set a duration, wait for it, then tell the graph to STOP emitting.
-        if (duration > 0 && timer >= duration && !stopSignalSent)
+        WaitForSeconds wait = new WaitForSeconds(0.5f); // Check 2 times per second
+
+        while (true)
         {
-            StopAndFade();
-        }
-
-        // 2. Handle Cleanup (For Everyone)
-        // We wait a tiny bit (0.1s) to let the VFX actually spawn its first particle.
-        // Then, if the particle count hits 0, we know it's truly finished.
-        if (timer > 0.1f)
-        {
-            if (vfx.aliveParticleCount == 0)
+            if (vfx != null && !stopSignalSent)
             {
-                Cleanup();
+                // Only check if we are stopping or if it's a burst effect
+                if (vfx.aliveParticleCount == 0)
+                {
+                    Cleanup();
+                    yield break; // Exit coroutine
+                }
             }
+            // If stop signal was sent, we specifically wait for particles to die
+            else if (vfx != null && stopSignalSent)
+            {
+                if (vfx.aliveParticleCount == 0)
+                {
+                    Cleanup();
+                    yield break;
+                }
+            }
+            yield return wait;
         }
     }
+    // -------------------------------------------------------
 
     public void StopAndFade()
     {
@@ -64,8 +85,7 @@ public class VFXGraphCleaner : MonoBehaviour
         stopSignalSent = true;
         if (vfx != null)
         {
-            // This turns off the "Constant Spawn Rate" in the graph,
-            // allowing existing particles to live out their life and then die.
+            // This turns off the "Constant Spawn Rate" in the graph
             vfx.Stop();
         }
     }

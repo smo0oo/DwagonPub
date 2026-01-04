@@ -25,6 +25,11 @@ public class DomeBattleManager : MonoBehaviour
 
     private LootBagUI _lootBagRef;
 
+    // --- OPTIMIZATION VARS ---
+    private float winCheckTimer = 0f;
+    private const float WIN_CHECK_INTERVAL = 1.0f; // Check every 1 second
+    // -------------------------
+
     void Awake()
     {
         if (instance != null && instance != this) { Destroy(gameObject); }
@@ -41,8 +46,7 @@ public class DomeBattleManager : MonoBehaviour
 
     void Start()
     {
-        // --- NEW: Force Initialize the Wagon Hotbar ---
-        // This ensures the hotbar links up even if GameManager missed it
+        // Force Initialize the Wagon Hotbar
         WagonHotbarManager hotbar = FindAnyObjectByType<WagonHotbarManager>();
         if (hotbar != null)
         {
@@ -52,7 +56,6 @@ public class DomeBattleManager : MonoBehaviour
         {
             Debug.LogWarning("DomeBattleManager: Could not find WagonHotbarManager in the scene.");
         }
-        // ----------------------------------------------
 
         if (resourceManager == null)
         {
@@ -80,10 +83,7 @@ public class DomeBattleManager : MonoBehaviour
             EnterPrepPhase();
         }
 
-        // Check for Blocking UI
         bool uiBlocked = false;
-
-        // 1. Check Loot Bag
         var lootUI = FindFirstObjectByType<LootBagUI>();
         if (lootUI != null && lootUI.IsVisible)
         {
@@ -92,7 +92,6 @@ public class DomeBattleManager : MonoBehaviour
             LootBagUI.OnLootBagClosed += OnLootBagClosed;
         }
 
-        // 2. Check Dual Mode Setup UI
         var setupUI = FindFirstObjectByType<DualModeSetupUI>();
         if (setupUI != null && setupUI.IsVisible)
         {
@@ -125,6 +124,46 @@ public class DomeBattleManager : MonoBehaviour
 
         if (startNightButton != null) startNightButton.onClick.AddListener(OnStartNightClicked);
     }
+
+    // --- OPTIMIZATION: Check for win condition efficiently ---
+    void Update()
+    {
+        if (!IsBattleActive) return;
+
+        winCheckTimer += Time.deltaTime;
+        if (winCheckTimer >= WIN_CHECK_INTERVAL)
+        {
+            winCheckTimer = 0f;
+            CheckForWinCondition();
+        }
+    }
+
+    private void CheckForWinCondition()
+    {
+        // 1. If wave spawner is still busy spawning, we can't win yet
+        if (waveSpawner != null && waveSpawner.IsSpawning) return;
+
+        // 2. Efficient check for enemies
+        // We avoid calling this every frame (now only once per sec)
+        GameObject[] enemies = GameObject.FindGameObjectsWithTag("Enemy");
+
+        bool anyAlive = false;
+        foreach (var enemy in enemies)
+        {
+            Health h = enemy.GetComponent<Health>();
+            if (h != null && h.currentHealth > 0 && !h.isDowned)
+            {
+                anyAlive = true;
+                break;
+            }
+        }
+
+        if (!anyAlive)
+        {
+            OnVictory();
+        }
+    }
+    // ---------------------------------------------------------
 
     private void OnLootBagClosed()
     {
@@ -163,7 +202,6 @@ public class DomeBattleManager : MonoBehaviour
         StartBattle();
     }
 
-    // --- CHANGED TO PUBLIC for Timeline Signal Integration ---
     public void StartBattle()
     {
         IsBattleActive = true;

@@ -29,15 +29,16 @@ public class DomeWaveSpawner : MonoBehaviour
     private int currentWaveIndex = 0;
     private int enemiesAlive = 0;
 
-    // Tracks if the routine is currently running
-    private bool isSpawning = false;
+    // --- FIX: Changed from private field to Public Property ---
+    public bool IsSpawning { get; private set; } = false;
+    // ----------------------------------------------------------
 
     public void StartSpawning()
     {
         if (waves.Count == 0) return;
 
-        if (isSpawning) return;
-        isSpawning = true;
+        if (IsSpawning) return;
+        IsSpawning = true;
 
         currentWaveIndex = 0;
         StartCoroutine(WaveRoutine());
@@ -46,7 +47,7 @@ public class DomeWaveSpawner : MonoBehaviour
     public void StopSpawning()
     {
         StopAllCoroutines();
-        isSpawning = false;
+        IsSpawning = false;
         enemiesAlive = 0; // Reset count just in case
     }
 
@@ -81,7 +82,7 @@ public class DomeWaveSpawner : MonoBehaviour
         }
 
         // 4. All waves complete
-        isSpawning = false;
+        IsSpawning = false;
         if (DomeBattleManager.instance != null)
         {
             DomeBattleManager.instance.OnVictory();
@@ -96,7 +97,7 @@ public class DomeWaveSpawner : MonoBehaviour
 
         GameObject enemy = Instantiate(prefab, spawnPoint.position, spawnPoint.rotation);
 
-        // --- FIXED: Apply Siege Settings ---
+        // --- Apply Siege Settings ---
 
         // 1. Configure AI (Leash & Activation)
         EnemyAI ai = enemy.GetComponent<EnemyAI>();

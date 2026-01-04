@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Collections; // Required for IEnumerator
 using System.Collections.Generic;
 
 [System.Serializable]
@@ -39,7 +40,7 @@ public class MapStreamer : MonoBehaviour
             }
         }
 
-        // --- FIX: Auto-Find Main Camera ---
+        // Auto-Find Main Camera
         if (viewer == null)
         {
             if (Camera.main != null)
@@ -49,12 +50,10 @@ public class MapStreamer : MonoBehaviour
             else
             {
                 Debug.LogError("MapStreamer: No object tagged 'MainCamera' found in the scene! Streaming will not work.");
-                // Fallback: Try to find the Wagon if camera is missing
                 var wagon = FindAnyObjectByType<WagonController>();
                 if (wagon != null) viewer = wagon.transform;
             }
         }
-        // ----------------------------------
 
         // 2. Initial load
         if (viewer != null)
@@ -62,20 +61,32 @@ public class MapStreamer : MonoBehaviour
             currentGridCoord = GetCoordinateFromPosition(viewer.position);
             UpdateChunks();
         }
+
+        // --- OPTIMIZATION: Start the slow check loop ---
+        StartCoroutine(StreamerRoutine());
     }
 
-    void Update()
+    // --- OPTIMIZATION: Replaced Update() with Coroutine ---
+    private IEnumerator StreamerRoutine()
     {
-        if (viewer == null) return;
+        WaitForSeconds wait = new WaitForSeconds(0.5f); // Check 2 times per second
 
-        Vector2Int playerCoord = GetCoordinateFromPosition(viewer.position);
-
-        if (playerCoord != currentGridCoord)
+        while (true)
         {
-            currentGridCoord = playerCoord;
-            UpdateChunks();
+            if (viewer != null)
+            {
+                Vector2Int playerCoord = GetCoordinateFromPosition(viewer.position);
+
+                if (playerCoord != currentGridCoord)
+                {
+                    currentGridCoord = playerCoord;
+                    UpdateChunks();
+                }
+            }
+            yield return wait;
         }
     }
+    // -------------------------------------------------------
 
     private Vector2Int GetCoordinateFromPosition(Vector3 pos)
     {

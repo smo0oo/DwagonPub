@@ -17,8 +17,12 @@ public class DomeAI : MonoBehaviour
     private List<Ability> passiveAbilities;
     private List<Ability> autoTurretAbilities;
 
-    // --- NEW: Buffer for Non-Allocating Physics ---
     private Collider[] _enemyBuffer = new Collider[50];
+
+    // --- OPTIMIZATION VARIABLES ---
+    private float aiTickTimer = 0f;
+    private const float AI_TICK_RATE = 0.25f; // Run AI logic 4 times per second
+    // ------------------------------
 
     void Awake()
     {
@@ -36,12 +40,17 @@ public class DomeAI : MonoBehaviour
         if (abilityHolder == null) return;
         if (passiveAbilities == null || autoTurretAbilities == null) return;
 
-        HandlePassiveAbilities();
-        HandleAutoTurretAbilities();
+        // --- OPTIMIZATION: Throttle AI Logic ---
+        aiTickTimer += Time.deltaTime;
+        if (aiTickTimer >= AI_TICK_RATE)
+        {
+            HandlePassiveAbilities();
+            HandleAutoTurretAbilities();
+            aiTickTimer = 0f;
+        }
+        // ---------------------------------------
     }
 
-    // --- THIS METHOD CONTAINS THE FINAL FIX ---
-    // --- MODIFIED: Replaced LINQ and OverlapSphere with Non-Alloc version ---
     private GameObject FindNearestEnemy(float maxRange)
     {
         if (abilityHolder == null) return null;
@@ -63,6 +72,8 @@ public class DomeAI : MonoBehaviour
         for (int i = 0; i < hitCount; i++)
         {
             var enemy = _enemyBuffer[i];
+            if (enemy == null) continue;
+
             float distance = Vector3.Distance(transform.position, enemy.transform.position);
 
             if (distance < maxRange && distance < minDistance)
@@ -88,7 +99,6 @@ public class DomeAI : MonoBehaviour
         return closest;
     }
 
-    #region Unchanged Code
     private void HandleAutoTurretAbilities()
     {
         foreach (var ability in autoTurretAbilities)
@@ -118,5 +128,4 @@ public class DomeAI : MonoBehaviour
             }
         }
     }
-    #endregion
 }
