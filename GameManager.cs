@@ -265,7 +265,6 @@ public class GameManager : MonoBehaviour
         }
         else
         {
-            // REVERTED: No Coroutine delay. Immediate restoration.
             RestoreControlsSafely();
 
             if (currentSceneType == SceneType.WorldMap) SetUIVisibility("WorldMap");
@@ -476,8 +475,8 @@ public class GameManager : MonoBehaviour
         playerPartyObject.transform.position = spawnPoint.transform.position;
         playerPartyObject.transform.rotation = spawnPoint.transform.rotation;
 
-        TownCharacterSpawnPoint[] townSpawns = (currentSceneType == SceneType.Town) ?
-            FindObjectsByType<TownCharacterSpawnPoint>(FindObjectsSortMode.None) : null;
+        // --- FIX: Remove the SceneType check. Always look for points. ---
+        TownCharacterSpawnPoint[] townSpawns = FindObjectsByType<TownCharacterSpawnPoint>(FindObjectsSortMode.None);
 
         for (int i = 0; i < partyManager.partyMembers.Count; i++)
         {
@@ -504,7 +503,8 @@ public class GameManager : MonoBehaviour
             if (agent != null) agent.enabled = false;
 
             bool positioned = false;
-            if (i != 0 && (state == PlayerSceneState.SpawnAtMarker || (currentSceneType == SceneType.Town && townSpawns != null && townSpawns.Length > 0)))
+            // --- FIX: Remove 'currentSceneType == SceneType.Town' from the condition ---
+            if (i != 0 && (state == PlayerSceneState.SpawnAtMarker || (townSpawns != null && townSpawns.Length > 0)))
             {
                 TownCharacterSpawnPoint mySpawn = townSpawns.FirstOrDefault(t => t.partyMemberIndex == i);
                 if (mySpawn != null)

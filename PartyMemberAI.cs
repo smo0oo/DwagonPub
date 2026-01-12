@@ -19,6 +19,15 @@ public class PartyMemberAI : MonoBehaviour
     public float followStoppingDistance = 1.5f;
     public float rotationSpeed = 12f;
 
+    [Header("Idle Behavior")]
+    [Tooltip("If true, character will wander slightly when holding position.")]
+    public bool enableIdleWander = true;
+    [Tooltip("How far from their anchor point they can wander.")]
+    public float wanderRadius = 3.0f;
+    public float minWanderWait = 2.0f;
+    public float maxWanderWait = 6.0f;
+    private float idleTimer = 0f;
+
     [Header("Self Preservation")]
     [Tooltip("If health drops below this % (0-1), stop fighting and run to leader.")]
     [Range(0f, 1f)] public float retreatThreshold = 0.3f;
@@ -265,18 +274,105 @@ public class PartyMemberAI : MonoBehaviour
 
     private void HandleFollowState()
     {
-        navMeshAgent.speed = originalNavMeshSpeed;
-        Vector3 destination = PartyAIManager.instance.GetFormationPositionFor(this);
-        navMeshAgent.stoppingDistance = (isRetreating || currentStance == AIStance.Passive) ? 1.0f : followStoppingDistance;
+        Vector3 formationPos = PartyAIManager.instance.GetFormationPositionFor(this);
+        float distToFormation = Vector3.Distance(transform.position, formationPos);
 
-        // PERFORMANCE FIX: Directly call MoveTo (which handles throttling), removed excessive distance check
-        MoveTo(destination);
+        // Hysteresis buffer (0.5f) prevents flicking between Follow and Idle states
+        if (distToFormation > followStoppingDistance + 0.5f || isRetreating)
+        {
+            // --- RUN TO FORMATION ---
+            navMeshAgent.speed = originalNavMeshSpeed;
+            navMeshAgent.stoppingDistance = (isRetreating || currentStance == AIStance.Passive) ? 1.0f : followStoppingDistance;
 
-        HandleSmoothRotation();
+            MoveTo(formationPos);
+            HandleSmoothRotation();
 
-        if (!isRetreating && currentStance != AIStance.Passive)
-            UpdateStatus("Following");
+            if (!isRetreating && currentStance != AIStance.Passive)
+                UpdateStatus("Following");
+        }
+        else if (enableIdleWander && !isRetreating)
+        {
+            // --- WANDER AROUND FORMATION SPOT ---
+            // Pass the formation position as the 'Anchor' so they wander around IT, not their current spot
+            HandleIdleWander(formationPos);
+        }
+        else
+        {
+            // --- STAND STILL ---
+            if (!navMeshAgent.isStopped && navMeshAgent.hasPath) navMeshAgent.ResetPath();
+            HandleSmoothRotation();
+            UpdateStatus("Waiting");
+        }
     }
+
+    private void HandleMoveToAndDefendState()
+    {
+        float distToCommand = Vector3.Distance(transform.position, commandMovePosition);
+
+        // Hysteresis buffer
+        if (distToCommand > navMeshAgent.stoppingDistance + 0.5f)
+        {
+            navMeshAgent.speed = originalNavMeshSpeed;
+            MoveTo(commandMovePosition);
+            UpdateStatus("Moving to Position");
+            HandleSmoothRotation();
+        }
+        else if (enableIdleWander)
+        {
+            // Wander around the commanded point
+            HandleIdleWander(commandMovePosition);
+        }
+        else
+        {
+            HandleSmoothRotation();
+            if (!navMeshAgent.pathPending && navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance)
+            {
+                UpdateStatus("Holding Position");
+            }
+        }
+    }
+
+    // --- NEW: Wander Logic ---
+    private void HandleIdleWander(Vector3 anchorPosition)
+    {
+        // If we are currently moving to a wander point, just wait until we get there
+        if (navMeshAgent.hasPath && navMeshAgent.remainingDistance > 0.5f)
+        {
+            HandleSmoothRotation();
+            UpdateStatus("Idling");
+            return;
+        }
+
+        // Count down timer
+        idleTimer -= Time.deltaTime;
+
+        if (idleTimer <= 0f)
+        {
+            // Time to pick a new spot!
+            Vector3 randomOffset = UnityEngine.Random.insideUnitSphere * wanderRadius;
+            randomOffset.y = 0; // Keep it flat
+            Vector3 potentialTarget = anchorPosition + randomOffset;
+
+            // Validate point on NavMesh
+            if (NavMesh.SamplePosition(potentialTarget, out NavMeshHit hit, 2.0f, NavMesh.AllAreas))
+            {
+                // Slow down for idle walking to look natural
+                navMeshAgent.speed = originalNavMeshSpeed * 0.5f;
+                MoveTo(hit.position);
+
+                // Reset timer for next wait
+                idleTimer = UnityEngine.Random.Range(minWanderWait, maxWanderWait);
+            }
+        }
+        else
+        {
+            // While waiting, look around naturally? 
+            // For now, just smooth rotate to match any lingering velocity or leader
+            HandleSmoothRotation();
+            UpdateStatus("Idling");
+        }
+    }
+    // -------------------------
 
     private void HandleAttackState()
     {
@@ -286,6 +382,8 @@ public class PartyMemberAI : MonoBehaviour
 
         if (targeting.HasLineOfSight(currentTarget.transform))
         {
+            navMeshAgent.speed = originalNavMeshSpeed; // Ensure combat speed is fast
+
             Ability abilityToUse = abilitySelector.SelectBestAbility(currentTarget);
             if (abilityToUse == null) return;
 
@@ -318,6 +416,8 @@ public class PartyMemberAI : MonoBehaviour
 
         if (targeting.HasLineOfSight(currentTarget.transform))
         {
+            navMeshAgent.speed = originalNavMeshSpeed;
+
             Ability healAbility = abilitySelector.SelectBestAbility(currentTarget);
             if (healAbility == null) return;
 
@@ -341,19 +441,6 @@ public class PartyMemberAI : MonoBehaviour
         }
     }
 
-    private void HandleMoveToAndDefendState()
-    {
-        MoveTo(commandMovePosition);
-        UpdateStatus("Moving to Position");
-
-        HandleSmoothRotation();
-
-        if (!navMeshAgent.pathPending && navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance)
-        {
-            UpdateStatus("Holding Position");
-        }
-    }
-
     private void HandleSmoothRotation()
     {
         if (navMeshAgent.velocity.sqrMagnitude > 0.1f)
@@ -363,8 +450,15 @@ public class PartyMemberAI : MonoBehaviour
         }
         else if (!hasExplicitCommand && PartyAIManager.instance.ActivePlayer != null)
         {
-            Quaternion targetRotation = PartyAIManager.instance.ActivePlayer.transform.rotation;
-            transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * rotationSpeed);
+            // If completely still, look at the leader? Or just keep facing forward.
+            // Uncomment below to force them to look at leader when stopped.
+            /*
+            Vector3 dirToPlayer = (PartyAIManager.instance.ActivePlayer.transform.position - transform.position).normalized;
+            if (dirToPlayer != Vector3.zero) {
+                Quaternion targetRotation = Quaternion.LookRotation(dirToPlayer);
+                transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * 2f);
+            }
+            */
         }
     }
 
@@ -398,8 +492,8 @@ public class PartyMemberAI : MonoBehaviour
     {
         if (animator == null || navMeshAgent == null) return;
         Vector3 localVelocity = transform.InverseTransformDirection(navMeshAgent.velocity);
-        animator.SetFloat("VelocityZ", localVelocity.z / navMeshAgent.speed, animationDampTime, Time.deltaTime);
-        animator.SetFloat("VelocityX", localVelocity.x / navMeshAgent.speed, animationDampTime, Time.deltaTime);
+        animator.SetFloat("VelocityZ", localVelocity.z / originalNavMeshSpeed, animationDampTime, Time.deltaTime);
+        animator.SetFloat("VelocityX", localVelocity.x / originalNavMeshSpeed, animationDampTime, Time.deltaTime);
     }
 
     public void SetCommand(AICommand newCommand, GameObject target = null, Vector3 position = default)

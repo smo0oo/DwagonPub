@@ -14,6 +14,28 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     public MovementMode currentMode => (PartyManager.instance != null) ? PartyManager.instance.currentMovementMode : MovementMode.PointAndClick;
     public float wasdMoveSpeed;
 
+    [Header("PoE2 Rotation Style")]
+    [Tooltip("The body will not turn if the mouse is within this angle (e.g., 15 degrees left/right).")]
+    public float bodyTurnThreshold = 15f;
+    [Tooltip("How fast the body catches up to the mouse. Lower = Heavy/Laggy. Higher = Snappy.")]
+    public float bodyTurnSpeed = 5f;
+
+    [Space(10)]
+    [Tooltip("How much the head looks at the mouse (0 to 1).")]
+    [Range(0, 1)] public float headLookWeight = 1f;
+    [Tooltip("How fast the head physically turns to face the target. Lower = Natural/Latent. Higher = Robotic.")]
+    public float headLookSpeed = 8f; // <--- RE-ADDED THIS for smoothing
+    [Tooltip("How fast the head weight blends in/out (engaging/disengaging).")]
+    public float headWeightBlendSpeed = 5f;
+    [Tooltip("The height offset for the eyes. Forces the look target to this height to prevent looking down at feet.")]
+    public float headLookHeight = 1.6f;
+
+    // --- PUBLIC PROPERTIES FOR IK RELAY ---
+    public Vector3 CurrentHeadLookPosition { get; private set; } // The SMOOTHED position
+    public Vector3 CurrentLookTarget { get; private set; } // The RAW target (cursor pos)
+    public float CurrentHeadLookWeight { get; private set; }
+    // --------------------------------------
+
     [Header("Dodge Roll")]
     public float dodgeDistance = 5f;
     public float dodgeDuration = 0.4f;
@@ -100,12 +122,20 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         velocityXHash = Animator.StringToHash("VelocityX");
         weaponTypeHash = Animator.StringToHash("WeaponType");
         dodgeHash = Animator.StringToHash(!string.IsNullOrEmpty(dodgeAnimationTrigger) ? dodgeAnimationTrigger : "DodgeRoll");
+
+        if (navMeshAgent != null)
+        {
+            navMeshAgent.updateRotation = false;
+        }
     }
 
     void Start()
     {
         if (navMeshAgent != null) wasdMoveSpeed = navMeshAgent.speed;
         UpdateWeaponTypeParameter();
+
+        // Initialize look position to forward so head doesn't snap on start
+        CurrentHeadLookPosition = transform.position + transform.forward * 5f;
     }
 
     void Update()
@@ -135,6 +165,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         if (abilityHolder != null && abilityHolder.ActiveBeam != null)
         {
             if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
+            RotateTowardsMouse(true);
             return;
         }
 
@@ -162,7 +193,45 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         HandleRotation();
         UpdateAnimator();
+
+        UpdateHeadLookLogic();
     }
+
+    // --- UPDATED: Head Look Logic with Latency ---
+    private void UpdateHeadLookLogic()
+    {
+        if (mainCamera == null) return;
+
+        Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
+        int groundLayerMask = LayerMask.GetMask("Terrain", "Water");
+
+        // 1. Calculate the Raw Target (Where mouse/enemy actually is)
+        Vector3 targetLookPos = transform.position + transform.forward * 5f;
+
+        if (TargetObject != null)
+        {
+            targetLookPos = TargetObject.transform.position;
+        }
+        else if (Physics.Raycast(ray, out RaycastHit hit, 100f, groundLayerMask))
+        {
+            targetLookPos = hit.point;
+        }
+
+        // Flatten Y-Axis to prevent looking down/up
+        targetLookPos.y = transform.position.y + headLookHeight;
+
+        // Store Raw Target (useful for debug or shooting logic)
+        CurrentLookTarget = targetLookPos;
+
+        // 2. Calculate Smoothed Position (This creates the latency/natural feel)
+        // Lerp from current smoothed pos -> raw target
+        CurrentHeadLookPosition = Vector3.Lerp(CurrentHeadLookPosition, CurrentLookTarget, Time.deltaTime * headLookSpeed);
+
+        // 3. Update Weight
+        float targetWeight = (isDodging || (myHealth != null && myHealth.isDowned)) ? 0f : headLookWeight;
+        CurrentHeadLookWeight = Mathf.Lerp(CurrentHeadLookWeight, targetWeight, Time.deltaTime * headWeightBlendSpeed);
+    }
+    // -------------------------------------------------------------
 
     private void HandleInteractionClick()
     {
@@ -264,28 +333,39 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     void OnDisable() { if (navMeshAgent != null && navMeshAgent.isOnNavMesh) { navMeshAgent.isStopped = true; navMeshAgent.ResetPath(); navMeshAgent.updatePosition = true; } StopAllCoroutines(); IsMovingToAttack = false; if (playerEquipment != null) playerEquipment.OnEquipmentChanged -= HandleEquipmentChanged; }
     private void UpdateAnimator() { if (animator == null) return; Vector3 worldVelocity = (currentMode == MovementMode.WASD && wasdVelocity.sqrMagnitude > 0.01f) ? wasdVelocity : navMeshAgent.velocity; Vector3 localVelocity = transform.InverseTransformDirection(worldVelocity); float speed = navMeshAgent.speed; float vZ = localVelocity.z / speed; float vX = localVelocity.x / speed; if (Mathf.Abs(vZ) < 0.05f) vZ = 0f; if (Mathf.Abs(vX) < 0.05f) vX = 0f; animator.SetFloat(velocityZHash, vZ, animationDampTime, Time.deltaTime); animator.SetFloat(velocityXHash, vX, animationDampTime, Time.deltaTime); }
 
-    private IEnumerator DodgeRollCoroutine() { isDodging = true; nextDodgeTime = Time.time + dodgeDuration + dodgeCooldown; abilityHolder.CancelCast(); StopMovement(); isFacingLocked = false; IsMovingToAttack = false; if (interactionCoroutine != null) StopCoroutine(interactionCoroutine); RotateTowardsMouse(); if (animator != null) animator.SetTrigger(dodgeHash); Vector3 startPosition = transform.position; Vector3 destination = startPosition + transform.forward * dodgeDistance; if (NavMesh.SamplePosition(destination, out NavMeshHit hit, 2.0f, NavMesh.AllAreas)) destination = new Vector3(hit.position.x, startPosition.y, hit.position.z); else destination = startPosition; if (navMeshAgent.isOnNavMesh) navMeshAgent.enabled = false; if (mainCollider != null) mainCollider.enabled = false; float elapsedTime = 0f; while (elapsedTime < dodgeDuration) { transform.position = Vector3.Lerp(startPosition, destination, elapsedTime / dodgeDuration); elapsedTime += Time.deltaTime; yield return null; } transform.position = destination; if (mainCollider != null) mainCollider.enabled = true; navMeshAgent.enabled = true; if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(transform.position); isDodging = false; }
+    private IEnumerator DodgeRollCoroutine() { isDodging = true; nextDodgeTime = Time.time + dodgeDuration + dodgeCooldown; abilityHolder.CancelCast(); StopMovement(); isFacingLocked = false; IsMovingToAttack = false; if (interactionCoroutine != null) StopCoroutine(interactionCoroutine); RotateTowardsMouse(true); if (animator != null) animator.SetTrigger(dodgeHash); Vector3 startPosition = transform.position; Vector3 destination = startPosition + transform.forward * dodgeDistance; if (NavMesh.SamplePosition(destination, out NavMeshHit hit, 2.0f, NavMesh.AllAreas)) destination = new Vector3(hit.position.x, startPosition.y, hit.position.z); else destination = startPosition; if (navMeshAgent.isOnNavMesh) navMeshAgent.enabled = false; if (mainCollider != null) mainCollider.enabled = false; float elapsedTime = 0f; while (elapsedTime < dodgeDuration) { transform.position = Vector3.Lerp(startPosition, destination, elapsedTime / dodgeDuration); elapsedTime += Time.deltaTime; yield return null; } transform.position = destination; if (mainCollider != null) mainCollider.enabled = true; navMeshAgent.enabled = true; if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(transform.position); isDodging = false; }
 
     private void ProcessWasdInput() { float horizontal = Input.GetAxis("Horizontal"); float vertical = Input.GetAxis("Vertical"); if ((horizontal != 0 || vertical != 0)) { if (navMeshAgent.hasPath) navMeshAgent.ResetPath(); IsMovingToAttack = false; isFacingLocked = false; if (abilityHolder != null) abilityHolder.CancelCast(); } Vector3 cameraForward = mainCamera.transform.forward; Vector3 cameraRight = mainCamera.transform.right; cameraForward.y = 0; cameraRight.y = 0; cameraForward.Normalize(); cameraRight.Normalize(); Vector3 moveDirection = (cameraForward * vertical) + (cameraRight * horizontal); moveDirection.Normalize(); wasdVelocity = moveDirection * wasdMoveSpeed; navMeshAgent.Move(wasdVelocity * Time.deltaTime); transform.position = navMeshAgent.nextPosition; if (Input.GetMouseButtonDown(0)) HandleInteractionClick(); }
 
-    // --- UPDATED: Throttled Rotation ---
-    private void RotateTowardsMouse()
+    private void RotateTowardsMouse(bool forceRotation = false)
     {
-        // PERFORMANCE FIX: Skip frames to save CPU on raycasts
         frameSkipCounter++;
-        if (frameSkipCounter < 2) return; // Updates 20 times/sec approx
+        if (frameSkipCounter < 2 && !forceRotation) return;
         frameSkipCounter = 0;
 
         Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
         int groundLayerMask = LayerMask.GetMask("Terrain", "Water");
+
         if (Physics.Raycast(ray, out RaycastHit hit, 100f, groundLayerMask))
-            transform.LookAt(new Vector3(hit.point.x, transform.position.y, hit.point.z));
+        {
+            Vector3 directionToMouse = (hit.point - transform.position).normalized;
+            directionToMouse.y = 0;
+
+            if (directionToMouse != Vector3.zero)
+            {
+                float angleToMouse = Vector3.Angle(transform.forward, directionToMouse);
+
+                if (forceRotation || angleToMouse > bodyTurnThreshold)
+                {
+                    Quaternion targetRotation = Quaternion.LookRotation(directionToMouse);
+                    transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * bodyTurnSpeed);
+                }
+            }
+        }
     }
-    // -----------------------------------
 
     private void HandleMovementInput() { if (currentMode == MovementMode.PointAndClick && !IsGroundTargeting) { if (Input.GetMouseButtonDown(0)) HandleInteractionClick(); else if (Input.GetMouseButton(0)) HandleHoldMovement(); } else if (currentMode == MovementMode.WASD) ProcessWasdInput(); }
 
-    // --- UPDATED: Throttled Path Updates ---
     private IEnumerator FollowAndUseAbility()
     {
         if (TargetObject == null) yield break;
@@ -305,7 +385,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         navMeshAgent.stoppingDistance = abilityToUse.range;
 
-        // CACHE WAIT FOR PERFORMANCE
         WaitForSeconds pathUpdateDelay = new WaitForSeconds(0.2f);
 
         while (Vector3.Distance(transform.position, TargetObject.transform.position) > abilityToUse.range)
@@ -320,8 +399,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             }
 
             navMeshAgent.SetDestination(TargetObject.transform.position);
-
-            // PERFORMANCE FIX: Throttle loop
             yield return pathUpdateDelay;
         }
 
@@ -334,9 +411,28 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         }
         IsMovingToAttack = false;
     }
-    // ---------------------------------------
 
-    private void HandleRotation() { if (isFacingLocked && TargetObject != null) transform.LookAt(new Vector3(TargetObject.transform.position.x, transform.position.y, TargetObject.transform.position.z)); else if (IsMovingToAttack && TargetObject != null) transform.LookAt(new Vector3(TargetObject.transform.position.x, transform.position.y, TargetObject.transform.position.z)); else RotateTowardsMouse(); }
+    private void HandleRotation()
+    {
+        if (isFacingLocked && TargetObject != null)
+        {
+            Vector3 dir = (TargetObject.transform.position - transform.position).normalized;
+            dir.y = 0;
+            if (dir != Vector3.zero) transform.rotation = Quaternion.LookRotation(dir);
+        }
+        else if (IsMovingToAttack && TargetObject != null)
+        {
+            Vector3 dir = (TargetObject.transform.position - transform.position).normalized;
+            dir.y = 0;
+            if (dir != Vector3.zero)
+                transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(dir), Time.deltaTime * bodyTurnSpeed);
+        }
+        else
+        {
+            RotateTowardsMouse(false);
+        }
+    }
+
     public void StartFollowingTarget(GameObject newTarget, Ability abilityToQueue = null) { if (newTarget == null) return; TargetObject = newTarget; queuedAbility = abilityToQueue; if (interactionCoroutine != null) StopCoroutine(interactionCoroutine); StartCoroutine(FollowAndUseAbility()); }
 
     private IEnumerator MoveToInteract(GameObject targetObject)
@@ -387,7 +483,10 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             yield return null;
         }
 
-        transform.LookAt(new Vector3(targetObject.transform.position.x, transform.position.y, targetObject.transform.position.z));
+        Vector3 dir = (targetObject.transform.position - transform.position).normalized;
+        dir.y = 0;
+        if (dir != Vector3.zero) transform.rotation = Quaternion.LookRotation(dir);
+
         navMeshAgent.ResetPath();
 
         if (targetObject.TryGetComponent<IInteractable>(out var interactable))

@@ -2,14 +2,13 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using System.Collections;
-using DG.Tweening; // Make sure you have DOTween imported
+using DG.Tweening;
 
 public class LoadingScreenManager : MonoBehaviour
 {
     public static LoadingScreenManager instance;
 
     [Header("Data Asset")]
-    [Tooltip("Assign your 'LoadingScreenData' ScriptableObject here.")]
     public LoadingScreenData data;
 
     [Header("UI References")]
@@ -17,6 +16,8 @@ public class LoadingScreenManager : MonoBehaviour
     public CanvasGroup canvasGroup;
     public Image backgroundImage;
     public TextMeshProUGUI tipText;
+
+    private ResourceRequest currentLoadRequest;
 
     void Awake()
     {
@@ -26,17 +27,12 @@ public class LoadingScreenManager : MonoBehaviour
             return;
         }
         instance = this;
-        // This object should persist across all scenes
         DontDestroyOnLoad(gameObject);
     }
 
     void Start()
     {
-        // Start with the loading screen hidden
-        if (loadingScreenPanel != null)
-        {
-            loadingScreenPanel.SetActive(false);
-        }
+        if (loadingScreenPanel != null) loadingScreenPanel.SetActive(false);
     }
 
     public Coroutine ShowLoadingScreen(float duration)
@@ -46,32 +42,55 @@ public class LoadingScreenManager : MonoBehaviour
 
     private IEnumerator ShowRoutine(float duration)
     {
-        // Select random content
-        if (data != null)
+        // 1. Prepare UI (Hidden)
+        if (canvasGroup != null)
         {
-            if (data.backgroundImages.Count > 0)
-            {
-                backgroundImage.sprite = data.backgroundImages[Random.Range(0, data.backgroundImages.Count)];
-            }
-            if (data.loadingTips.Count > 0)
-            {
-                tipText.text = data.loadingTips[Random.Range(0, data.loadingTips.Count)];
-            }
+            canvasGroup.alpha = 0f; // Ensure transparent before enabling
+            canvasGroup.blocksRaycasts = true;
         }
 
-        // Activate and fade in
         if (loadingScreenPanel != null)
         {
             loadingScreenPanel.SetActive(true);
         }
 
+        // 2. Load Content
+        if (data != null)
+        {
+            if (data.backgroundResourcesPaths.Count > 0)
+            {
+                string randomPath = data.backgroundResourcesPaths[Random.Range(0, data.backgroundResourcesPaths.Count)];
+
+                // Load from Resources/LoadingScreens/
+                currentLoadRequest = Resources.LoadAsync<Sprite>($"LoadingScreens/{randomPath}");
+                yield return currentLoadRequest;
+
+                if (currentLoadRequest.asset != null && backgroundImage != null)
+                {
+                    backgroundImage.sprite = currentLoadRequest.asset as Sprite;
+                    backgroundImage.color = Color.white; // Show image natural color
+                }
+                else
+                {
+                    // Fallback if load fails
+                    if (backgroundImage != null) backgroundImage.color = Color.black;
+                }
+            }
+            else
+            {
+                // No paths in list -> Fallback to black
+                if (backgroundImage != null) backgroundImage.color = Color.black;
+            }
+
+            if (data.loadingTips.Count > 0 && tipText != null)
+            {
+                tipText.text = data.loadingTips[Random.Range(0, data.loadingTips.Count)];
+            }
+        }
+
+        // 3. Fade In
         if (canvasGroup != null)
         {
-            // --- FIX: Ensure we block raycasts again when showing ---
-            canvasGroup.blocksRaycasts = true;
-            // -------------------------------------------------------
-
-            canvasGroup.alpha = 0f;
             yield return canvasGroup.DOFade(1f, duration).WaitForCompletion();
         }
         else
@@ -84,20 +103,24 @@ public class LoadingScreenManager : MonoBehaviour
     {
         if (canvasGroup == null)
         {
-            if (loadingScreenPanel != null) loadingScreenPanel.SetActive(false);
+            FinishHide();
             return;
         }
 
-        // --- FIX: Block raycasts immediately so players can click buttons while it fades ---
         canvasGroup.blocksRaycasts = false;
-        // ---------------------------------------------------------------------------------
+        canvasGroup.DOFade(0f, duration).OnComplete(FinishHide);
+    }
 
-        // Fade out and deactivate
-        canvasGroup.DOFade(0f, duration).OnComplete(() => {
-            if (loadingScreenPanel != null)
-            {
-                loadingScreenPanel.SetActive(false);
-            }
-        });
+    private void FinishHide()
+    {
+        if (loadingScreenPanel != null)
+        {
+            loadingScreenPanel.SetActive(false);
+        }
+
+        // --- CLEANUP MEMORY ---
+        if (backgroundImage != null) backgroundImage.sprite = null;
+        currentLoadRequest = null;
+        Resources.UnloadUnusedAssets();
     }
 }
