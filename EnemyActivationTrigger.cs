@@ -5,7 +5,6 @@ public class EnemyActivationTrigger : MonoBehaviour
 {
     void OnTriggerEnter(Collider other)
     {
-        // CASE 1: Trigger is on the Player (or a generic zone), detecting Enemies entering.
         EnemyAI enemy = other.GetComponentInParent<EnemyAI>();
         if (enemy != null)
         {
@@ -13,11 +12,8 @@ public class EnemyActivationTrigger : MonoBehaviour
             return;
         }
 
-        // CASE 2: Trigger is on the Enemy (Aggro Range), detecting the Player entering.
-        // We check if the THING that entered is the player.
         if (other.CompareTag("Player") || other.GetComponent<PlayerMovement>() != null)
         {
-            // If the player entered, wake up the enemy that OWNS this trigger.
             EnemyAI self = GetComponentInParent<EnemyAI>();
             if (self != null)
             {
@@ -28,10 +24,12 @@ public class EnemyActivationTrigger : MonoBehaviour
 
     void OnTriggerExit(Collider other)
     {
-        // Same logic for Deactivation
         EnemyAI enemy = other.GetComponentInParent<EnemyAI>();
         if (enemy != null)
         {
+            // Don't deactivate an enemy if they are currently fighting!
+            if (enemy.currentTarget != null) return;
+
             enemy.DeactivateAI();
             return;
         }
@@ -41,6 +39,10 @@ public class EnemyActivationTrigger : MonoBehaviour
             EnemyAI self = GetComponentInParent<EnemyAI>();
             if (self != null)
             {
+                // FIX: If the enemy is chasing the player (has a target), ignore the exit trigger.
+                // The enemy's own "Chase Leash Radius" will handle resetting if they go too far.
+                if (self.currentTarget != null) return;
+
                 self.DeactivateAI();
             }
         }

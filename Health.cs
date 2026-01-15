@@ -18,8 +18,12 @@ public class Health : MonoBehaviour
     [Tooltip("If true, the object is destroyed at 0 HP (Enemies). If false, it enters Downed state (Players).")]
     public bool destroyOnDeath = true;
 
-    [Tooltip("If true, this character will not take any damage.")]
+    [Header("Invulnerability Settings")]
+    [Tooltip("Gameplay Invulnerability (e.g. Divine Shield). Controlled by Status Effects.")]
     public bool isInvulnerable = false;
+
+    [Tooltip("Debug God Mode. Prevents all damage regardless of gameplay state.")]
+    public bool debugGodMode = false; // --- NEW FLAG ---
 
     // --- State ---
     public bool isDowned { get; private set; } = false;
@@ -70,7 +74,9 @@ public class Health : MonoBehaviour
             return;
         }
 
-        if (isInvulnerable || isDead || isDowned) return;
+        // --- UPDATED CHECK: Includes debugGodMode ---
+        if (isInvulnerable || debugGodMode || isDead || isDowned) return;
+        // --------------------------------------------
 
         int healthBeforeDamage = currentHealth;
 
@@ -126,7 +132,6 @@ public class Health : MonoBehaviour
 
         ToggleCombatCapability(false);
 
-        // Force Agent Stop
         if (root != null)
         {
             var agent = root.GetComponent<UnityEngine.AI.NavMeshAgent>();
@@ -137,9 +142,7 @@ public class Health : MonoBehaviour
             }
         }
 
-        // --- Change Layer to Ignore Raycast ---
         gameObject.layer = LayerMask.NameToLayer("Ignore Raycast");
-        // -------------------------------------
 
         OnDowned?.Invoke();
         OnHealthChanged?.Invoke();
@@ -152,7 +155,6 @@ public class Health : MonoBehaviour
         isDowned = false;
         isDead = false;
 
-        // Restore HP
         currentHealth = Mathf.FloorToInt(maxHealth * Mathf.Clamp01(healthPercentage));
         if (currentHealth <= 0) currentHealth = 1;
 
@@ -166,7 +168,6 @@ public class Health : MonoBehaviour
 
         ToggleCombatCapability(true);
 
-        // Force Agent Enable
         if (root != null)
         {
             var agent = root.GetComponent<UnityEngine.AI.NavMeshAgent>();
@@ -177,15 +178,12 @@ public class Health : MonoBehaviour
             }
         }
 
-        // --- Restore Original Layer ---
         gameObject.layer = originalLayer;
-        // ------------------------------
 
         OnRevived?.Invoke();
         OnHealthChanged?.Invoke();
     }
 
-    // --- Force Downed State (for Rescue Mission initialization) ---
     public void ForceDownedState()
     {
         isDowned = true;
@@ -203,7 +201,6 @@ public class Health : MonoBehaviour
             }
         }
 
-        // CRITICAL: Hide layer immediately
         gameObject.layer = LayerMask.NameToLayer("Ignore Raycast");
 
         if (root != null && root.Animator != null)
@@ -213,7 +210,6 @@ public class Health : MonoBehaviour
 
         Debug.Log($"{name} forcibly set to DOWNED state.");
     }
-    // ------------------------------------------------------------
 
     private void ToggleCombatCapability(bool canFight)
     {

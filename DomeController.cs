@@ -57,7 +57,6 @@ public class DomeController : MonoBehaviour
         domeHealth = GetComponent<Health>();
         domeCollider = GetComponent<SphereCollider>();
 
-        // Ensure the collider doesn't trigger physics events inadvertently
         if (domeCollider != null)
         {
             domeCollider.isTrigger = false;
@@ -66,13 +65,49 @@ public class DomeController : MonoBehaviour
 
     void Start()
     {
-        // Set the Dome's layer
+        // --- FIX: Only activate Dome logic in DomeBattle scenes ---
+        if (GameManager.instance != null && GameManager.instance.currentSceneType != SceneType.DomeBattle)
+        {
+            DeactivateDome();
+            return;
+        }
+        // ----------------------------------------------------------
+
+        ActivateDome();
+    }
+
+    private void ActivateDome()
+    {
+        // Set Layer to 'Dome' so enemies can target it
         gameObject.layer = LayerMask.NameToLayer("Dome");
+
+        if (domeCollider != null) domeCollider.enabled = true;
+        if (domeHealth != null) domeHealth.isInvulnerable = false;
+
         SpawnEdgeMarkers();
 
         // Initial setup
         HandlePartyStatsChanged(null);
         UpdateDomeHealthUI();
+    }
+
+    private void DeactivateDome()
+    {
+        // 1. Hide from AI Targeting (Default layer is usually ignored by Enemy Targeting)
+        gameObject.layer = LayerMask.NameToLayer("Default");
+
+        // 2. Disable Physics
+        if (domeCollider != null) domeCollider.enabled = false;
+
+        // 3. Make Invulnerable just in case
+        if (domeHealth != null) domeHealth.isInvulnerable = true;
+
+        // 4. Disable this script's Update loop
+        this.enabled = false;
+
+        // 5. Cleanup Markers if they exist
+        foreach (var marker in edgeMarkers) { if (marker != null) Destroy(marker); }
+        edgeMarkers.Clear();
     }
 
     void Update()
@@ -84,30 +119,25 @@ public class DomeController : MonoBehaviour
     {
         if (currentRadius <= 0.1f) return;
 
-        // Tick Timer Logic
         burnTimer += Time.deltaTime;
         if (burnTimer < burnTickRate) return;
 
-        // Reset timer
         burnTimer = 0f;
 
-        // Check for enemies inside the dome radius
         int hitCount = Physics.OverlapSphereNonAlloc(transform.position, currentRadius, burnBuffer, enemyLayer);
-
-        // Calculate damage chunk for this tick
         int damagePerTick = Mathf.CeilToInt(burnDamagePerSecond * burnTickRate);
 
         for (int i = 0; i < hitCount; i++)
         {
             var enemyCollider = burnBuffer[i];
+            if (enemyCollider == null) continue;
+
             Health enemyHealth = enemyCollider.GetComponentInChildren<Health>();
 
             if (enemyHealth != null && enemyHealth.currentHealth > 0)
             {
-                // Apply the chunk of damage
                 enemyHealth.TakeDamage(damagePerTick, DamageEffect.DamageType.Magical, false, this.gameObject);
 
-                // Optional: Spawn VFX
                 if (burnVFX != null)
                 {
                     Instantiate(burnVFX, enemyCollider.transform.position, Quaternion.identity);
@@ -116,7 +146,6 @@ public class DomeController : MonoBehaviour
         }
     }
 
-    // Called by DomeStateController to link the UI when the battle scene starts
     public void LinkUIManager(DomeUIManager manager)
     {
         uiManager = manager;
@@ -138,6 +167,9 @@ public class DomeController : MonoBehaviour
 
     private void HandlePartyStatsChanged(GameObject activePlayer)
     {
+        // If script is disabled (Town Mode), don't process stats
+        if (!this.enabled) return;
+
         if (PartyManager.instance == null) return;
 
         minPower = PartyManager.instance.domeBasePower;
@@ -185,6 +217,8 @@ public class DomeController : MonoBehaviour
 
     public void UpdateDomePower(float currentPower)
     {
+        if (!this.enabled) return;
+
         float powerPercent = 0f;
         if (maxPower > minPower)
         {
@@ -240,9 +274,7 @@ public class DomeController : MonoBehaviour
 
             GameObject marker = Instantiate(edgeMarkerPrefab, transform.position + position, Quaternion.identity, this.transform);
 
-            // --- NEW: Force the layer to match the Dome (for AI targeting) ---
-            marker.layer = this.gameObject.layer;
-            // -----------------------------------------------------------------
+            marker.layer = this.gameObject.layer; // Keeps layer sync'd (Dome or Default)
 
             Health markerHealth = marker.GetComponent<Health>();
             if (markerHealth != null)

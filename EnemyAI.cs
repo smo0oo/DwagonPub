@@ -69,12 +69,17 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private bool isWaitingAtPatrolPoint = false;
     private float waitTimer = 0f;
 
-    // Optimized State Strings
     private string lastState = "";
     private string lastAction = "";
-
-    // Track if we have been activated to prevent Start() from overriding Trigger activation
     private bool hasBeenActivated = false;
+
+    // --- ANIMATION HASHES ---
+    private int speedHash;
+    private int attackTriggerHash;
+    private int attackIndexHash;
+    private int idleIndexHash;
+    private int walkIndexHash;
+    private bool wasMoving = false;
 
     private enum AIState { Idle, Combat, Returning, Retreating }
 
@@ -84,7 +89,14 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         health = GetComponent<Health>();
         abilityHolder = GetComponent<EnemyAbilityHolder>();
         enemyHealthUI = GetComponentInChildren<EnemyHealthUI>();
+
         animator = GetComponentInChildren<Animator>();
+        speedHash = Animator.StringToHash("Speed");
+        attackTriggerHash = Animator.StringToHash("AttackTrigger");
+        attackIndexHash = Animator.StringToHash("AttackIndex");
+        idleIndexHash = Animator.StringToHash("IdleIndex");
+        walkIndexHash = Animator.StringToHash("WalkIndex");
+
         targeting = GetComponent<AITargeting>();
         abilitySelector = GetComponent<AIAbilitySelector>();
         movementHandler = GetComponent<CharacterMovementHandler>();
@@ -154,15 +166,15 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     {
         hasBeenActivated = true;
         this.enabled = true;
-
         if (navMeshAgent != null) navMeshAgent.enabled = true;
         if (animator != null) animator.enabled = true;
     }
 
     public void DeactivateAI()
     {
-        this.enabled = false;
+        if (currentTarget != null) return;
 
+        this.enabled = false;
         if (navMeshAgent != null) navMeshAgent.enabled = false;
         if (animator != null) animator.enabled = false;
     }
@@ -172,9 +184,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && !navMeshAgent.isOnNavMesh)
         {
             if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 5.0f, NavMesh.AllAreas))
-            {
                 navMeshAgent.Warp(hit.position);
-            }
         }
 
         int timeout = 10;
@@ -200,20 +210,87 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     void Update()
     {
         HandleRotation();
+        UpdateAnimator(); // Ensure this runs every frame!
 
         bool isSpecialMovementActive = movementHandler != null && movementHandler.IsSpecialMovementActive;
         if (IsInActionSequence || isDead || isSpecialMovementActive || abilityHolder.IsCasting || abilityHolder.ActiveBeam != null)
         {
-            if (abilityHolder.IsCasting)
-            {
-                StopMovement();
-            }
+            if (abilityHolder.IsCasting) StopMovement();
             if (abilityHolder.ActiveBeam != null && currentTarget != null)
             {
                 transform.LookAt(new Vector3(currentTarget.position.x, transform.position.y, currentTarget.position.z));
             }
             return;
         }
+    }
+
+    // --- UPDATED: Hypersensitive Animation Logic ---
+    private void UpdateAnimator()
+    {
+        if (animator == null) return;
+
+        float currentSpeed = 0f;
+        if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
+        {
+            // 1. Use desired velocity for snappy response (avoids glide start)
+            Vector3 effectiveVelocity = navMeshAgent.velocity;
+            if (effectiveVelocity.magnitude < 0.1f && navMeshAgent.hasPath && !navMeshAgent.isStopped)
+            {
+                effectiveVelocity = navMeshAgent.desiredVelocity;
+            }
+
+            float maxSpeed = navMeshAgent.speed > 0 ? navMeshAgent.speed : 3.5f;
+            currentSpeed = effectiveVelocity.magnitude / maxSpeed;
+
+            // 2. FIX: Force a minimum value if we are trying to move.
+            // This ensures "Circling" (slow movement) triggers the Walk animation.
+            if (navMeshAgent.hasPath && !navMeshAgent.isStopped && navMeshAgent.remainingDistance > 0.1f)
+            {
+                if (currentSpeed < 0.15f) currentSpeed = 0.15f;
+            }
+        }
+
+        // 3. Removed the previous "0.05 clamp" so even tiny movements register.
+        animator.SetFloat(speedHash, currentSpeed, 0.1f, Time.deltaTime);
+
+        bool isMoving = currentSpeed > 0.05f;
+
+        if (isMoving && !wasMoving)
+        {
+            int randomWalk = UnityEngine.Random.Range(0, 2);
+            animator.SetInteger(walkIndexHash, randomWalk);
+        }
+        else if (!isMoving && wasMoving)
+        {
+            int randomIdle = UnityEngine.Random.Range(0, 3);
+            animator.SetInteger(idleIndexHash, randomIdle);
+        }
+
+        wasMoving = isMoving;
+    }
+    // -----------------------------------------------
+
+    private void PerformAttack(Ability ability)
+    {
+        if (animator != null)
+        {
+            if (!string.IsNullOrEmpty(ability.overrideTriggerName))
+            {
+                animator.SetTrigger(ability.overrideTriggerName);
+            }
+            else if (ability.attackStyleIndex > 0)
+            {
+                animator.SetInteger(attackIndexHash, ability.attackStyleIndex);
+                animator.SetTrigger(attackTriggerHash);
+            }
+            else
+            {
+                int randomAttack = UnityEngine.Random.Range(0, 3);
+                animator.SetInteger(attackIndexHash, randomAttack);
+                animator.SetTrigger(attackTriggerHash);
+            }
+        }
+        abilityHolder.UseAbility(ability, currentTarget.gameObject);
     }
 
     private void Think()
@@ -227,7 +304,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
-    // --- UPDATED: Optimized Rotation ---
     private void HandleRotation()
     {
         if (navMeshAgent == null || isDead) return;
@@ -250,14 +326,12 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         {
             Vector3 direction = (targetLookPos - transform.position).normalized;
             direction.y = 0;
-            // PERFORMANCE FIX: Only rotate if direction is significant
             if (direction.sqrMagnitude > 0.01f)
             {
                 transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(direction), Time.deltaTime * 10f);
             }
         }
     }
-    // -----------------------------------
 
     private void UpdateCombatState()
     {
@@ -304,14 +378,14 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             timeSinceLostSight = 0f;
 
             Ability abilityToUse = abilitySelector.SelectBestAbility(currentTarget, hasUsedInitialAbilities);
-            bool isReady = abilityToUse != null;
-            float effectiveRange = isReady ? abilityToUse.range : meleeAttackRange;
+            bool isReady = abilityToUse != null && abilityHolder.CanUseAbility(abilityToUse, currentTarget.gameObject);
+            float effectiveRange = (abilityToUse != null) ? abilityToUse.range : meleeAttackRange;
 
             if (isReady && distToTarget <= effectiveRange)
             {
                 StopMovement();
                 SetAIStatus("Combat", $"Attacking: {abilityToUse.displayName}");
-                abilityHolder.UseAbility(abilityToUse, currentTarget.gameObject);
+                PerformAttack(abilityToUse);
 
                 if (abilitySelector.initialAbilities.Contains(abilityToUse)) hasUsedInitialAbilities = true;
             }
@@ -333,26 +407,16 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private bool IsTargetInvalid(Transform target)
     {
         if (target == null) return true;
-
         Health h = null;
         CharacterRoot root = target.GetComponent<CharacterRoot>() ?? target.GetComponentInParent<CharacterRoot>();
-
-        if (root != null)
-        {
-            h = root.Health;
-        }
-        else
-        {
-            h = target.GetComponent<Health>() ?? target.GetComponentInParent<Health>() ?? target.GetComponentInChildren<Health>();
-        }
-
+        if (root != null) h = root.Health;
+        else h = target.GetComponent<Health>() ?? target.GetComponentInParent<Health>() ?? target.GetComponentInChildren<Health>();
         return h == null || h.isDowned || h.currentHealth <= 0;
     }
 
     private void HandleCombatMovement(bool isReady, Ability abilityToUse)
     {
         bool isTargetDomeMarker = currentTarget.CompareTag("DomeMarker");
-
         if (isTargetDomeMarker)
         {
             ExecuteDirectMovement();
@@ -368,10 +432,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
                 case AIArchetype.Melee: ExecuteMeleeMovement(); break;
                 case AIArchetype.Ranged: ExecuteRangedMovement(); break;
                 case AIArchetype.Hybrid:
-                    if (isReady && abilityToUse.range <= meleeAttackRange)
-                        ExecuteClosingMovement(abilityToUse);
-                    else
-                        ExecuteRangedMovement();
+                    if (isReady && abilityToUse.range <= meleeAttackRange) ExecuteClosingMovement(abilityToUse);
+                    else ExecuteRangedMovement();
                     break;
             }
         }
@@ -380,12 +442,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private void ExecuteClosingMovement(Ability ability)
     {
         navMeshAgent.speed = originalSpeed;
-        if (assignedSurroundPoint != null)
-        {
-            SurroundPointManager.instance.ReleasePoint(this);
-            assignedSurroundPoint = null;
-        }
-
+        if (assignedSurroundPoint != null) { SurroundPointManager.instance.ReleasePoint(this); assignedSurroundPoint = null; }
         float range = (ability != null) ? ability.range : meleeAttackRange;
         navMeshAgent.stoppingDistance = range * 0.8f;
         navMeshAgent.SetDestination(currentTarget.position);
@@ -397,7 +454,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         navMeshAgent.speed = originalSpeed;
         Ability ability = abilitySelector.SelectBestAbility(currentTarget, hasUsedInitialAbilities) ?? abilitySelector.abilities.FirstOrDefault();
         float range = (ability != null) ? ability.range : meleeAttackRange;
-
         navMeshAgent.stoppingDistance = range * 0.8f;
         navMeshAgent.SetDestination(currentTarget.position);
         SetAIStatus("Combat", "Advancing on Dome");
@@ -416,7 +472,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private void UpdateIdleState()
     {
         currentTarget = targeting.FindBestTarget(null);
-
         if (currentTarget != null)
         {
             hasUsedInitialAbilities = false;
@@ -447,21 +502,9 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         else if (navMeshAgent.isOnNavMesh && !navMeshAgent.pathPending && navMeshAgent.remainingDistance < 0.5f)
         {
             PatrolPoint currentPoint = collectedPatrolPoints[currentPatrolIndex];
-
-            if (!string.IsNullOrEmpty(currentPoint.animationTriggerName) && animator != null)
-            {
-                animator.SetTrigger(currentPoint.animationTriggerName);
-            }
-
-            if (currentPoint.onArrive != null)
-            {
-                currentPoint.onArrive.Invoke();
-            }
-
-            if (!string.IsNullOrEmpty(currentPoint.sendMessageToNPC))
-            {
-                SendMessage(currentPoint.sendMessageToNPC, SendMessageOptions.DontRequireReceiver);
-            }
+            if (!string.IsNullOrEmpty(currentPoint.animationTriggerName) && animator != null) animator.SetTrigger(currentPoint.animationTriggerName);
+            if (currentPoint.onArrive != null) currentPoint.onArrive.Invoke();
+            if (!string.IsNullOrEmpty(currentPoint.sendMessageToNPC)) SendMessage(currentPoint.sendMessageToNPC, SendMessageOptions.DontRequireReceiver);
 
             float waitTime = UnityEngine.Random.Range(currentPoint.minWaitTime, currentPoint.maxWaitTime);
             if (waitTime > 0)
@@ -503,7 +546,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     {
         navMeshAgent.speed = originalSpeed;
         SetAIStatus("Returning", "Leashing");
-
         currentTarget = targeting.FindBestTarget(null);
         if (currentTarget != null)
         {
@@ -511,7 +553,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             combatStartPosition = transform.position;
             return;
         }
-
         if (navMeshAgent.isOnNavMesh && !navMeshAgent.pathPending && navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance)
         {
             navMeshAgent.ResetPath();
@@ -585,22 +626,14 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public void ExecuteCharge(GameObject target, Ability chargeAbility) { if (abilitySelector.abilities.Contains(chargeAbility)) movementHandler?.ExecuteCharge(target, chargeAbility); }
     public void ExecuteTeleport(Vector3 destination) { if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(destination); else transform.position = destination; }
 
-    // --- UPDATED: Optimized Status String ---
     private void SetAIStatus(string state, string action)
     {
-        // PERFORMANCE FIX: Avoid allocating new strings if status is identical
         if (lastState == state && lastAction == action) return;
-
         lastState = state;
         lastAction = action;
-        string newMessage = $"{state} :: {action}";
-
         enemyHealthUI?.UpdateStatus(state, action);
-
-        if (FloatingTextManager.instance != null)
-            FloatingTextManager.instance.ShowAIStatus(action, transform.position + Vector3.up * 3.5f);
+        if (FloatingTextManager.instance != null) FloatingTextManager.instance.ShowAIStatus(action, transform.position + Vector3.up * 3.5f);
     }
-    // ----------------------------------------
 
     private void CollectPatrolPoints() { if (patrolPaths == null || patrolPaths.Length == 0) return; List<PatrolPoint> points = new List<PatrolPoint>(); foreach (PatrolPath path in patrolPaths) { if (path == null) continue; Collider pathCollider = path.GetComponent<Collider>(); if (pathCollider == null) continue; Collider[] collidersInVolume = Physics.OverlapBox(path.transform.position, pathCollider.bounds.extents, path.transform.rotation); foreach (Collider col in collidersInVolume) { if (col.TryGetComponent<PatrolPoint>(out PatrolPoint point)) { if (!points.Contains(point)) points.Add(point); } } } collectedPatrolPoints = points.OrderBy(p => p.gameObject.name).ToArray(); }
     void OnDestroy() { if (assignedSurroundPoint != null && SurroundPointManager.instance != null) { SurroundPointManager.instance.ReleasePoint(this); } if (health != null) health.OnHealthChanged -= HandleHealthChanged; if (abilityHolder != null) { abilityHolder.OnCastStarted -= HandleCastStarted; abilityHolder.OnCastFinished -= HandleCastFinished; } }

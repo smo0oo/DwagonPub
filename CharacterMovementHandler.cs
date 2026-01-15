@@ -51,7 +51,7 @@ public class CharacterMovementHandler : MonoBehaviour
             }
             else
             {
-                destination = transform.position; // Stay in place if destination is invalid
+                destination = transform.position;
             }
 
             if (navMeshAgent.isOnNavMesh) navMeshAgent.enabled = false;
@@ -71,7 +71,8 @@ public class CharacterMovementHandler : MonoBehaviour
             if (navMeshAgent != null)
             {
                 navMeshAgent.enabled = true;
-                if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(transform.position);
+                // Force warp without checking isOnNavMesh immediately, as it may lag by a frame
+                if (navMeshAgent.isActiveAndEnabled) navMeshAgent.Warp(transform.position);
             }
             IsSpecialMovementActive = false;
         }
@@ -87,17 +88,18 @@ public class CharacterMovementHandler : MonoBehaviour
     {
         IsSpecialMovementActive = true;
 
-        // Disabling the agent is correct for a jump/leap
         if (navMeshAgent.isOnNavMesh) navMeshAgent.enabled = false;
 
         transform.DOJump(destination, leapPower, 1, leapDuration)
             .SetEase(Ease.OutQuad)
             .OnComplete(() => {
                 onLandAction?.Invoke();
-                if (navMeshAgent)
+                if (navMeshAgent != null)
                 {
+                    // --- FIX: Force Enable and Warp ---
                     navMeshAgent.enabled = true;
-                    if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(transform.position);
+                    navMeshAgent.Warp(transform.position);
+                    // ----------------------------------
                 }
 
                 IsSpecialMovementActive = false;
@@ -112,22 +114,17 @@ public class CharacterMovementHandler : MonoBehaviour
         StartCoroutine(ChargeCoroutine(target, chargeAbility));
     }
 
-    // --- UPDATED METHOD ---
     private IEnumerator ChargeCoroutine(GameObject target, Ability chargeAbility)
     {
         IsSpecialMovementActive = true;
 
-        // 1. Capture current state (Was it false because of WASD mode?)
         bool wasUpdatePosition = navMeshAgent.updatePosition;
         float originalSpeed = navMeshAgent.speed;
         float originalAccel = navMeshAgent.acceleration;
 
-        // 2. Force settings for the charge
         navMeshAgent.speed = chargeSpeed;
         navMeshAgent.acceleration = chargeAcceleration;
         navMeshAgent.stoppingDistance = 2f;
-
-        // This is the FIX: Allow the agent to move the transform during the charge
         navMeshAgent.updatePosition = true;
 
         while (target != null && Vector3.Distance(transform.position, target.transform.position) > navMeshAgent.stoppingDistance)
@@ -147,11 +144,8 @@ public class CharacterMovementHandler : MonoBehaviour
             }
         }
 
-        // 3. Restore original settings
         navMeshAgent.speed = originalSpeed;
         navMeshAgent.acceleration = originalAccel;
-
-        // Restore the mode (if it was WASD, this sets it back to false)
         navMeshAgent.updatePosition = wasUpdatePosition;
 
         if (navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath();

@@ -53,7 +53,6 @@ public class InventoryUIController : MonoBehaviour
     void OnEnable() { PartyManager.OnActivePlayerChanged += RefreshAllPlayerDisplays; }
     void OnDisable() { PartyManager.OnActivePlayerChanged -= RefreshAllPlayerDisplays; }
 
-    // --- THIS METHOD HAS BEEN UPDATED ---
     public void RefreshAllPlayerDisplays(GameObject newActivePlayer)
     {
         ActivePlayer = newActivePlayer;
@@ -67,7 +66,9 @@ public class InventoryUIController : MonoBehaviour
             return;
         }
 
-        if (levelDebugUI != null) { levelDebugUI.DisplayPartyStats(partyManager); }
+        // --- FIX: Removed the call to DisplayPartyStats as LevelDebugUI now handles itself ---
+        // if (levelDebugUI != null) { levelDebugUI.DisplayPartyStats(partyManager); } 
+        // -----------------------------------------------------------------------------------
 
         CharacterRoot root = ActivePlayer.GetComponent<CharacterRoot>();
         if (root == null) { Debug.LogError($"The current player '{ActivePlayer.name}' is missing a CharacterRoot component! UI cannot be updated.", ActivePlayer); return; }
@@ -76,7 +77,7 @@ public class InventoryUIController : MonoBehaviour
         ActivePlayerInventory = root.Inventory;
         ActivePlayerStats = root.PlayerStats;
         ActivePlayerAbilityHolder = root.PlayerAbilityHolder;
-        PlayerHotbar playerHotbar = root.GetComponentInChildren<PlayerHotbar>(true); // Hotbar is not a core component on the root yet
+        PlayerHotbar playerHotbar = root.GetComponentInChildren<PlayerHotbar>(true);
         Health playerHealth = root.Health;
 
         // Update all relevant UI managers with the new components
@@ -93,8 +94,6 @@ public class InventoryUIController : MonoBehaviour
         ActivePlayerStats?.CalculateFinalStats();
     }
 
-    // ... (rest of the script is unchanged) ...
-    #region Unchanged Code
     void Update()
     {
         if (GameManager.instance != null && GameManager.instance.currentSceneType == SceneType.MainMenu) { return; }
@@ -110,5 +109,4 @@ public class InventoryUIController : MonoBehaviour
     public void ToggleAbilityBookPanel() { if (abilityBookPanel != null) TogglePanel(abilityBookPanel); }
     public void TogglePartyInventoryPanel() { if (partyInventoryPanel != null) TogglePanel(partyInventoryPanel); }
     public void ToggleSkillTreePanel() { if (skillTreePanel == null || skillTreeUIManager == null) return; bool isCurrentlyOpen = skillTreePanel.activeSelf; if (isCurrentlyOpen) { skillTreeUIManager.HideSkillTree(); skillTreePanel.SetActive(false); if (TooltipManager.instance != null) TooltipManager.instance.HideTooltip(); } else { CloseAllPanels(); GameObject currentPlayer = PartyManager.instance.ActivePlayer; if (currentPlayer == null) return; PlayerStats stats = currentPlayer.GetComponentInChildren<PlayerStats>(); if (stats == null) return; skillTreeUIManager.DisplaySkillTree(stats); skillTreePanel.SetActive(true); } }
-    #endregion
 }
