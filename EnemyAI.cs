@@ -39,6 +39,12 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public float retreatAndKiteSpeed = 8f;
     public bool isTimid = false;
 
+    // --- FIX: Add Recovery Delay ---
+    [Tooltip("How long the enemy stands still after an attack finishes. Prevents twitchy movement.")]
+    public float attackRecoveryDelay = 0.5f;
+    private float recoveryTimer = 0f;
+    // -------------------------------
+
     [Header("Self Preservation")]
     [Range(0f, 1f)] public float retreatHealthThreshold = 0.3f;
     [Range(0f, 1f)] public float retreatChance = 0.5f;
@@ -134,7 +140,11 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     void OnEnable()
     {
         PlayerAbilityHolder.OnPlayerAbilityUsed += HandlePlayerAbilityUsed;
-        if (health != null) health.OnHealthChanged += HandleHealthChanged;
+        if (health != null)
+        {
+            health.OnHealthChanged += HandleHealthChanged;
+            health.OnDeath += OnDeath;
+        }
         if (abilityHolder != null)
         {
             abilityHolder.OnCastStarted += HandleCastStarted;
@@ -147,7 +157,11 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     void OnDisable()
     {
         PlayerAbilityHolder.OnPlayerAbilityUsed -= HandlePlayerAbilityUsed;
-        if (health != null) health.OnHealthChanged -= HandleHealthChanged;
+        if (health != null)
+        {
+            health.OnHealthChanged -= HandleHealthChanged;
+            health.OnDeath -= OnDeath;
+        }
         if (abilityHolder != null)
         {
             abilityHolder.OnCastStarted -= HandleCastStarted;
@@ -162,10 +176,33 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
+    private void OnDeath()
+    {
+        isDead = true;
+
+        StopMovement();
+        if (navMeshAgent != null) navMeshAgent.enabled = false;
+
+        if (animator != null)
+        {
+            animator.SetFloat(speedHash, 0f);
+            animator.ResetTrigger(attackTriggerHash);
+        }
+
+        if (enemyHealthUI != null) enemyHealthUI.gameObject.SetActive(false);
+        SetAIStatus("Dead", "");
+
+        Collider c = GetComponent<Collider>();
+        if (c != null) c.enabled = false;
+
+        this.enabled = false;
+    }
+
     public void ActivateAI()
     {
         hasBeenActivated = true;
         this.enabled = true;
+
         if (navMeshAgent != null) navMeshAgent.enabled = true;
         if (animator != null) animator.enabled = true;
     }
@@ -184,7 +221,9 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && !navMeshAgent.isOnNavMesh)
         {
             if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 5.0f, NavMesh.AllAreas))
+            {
                 navMeshAgent.Warp(hit.position);
+            }
         }
 
         int timeout = 10;
@@ -209,8 +248,22 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     void Update()
     {
+        if (isDead) return;
+
         HandleRotation();
-        UpdateAnimator(); // Ensure this runs every frame!
+
+        // --- FIX: Recovery Delay Check ---
+        // If we are recovering from an attack, force animation to Idle and stop moving
+        if (Time.time < recoveryTimer)
+        {
+            StopMovement();
+            // Force animator to reflect "stopped" state
+            if (animator != null) animator.SetFloat(speedHash, 0f);
+            return;
+        }
+        // ---------------------------------
+
+        UpdateAnimator();
 
         bool isSpecialMovementActive = movementHandler != null && movementHandler.IsSpecialMovementActive;
         if (IsInActionSequence || isDead || isSpecialMovementActive || abilityHolder.IsCasting || abilityHolder.ActiveBeam != null)
@@ -224,7 +277,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
-    // --- UPDATED: Hypersensitive Animation Logic ---
     private void UpdateAnimator()
     {
         if (animator == null) return;
@@ -232,7 +284,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         float currentSpeed = 0f;
         if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
         {
-            // 1. Use desired velocity for snappy response (avoids glide start)
             Vector3 effectiveVelocity = navMeshAgent.velocity;
             if (effectiveVelocity.magnitude < 0.1f && navMeshAgent.hasPath && !navMeshAgent.isStopped)
             {
@@ -242,16 +293,13 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             float maxSpeed = navMeshAgent.speed > 0 ? navMeshAgent.speed : 3.5f;
             currentSpeed = effectiveVelocity.magnitude / maxSpeed;
 
-            // 2. FIX: Force a minimum value if we are trying to move.
-            // This ensures "Circling" (slow movement) triggers the Walk animation.
             if (navMeshAgent.hasPath && !navMeshAgent.isStopped && navMeshAgent.remainingDistance > 0.1f)
             {
                 if (currentSpeed < 0.15f) currentSpeed = 0.15f;
             }
         }
 
-        // 3. Removed the previous "0.05 clamp" so even tiny movements register.
-        animator.SetFloat(speedHash, currentSpeed, 0.1f, Time.deltaTime);
+        animator.SetFloat(speedHash, currentSpeed, 0f, Time.deltaTime);
 
         bool isMoving = currentSpeed > 0.05f;
 
@@ -268,7 +316,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
         wasMoving = isMoving;
     }
-    // -----------------------------------------------
 
     private void PerformAttack(Ability ability)
     {
@@ -295,6 +342,9 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     private void Think()
     {
+        // Don't think if recovering
+        if (Time.time < recoveryTimer) return;
+
         switch (currentState)
         {
             case AIState.Idle: UpdateIdleState(); break;
@@ -311,10 +361,14 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         Vector3 targetLookPos = Vector3.zero;
         bool shouldRotate = false;
 
-        if (currentState == AIState.Combat && currentTarget != null)
+        // --- FIX: Also look at target during Recovery ---
+        if ((currentState == AIState.Combat && currentTarget != null) || Time.time < recoveryTimer)
         {
-            targetLookPos = currentTarget.position;
-            shouldRotate = true;
+            if (currentTarget != null)
+            {
+                targetLookPos = currentTarget.position;
+                shouldRotate = true;
+            }
         }
         else if (navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh && navMeshAgent.velocity.sqrMagnitude > 0.1f)
         {
@@ -378,7 +432,9 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             timeSinceLostSight = 0f;
 
             Ability abilityToUse = abilitySelector.SelectBestAbility(currentTarget, hasUsedInitialAbilities);
+
             bool isReady = abilityToUse != null && abilityHolder.CanUseAbility(abilityToUse, currentTarget.gameObject);
+
             float effectiveRange = (abilityToUse != null) ? abilityToUse.range : meleeAttackRange;
 
             if (isReady && distToTarget <= effectiveRange)
@@ -617,10 +673,19 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         return true;
     }
 
-    private void HandleHealthChanged() { if (health.currentHealth <= 0 && !isDead) { isDead = true; if (assignedSurroundPoint != null) { SurroundPointManager.instance.ReleasePoint(this); assignedSurroundPoint = null; } navMeshAgent.enabled = false; this.enabled = false; StopAllCoroutines(); return; } if (behaviorProfile != null && !isDead) { float currentHealthPercent = (float)health.currentHealth / health.maxHealth; foreach (var trigger in behaviorProfile.healthTriggers) { if (currentHealthPercent <= trigger.healthPercentage && !triggeredHealthPhases.Contains(trigger)) { triggeredHealthPhases.Add(trigger); GameObject targetForAbility = (currentTarget != null) ? currentTarget.gameObject : this.gameObject; abilityHolder.UseAbility(trigger.abilityToUse, targetForAbility); break; } } } }
+    private void HandleHealthChanged() { if (health.currentHealth <= 0 && !isDead) { OnDeath(); } if (behaviorProfile != null && !isDead) { float currentHealthPercent = (float)health.currentHealth / health.maxHealth; foreach (var trigger in behaviorProfile.healthTriggers) { if (currentHealthPercent <= trigger.healthPercentage && !triggeredHealthPhases.Contains(trigger)) { triggeredHealthPhases.Add(trigger); GameObject targetForAbility = (currentTarget != null) ? currentTarget.gameObject : this.gameObject; abilityHolder.UseAbility(trigger.abilityToUse, targetForAbility); break; } } } }
     private void HandlePlayerAbilityUsed(PlayerAbilityHolder player, Ability usedAbility) { PlayerMovement playerMovement = player.GetComponentInParent<PlayerMovement>(); if (isDead || abilityHolder.IsCasting || playerMovement == null || playerMovement.TargetObject != this.gameObject) return; if (behaviorProfile != null) { foreach (var trigger in behaviorProfile.reactiveTriggers) { if (trigger.triggerType == usedAbility.abilityType) { if (UnityEngine.Random.value <= trigger.chanceToReact) { abilityHolder.UseAbility(trigger.reactionAbility, player.gameObject); break; } } } } }
     private void HandleCastStarted(string abilityName, float castDuration) { if (enemyHealthUI != null) enemyHealthUI.StartCast(abilityName, castDuration); SetAIStatus("Combat", "Casting"); if (navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath(); }
-    private void HandleCastFinished() { if (enemyHealthUI != null) enemyHealthUI.StopCast(); }
+
+    // --- FIX: Trigger Recovery Period ---
+    private void HandleCastFinished()
+    {
+        if (enemyHealthUI != null) enemyHealthUI.StopCast();
+
+        // Prevents the AI from instantly snapping to Run.
+        recoveryTimer = Time.time + attackRecoveryDelay;
+    }
+    // ------------------------------------
 
     public void ExecuteLeap(Vector3 destination, Action onLandAction) { movementHandler?.ExecuteLeap(destination, onLandAction); }
     public void ExecuteCharge(GameObject target, Ability chargeAbility) { if (abilitySelector.abilities.Contains(chargeAbility)) movementHandler?.ExecuteCharge(target, chargeAbility); }
@@ -636,5 +701,21 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     }
 
     private void CollectPatrolPoints() { if (patrolPaths == null || patrolPaths.Length == 0) return; List<PatrolPoint> points = new List<PatrolPoint>(); foreach (PatrolPath path in patrolPaths) { if (path == null) continue; Collider pathCollider = path.GetComponent<Collider>(); if (pathCollider == null) continue; Collider[] collidersInVolume = Physics.OverlapBox(path.transform.position, pathCollider.bounds.extents, path.transform.rotation); foreach (Collider col in collidersInVolume) { if (col.TryGetComponent<PatrolPoint>(out PatrolPoint point)) { if (!points.Contains(point)) points.Add(point); } } } collectedPatrolPoints = points.OrderBy(p => p.gameObject.name).ToArray(); }
-    void OnDestroy() { if (assignedSurroundPoint != null && SurroundPointManager.instance != null) { SurroundPointManager.instance.ReleasePoint(this); } if (health != null) health.OnHealthChanged -= HandleHealthChanged; if (abilityHolder != null) { abilityHolder.OnCastStarted -= HandleCastStarted; abilityHolder.OnCastFinished -= HandleCastFinished; } }
+    void OnDestroy()
+    {
+        if (assignedSurroundPoint != null && SurroundPointManager.instance != null)
+        {
+            SurroundPointManager.instance.ReleasePoint(this);
+        }
+        if (health != null)
+        {
+            health.OnHealthChanged -= HandleHealthChanged;
+            health.OnDeath -= OnDeath;
+        }
+        if (abilityHolder != null)
+        {
+            abilityHolder.OnCastStarted -= HandleCastStarted;
+            abilityHolder.OnCastFinished -= HandleCastFinished;
+        }
+    }
 }

@@ -39,10 +39,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     private Coroutine activeMeleeCoroutine;
     private Coroutine activeLockCoroutine;
 
-    // --- NEW VARIABLE ---
-    // Tracks the active "Wind-up" VFX instance so we can destroy it later
     private GameObject currentCastingVFXInstance;
-    // --------------------
 
     private Collider[] _aoeBuffer = new Collider[100];
     private List<CharacterRoot> _affectedCharactersBuffer = new List<CharacterRoot>(100);
@@ -138,18 +135,15 @@ public class PlayerAbilityHolder : MonoBehaviour
         IsCasting = true;
         if (navMeshAgent != null && navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath();
 
-        // --- NEW LOGIC: Spawn Casting VFX ---
         if (ability.castingVFX != null)
         {
             Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
             currentCastingVFXInstance = ObjectPooler.instance.Get(ability.castingVFX, spawnTransform.position, spawnTransform.rotation);
             if (currentCastingVFXInstance != null)
             {
-                // Parent it to the wand/hand so it moves with the animation
                 currentCastingVFXInstance.transform.SetParent(spawnTransform);
             }
         }
-        // ------------------------------------
 
         try
         {
@@ -159,7 +153,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
         finally
         {
-            // Ensure VFX is cleaned up when cast finishes OR if interrupted
             CleanupCastingVFX();
 
             IsCasting = false;
@@ -169,12 +162,10 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    // --- NEW HELPER METHOD ---
     private void CleanupCastingVFX()
     {
         if (currentCastingVFXInstance != null)
         {
-            // If you have the VFXGraphCleaner script, try to fade out gracefully
             VFXGraphCleaner cleaner = currentCastingVFXInstance.GetComponent<VFXGraphCleaner>();
             if (cleaner != null)
             {
@@ -182,7 +173,6 @@ public class PlayerAbilityHolder : MonoBehaviour
             }
             else
             {
-                // Fallback: Return to pool or Destroy
                 PooledObject pooled = currentCastingVFXInstance.GetComponent<PooledObject>();
                 if (pooled != null) pooled.ReturnToPool();
                 else Destroy(currentCastingVFXInstance);
@@ -191,7 +181,6 @@ public class PlayerAbilityHolder : MonoBehaviour
             currentCastingVFXInstance = null;
         }
     }
-    // -------------------------
 
     private void ExecuteAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown = false)
     {
@@ -200,18 +189,15 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
         if (ability.castSound != null) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
 
-        // --- FIX: Parent VFX to the Spawn Point ---
         Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
         if (ability.castVFX != null)
         {
             GameObject vfxInstance = ObjectPooler.instance.Get(ability.castVFX, spawnTransform.position, spawnTransform.rotation);
             if (vfxInstance != null)
             {
-                // Attaches the VFX to the wand/hand so it moves if the player turns
                 vfxInstance.transform.SetParent(spawnTransform);
             }
         }
-        // ------------------------------------------
 
         OnPlayerAbilityUsed?.Invoke(this, ability);
 
@@ -225,7 +211,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         {
             case AbilityType.TargetedProjectile:
             case AbilityType.ForwardProjectile:
-                HandleProjectile(ability, target);
+                HandleProjectile(ability, target, position);
                 break;
             case AbilityType.TargetedMelee:
             case AbilityType.DirectionalMelee:
@@ -331,10 +317,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         if (activeCastCoroutine != null) { StopCoroutine(activeCastCoroutine); activeCastCoroutine = null; }
         IsCasting = false;
-
-        // --- NEW: Cleanup if cancelled ---
         CleanupCastingVFX();
-        // ---------------------------------
 
         IsAnimationLocked = false;
         if (activeLockCoroutine != null) { StopCoroutine(activeLockCoroutine); activeLockCoroutine = null; }
@@ -425,41 +408,66 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    private void HandleProjectile(Ability ability, GameObject target)
+    // --- UPDATED: Direct "Spawn to Target" Aiming ---
+    private void HandleProjectile(Ability ability, GameObject target, Vector3 targetPos)
     {
         if (ability.playerProjectilePrefab == null) return;
+
         Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
         Vector3 spawnPos = spawnTransform.position;
         Quaternion spawnRot = spawnTransform.rotation;
+
+        // 1. Locked Target Aiming
         if (target != null)
         {
-            CharacterRoot targetRoot = target.GetComponentInParent<CharacterRoot>();
-            if (targetRoot != null)
+            Vector3 targetCenter = target.transform.position;
+
+            // Try to find a specific center point (Collider bounds)
+            Collider targetCollider = target.GetComponent<Collider>();
+            if (targetCollider == null) targetCollider = target.GetComponentInChildren<Collider>();
+
+            if (targetCollider != null)
             {
-                Collider targetCollider = targetRoot.GetComponentInChildren<Collider>();
-                if (targetCollider != null)
-                {
-                    Vector3 targetPosition = targetCollider.bounds.center;
-                    Vector3 direction = targetPosition - spawnPos;
-                    if (direction != Vector3.zero) { spawnRot = Quaternion.LookRotation(direction); }
-                }
+                targetCenter = targetCollider.bounds.center;
+            }
+
+            Vector3 direction = targetCenter - spawnPos;
+            if (direction != Vector3.zero)
+            {
+                spawnRot = Quaternion.LookRotation(direction);
             }
         }
+        // 2. Ground/Skillshot Aiming
+        else
+        {
+            // Calculate aim direction strictly from the spawn point to the cursor click
+            Vector3 direction = targetPos - spawnPos;
+            direction.y = 0; // Flatten Y to ensure projectile flies horizontally (avoids shooting into floor)
+
+            if (direction.sqrMagnitude > 0.001f)
+            {
+                spawnRot = Quaternion.LookRotation(direction);
+            }
+        }
+
         GameObject projectileGO = ObjectPooler.instance.Get(ability.playerProjectilePrefab, spawnPos, spawnRot);
         if (projectileGO == null) return;
         projectileGO.layer = LayerMask.NameToLayer("FriendlyRanged");
+
         Collider projectileCollider = projectileGO.GetComponent<Collider>();
         if (projectileCollider != null)
         {
             Collider[] casterColliders = GetComponentInParent<CharacterRoot>().GetComponentsInChildren<Collider>();
             foreach (Collider c in casterColliders) { Physics.IgnoreCollision(projectileCollider, c); }
         }
+
         if (projectileGO.TryGetComponent<Projectile>(out var projectile))
         {
             int layer = GetComponentInParent<CharacterRoot>().gameObject.layer;
             projectile.Initialize(ability, this.gameObject, layer);
         }
     }
+    // ------------------------------------------------
 
     private void HandleChanneledBeam(Ability ability, GameObject target)
     {

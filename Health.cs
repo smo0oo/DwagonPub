@@ -10,6 +10,10 @@ public class Health : MonoBehaviour
     public event Action OnDowned;
     public event Action OnRevived;
 
+    // --- FIX: Added missing event required by EnemyAI ---
+    public event Action OnDeath;
+    // ----------------------------------------------------
+
     [Header("Health Stats")]
     public int maxHealth = 100;
     public int currentHealth;
@@ -23,7 +27,7 @@ public class Health : MonoBehaviour
     public bool isInvulnerable = false;
 
     [Tooltip("Debug God Mode. Prevents all damage regardless of gameplay state.")]
-    public bool debugGodMode = false; // --- NEW FLAG ---
+    public bool debugGodMode = false;
 
     // --- State ---
     public bool isDowned { get; private set; } = false;
@@ -74,9 +78,7 @@ public class Health : MonoBehaviour
             return;
         }
 
-        // --- UPDATED CHECK: Includes debugGodMode ---
         if (isInvulnerable || debugGodMode || isDead || isDowned) return;
-        // --------------------------------------------
 
         int healthBeforeDamage = currentHealth;
 
@@ -241,10 +243,31 @@ public class Health : MonoBehaviour
     private void Die()
     {
         isDead = true;
+
+        // --- FIX: Invoke the event for EnemyAI ---
+        OnDeath?.Invoke();
+        // -----------------------------------------
+
+        // --- FIX: Trigger Death Animation properly ---
+        if (root != null && root.Animator != null)
+        {
+            root.Animator.SetTrigger("Death");
+        }
+        else
+        {
+            // Fallback for simple enemies without CharacterRoot
+            Animator anim = GetComponentInChildren<Animator>();
+            if (anim != null) anim.SetTrigger("Death");
+        }
+        // ---------------------------------------------
+
         if (lootGenerator != null) lootGenerator.DropLoot();
+
         Collider col = GetComponent<Collider>();
         if (col != null) col.enabled = false;
+
         if (healthUI != null) healthUI.gameObject.SetActive(false);
-        Destroy(gameObject, 2f);
+
+        Destroy(gameObject, 3f);
     }
 }

@@ -16,7 +16,10 @@ public class DomeStateController : MonoBehaviour
 
     void Start()
     {
-        UpdateDomeState(GameManager.instance.currentSceneType);
+        if (GameManager.instance != null)
+        {
+            UpdateDomeState(GameManager.instance.currentSceneType);
+        }
     }
 
     void Update()
@@ -31,34 +34,37 @@ public class DomeStateController : MonoBehaviour
         }
     }
 
-    // --- THIS METHOD HAS BEEN MODIFIED ---
     private void UpdateDomeState(SceneType newSceneType)
     {
         lastKnownSceneType = newSceneType;
 
         bool shouldBeActive = (newSceneType == SceneType.DomeBattle);
 
+        // 1. Toggle Local Components
         if (domeVisuals != null) domeVisuals.SetActive(shouldBeActive);
         if (domeCollider != null) domeCollider.enabled = shouldBeActive;
         if (domeAI != null) domeAI.enabled = shouldBeActive;
         if (domeAbilityHolder != null) domeAbilityHolder.enabled = shouldBeActive;
 
-        // --- NEW LOGIC TO LINK THE DOME AND ITS UI ---
+        // 2. --- FIX: Authoritatively Toggle the Main Controller ---
+        // This ensures the Layer, Script State, and UI Logic follow the GameManager's decision
+        // regardless of race conditions during scene load.
+        if (DomeController.instance != null)
+        {
+            DomeController.instance.SetDomeActive(shouldBeActive);
+        }
+        // -----------------------------------------------------------
+
         if (shouldBeActive)
         {
-            // When the Dome activates, find the UI Manager and link them.
-            // --- FIX: Replaced FindObjectOfType with FindAnyObjectByType ---
             DomeUIManager uiManager = FindAnyObjectByType<DomeUIManager>();
 
-            // We use the singleton instance to get the controller
             if (uiManager != null && DomeController.instance != null)
             {
-                // Call the new public method on DomeController to establish the link
                 DomeController.instance.LinkUIManager(uiManager);
                 uiManager.InitializeAndShow(DomeController.instance);
             }
         }
-        // --- END OF NEW LOGIC ---
 
         Debug.Log($"Dome state updated for scene type '{newSceneType}'. Active: {shouldBeActive}");
     }
