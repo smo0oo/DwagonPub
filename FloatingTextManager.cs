@@ -1,4 +1,5 @@
 using UnityEngine;
+using System.Text; // Required
 
 public class FloatingTextManager : MonoBehaviour
 {
@@ -17,83 +18,93 @@ public class FloatingTextManager : MonoBehaviour
     public Color critColor = Color.yellow;
     public Color aiStatusColor = Color.grey;
 
+    // --- OPTIMIZATION: Cached StringBuilder ---
+    private StringBuilder sb = new StringBuilder(64);
+
     void Awake()
     {
-        if (instance != null && instance != this)
-        {
-            Destroy(gameObject);
-        }
-        else
-        {
-            instance = this;
-            // DontDestroyOnLoad(gameObject); // REMOVED: The root GameManager is already persistent.
-        }
+        if (instance != null && instance != this) Destroy(gameObject);
+        else instance = this;
     }
 
     public void ShowAIStatus(string text, Vector3 position)
     {
-        if (floatingTextPrefab == null) return;
-        GameObject textObject = ObjectPooler.instance.Get(floatingTextPrefab, position, Quaternion.identity);
-        if (textObject == null) return;
-        FloatingText floatingText = textObject.GetComponent<FloatingText>();
-        floatingText.SetText(text);
-        floatingText.SetStyle(false);
-        floatingText.SetColor(aiStatusColor);
+        SpawnText(text, position, false, aiStatusColor);
     }
 
     public void ShowDamage(int amount, bool isCrit, DamageEffect.DamageType damageType, Vector3 position)
     {
-        if (floatingTextPrefab == null) return;
-        GameObject textObject = ObjectPooler.instance.Get(floatingTextPrefab, position, Quaternion.identity);
-        if (textObject == null) return;
-        FloatingText floatingText = textObject.GetComponent<FloatingText>();
-        floatingText.SetText(amount.ToString());
-        floatingText.SetStyle(isCrit);
+        // Zero-Garbage String Construction
+        sb.Clear();
+        sb.Append(amount);
+
         Color damageColor = (damageType == DamageEffect.DamageType.Physical) ? physicalDamageColor : magicDamageColor;
-        floatingText.SetColor(isCrit ? critColor : damageColor);
+        SpawnTextBuilder(sb, position, isCrit, isCrit ? critColor : damageColor);
     }
 
     public void ShowHeal(int amount, bool isCrit, Vector3 position)
     {
-        if (floatingTextPrefab == null) return;
-        GameObject textObject = ObjectPooler.instance.Get(floatingTextPrefab, position, Quaternion.identity);
-        if (textObject == null) return;
-        FloatingText floatingText = textObject.GetComponent<FloatingText>();
-        floatingText.SetText("+" + amount.ToString());
-        floatingText.SetStyle(isCrit);
-        floatingText.SetColor(isCrit ? critColor : healColor);
+        sb.Clear();
+        sb.Append('+');
+        sb.Append(amount);
+
+        SpawnTextBuilder(sb, position, isCrit, isCrit ? critColor : healColor);
     }
 
     public void ShowMana(int amount, Vector3 position)
     {
-        if (floatingTextPrefab == null) return;
-        GameObject textObject = ObjectPooler.instance.Get(floatingTextPrefab, position, Quaternion.identity);
-        if (textObject == null) return;
-        FloatingText floatingText = textObject.GetComponent<FloatingText>();
-        floatingText.SetText($"+{amount} Mana");
-        floatingText.SetStyle(false);
-        floatingText.SetColor(manaColor);
+        sb.Clear();
+        sb.Append('+');
+        sb.Append(amount);
+        sb.Append(" Mana");
+
+        SpawnTextBuilder(sb, position, false, manaColor);
     }
 
     public void ShowOverkill(int amount, Vector3 position)
     {
-        if (floatingTextPrefab == null) return;
-        GameObject textObject = ObjectPooler.instance.Get(floatingTextPrefab, position, Quaternion.identity);
-        if (textObject == null) return;
-        FloatingText floatingText = textObject.GetComponent<FloatingText>();
-        floatingText.SetText($"Overkill: ({amount})");
-        floatingText.SetStyle(true);
-        floatingText.SetColor(overkillColor);
+        sb.Clear();
+        sb.Append("Overkill: (");
+        sb.Append(amount);
+        sb.Append(")");
+
+        SpawnTextBuilder(sb, position, true, overkillColor);
     }
 
     public void ShowEvent(string text, Vector3 position)
     {
+        SpawnText(text, position, false, eventColor);
+    }
+
+    // --- Internal Helpers ---
+
+    private void SpawnText(string text, Vector3 pos, bool isCrit, Color color)
+    {
         if (floatingTextPrefab == null) return;
-        GameObject textObject = ObjectPooler.instance.Get(floatingTextPrefab, position, Quaternion.identity);
-        if (textObject == null) return;
-        FloatingText floatingText = textObject.GetComponent<FloatingText>();
-        floatingText.SetText(text);
-        floatingText.SetStyle(false);
-        floatingText.SetColor(eventColor);
+        GameObject obj = ObjectPooler.instance.Get(floatingTextPrefab, pos, Quaternion.identity);
+        if (obj == null) return;
+
+        FloatingText ft = obj.GetComponent<FloatingText>();
+        if (ft != null)
+        {
+            ft.SetText(text);
+            ft.SetStyle(isCrit);
+            ft.SetColor(color);
+        }
+    }
+
+    private void SpawnTextBuilder(StringBuilder text, Vector3 pos, bool isCrit, Color color)
+    {
+        if (floatingTextPrefab == null) return;
+        GameObject obj = ObjectPooler.instance.Get(floatingTextPrefab, pos, Quaternion.identity);
+        if (obj == null) return;
+
+        FloatingText ft = obj.GetComponent<FloatingText>();
+        if (ft != null)
+        {
+            ft.SetText(text); // Uses the optimized overload
+            ft.SetStyle(isCrit);
+            ft.SetColor(color);
+        }
     }
 }

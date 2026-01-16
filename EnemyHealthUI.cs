@@ -13,18 +13,17 @@ public class EnemyHealthUI : MonoBehaviour
     public Image castBarFill;
     public TextMeshProUGUI castNameText;
 
-    // --- NEW UI REFERENCE ---
     [Header("Status Display")]
-    [Tooltip("The TextMeshPro text element used to display the AI's current state and action.")]
     public TextMeshProUGUI statusText;
-    // --- END OF NEW ---
 
     private Health targetHealth;
     private Transform cameraTransform;
     private Coroutine activeCastCoroutine;
+    private Transform _transform; // Cached transform
 
     void Awake()
     {
+        _transform = transform;
         targetHealth = GetComponentInParent<Health>();
         if (targetHealth == null)
         {
@@ -36,10 +35,10 @@ public class EnemyHealthUI : MonoBehaviour
 
     void Start()
     {
-        cameraTransform = Camera.main.transform;
+        if (Camera.main != null) cameraTransform = Camera.main.transform;
+
         UpdateHealthBar();
         if (castBarPanel != null) castBarPanel.SetActive(false);
-        // Initialize the status text as empty
         if (statusText != null) statusText.text = "";
     }
 
@@ -52,8 +51,10 @@ public class EnemyHealthUI : MonoBehaviour
     {
         if (cameraTransform != null)
         {
-            transform.LookAt(transform.position + cameraTransform.rotation * Vector3.forward,
-                             cameraTransform.rotation * Vector3.up);
+            // --- OPTIMIZATION: Direct Rotation Copy ---
+            // Much faster than LookAt() with Vector math.
+            // This aligns the UI plane perfectly with the camera plane.
+            _transform.rotation = cameraTransform.rotation;
         }
     }
 
@@ -65,20 +66,15 @@ public class EnemyHealthUI : MonoBehaviour
         }
     }
 
-    // --- NEW PUBLIC METHOD ---
-    /// <summary>
-    /// Updates the status text on the enemy's UI.
-    /// </summary>
-    /// <param name="state">The current AI state (e.g., Idle, Combat).</param>
-    /// <param name="action">The current action (e.g., Chasing, Attacking).</param>
     public void UpdateStatus(string state, string action)
     {
         if (statusText != null)
         {
+            // Note: String interpolation still creates some garbage, 
+            // but since EnemyAI filters redundant calls, this is acceptable.
             statusText.text = $"{state} :: {action}";
         }
     }
-    // --- END OF NEW ---
 
     public void StartCast(string abilityName, float castDuration)
     {
