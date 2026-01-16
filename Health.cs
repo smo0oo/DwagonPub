@@ -3,16 +3,14 @@ using System;
 
 public class Health : MonoBehaviour
 {
+    // --- Events ---
     public static event Action<DamageInfo> OnDamageTaken;
     public static event Action<HealInfo> OnHealed;
     public event Action OnHealthChanged;
 
     public event Action OnDowned;
     public event Action OnRevived;
-
-    // --- FIX: Added missing event required by EnemyAI ---
     public event Action OnDeath;
-    // ----------------------------------------------------
 
     [Header("Health Stats")]
     public int maxHealth = 100;
@@ -23,10 +21,7 @@ public class Health : MonoBehaviour
     public bool destroyOnDeath = true;
 
     [Header("Invulnerability Settings")]
-    [Tooltip("Gameplay Invulnerability (e.g. Divine Shield). Controlled by Status Effects.")]
     public bool isInvulnerable = false;
-
-    [Tooltip("Debug God Mode. Prevents all damage regardless of gameplay state.")]
     public bool debugGodMode = false;
 
     // --- State ---
@@ -35,39 +30,66 @@ public class Health : MonoBehaviour
     [Header("AI Settings")]
     [Tooltip("If this character is an NPC, it will call for help if its health drops below this percentage (0-1).")]
     public float callForHelpThreshold = 0.4f;
+    private int helpThresholdValue; // Optimization: Calculated once
 
-    [HideInInspector]
-    public float damageReductionPercent = 0f;
-    [HideInInspector]
-    public Health forwardDamageTo = null;
+    [HideInInspector] public float damageReductionPercent = 0f;
+    [HideInInspector] public Health forwardDamageTo = null;
 
+    // --- Components ---
     private LootGenerator lootGenerator;
     private bool isDead = false;
     private EnemyHealthUI healthUI;
     private PlayerStats playerStats;
     private CharacterRoot root;
 
-    // --- Layer Tracking ---
+    // --- Optimization Caches ---
     private int originalLayer;
+    private static int ignoreRaycastLayer = -1; // Static so we only look it up once per game
+
+    // Animator Hashes (Faster than string lookups)
+    private static readonly int IsDownedHash = Animator.StringToHash("IsDowned");
+    private static readonly int DeathHash = Animator.StringToHash("Death");
+    private static readonly int IdleHash = Animator.StringToHash("Idle");
 
     void Awake()
     {
+        // 1. One-time Layer Lookup
+        if (ignoreRaycastLayer == -1) ignoreRaycastLayer = LayerMask.NameToLayer("Ignore Raycast");
+
         lootGenerator = GetComponent<LootGenerator>();
         healthUI = GetComponentInChildren<EnemyHealthUI>();
         root = GetComponentInParent<CharacterRoot>();
+
         if (root != null)
         {
             playerStats = root.PlayerStats;
         }
-        currentHealth = maxHealth;
 
-        // Capture original layer so we can restore it after being revived
+        currentHealth = maxHealth;
         originalLayer = gameObject.layer;
+
+        // 2. Pre-calculate Help Threshold
+        UpdateHelpThreshold();
     }
 
     void Start()
     {
         OnHealthChanged?.Invoke();
+    }
+
+    public void UpdateMaxHealth(int newMaxHealth)
+    {
+        maxHealth = newMaxHealth;
+        if (currentHealth > maxHealth) currentHealth = maxHealth;
+        UpdateHelpThreshold();
+        OnHealthChanged?.Invoke();
+    }
+
+    public void SetToMaxHealth() { currentHealth = maxHealth; OnHealthChanged?.Invoke(); }
+
+    private void UpdateHelpThreshold()
+    {
+        helpThresholdValue = Mathf.FloorToInt(maxHealth * callForHelpThreshold);
     }
 
     public void TakeDamage(int amount, DamageEffect.DamageType damageType, bool isCrit, GameObject caster)
@@ -86,18 +108,26 @@ public class Health : MonoBehaviour
         float finalDamage = amount;
         if (playerStats != null)
         {
-            if (UnityEngine.Random.value < (playerStats.secondaryStats.dodgeChance / 100f)) return; // Dodge
-            if (damageType == DamageEffect.DamageType.Magical) finalDamage *= (1 - playerStats.secondaryStats.magicResistance / 100f);
-            else finalDamage *= (1 - playerStats.secondaryStats.physicalResistance / 100f);
+            // Dodge Calculation
+            if (UnityEngine.Random.value < (playerStats.secondaryStats.dodgeChance / 100f)) return;
+
+            // Resistance Calculation
+            if (damageType == DamageEffect.DamageType.Magical)
+                finalDamage *= (1 - playerStats.secondaryStats.magicResistance / 100f);
+            else
+                finalDamage *= (1 - playerStats.secondaryStats.physicalResistance / 100f);
         }
+
         finalDamage *= (1f - damageReductionPercent);
         int damageToDeal = Mathf.Max(0, Mathf.FloorToInt(finalDamage));
 
         currentHealth -= damageToDeal;
 
+        // Global Event
         OnDamageTaken?.Invoke(new DamageInfo { Caster = caster, Target = this.gameObject, Amount = damageToDeal, IsCrit = isCrit, DamageType = damageType });
 
-        if ((float)healthBeforeDamage / maxHealth > callForHelpThreshold && (float)currentHealth / maxHealth <= callForHelpThreshold)
+        // Optimization: Integer comparison is faster than float division
+        if (healthBeforeDamage > helpThresholdValue && currentHealth <= helpThresholdValue)
         {
             PartyMemberAI ai = GetComponentInParent<PartyMemberAI>();
             if (ai != null && ai.enabled) { PartyAIManager.instance.CallForHelp(this.gameObject); }
@@ -128,8 +158,8 @@ public class Health : MonoBehaviour
 
         if (root != null && root.Animator != null)
         {
-            root.Animator.SetBool("IsDowned", true);
-            root.Animator.SetTrigger("Death");
+            root.Animator.SetBool(IsDownedHash, true);
+            root.Animator.SetTrigger(DeathHash);
         }
 
         ToggleCombatCapability(false);
@@ -144,7 +174,7 @@ public class Health : MonoBehaviour
             }
         }
 
-        gameObject.layer = LayerMask.NameToLayer("Ignore Raycast");
+        gameObject.layer = ignoreRaycastLayer;
 
         OnDowned?.Invoke();
         OnHealthChanged?.Invoke();
@@ -164,8 +194,8 @@ public class Health : MonoBehaviour
 
         if (root != null && root.Animator != null)
         {
-            root.Animator.SetBool("IsDowned", false);
-            root.Animator.Play("Idle", 0);
+            root.Animator.SetBool(IsDownedHash, false);
+            root.Animator.Play(IdleHash, 0);
         }
 
         ToggleCombatCapability(true);
@@ -203,11 +233,11 @@ public class Health : MonoBehaviour
             }
         }
 
-        gameObject.layer = LayerMask.NameToLayer("Ignore Raycast");
+        gameObject.layer = ignoreRaycastLayer;
 
         if (root != null && root.Animator != null)
         {
-            root.Animator.SetBool("IsDowned", true);
+            root.Animator.SetBool(IsDownedHash, true);
         }
 
         Debug.Log($"{name} forcibly set to DOWNED state.");
@@ -228,8 +258,11 @@ public class Health : MonoBehaviour
         int healthBeforeHeal = currentHealth;
         currentHealth += amount;
         if (currentHealth > maxHealth) currentHealth = maxHealth;
+
         int actualHealedAmount = currentHealth - healthBeforeHeal;
+
         OnHealed?.Invoke(new HealInfo { Caster = caster, Target = this.gameObject, Amount = actualHealedAmount, IsCrit = isCrit });
+
         if (FloatingTextManager.instance != null && actualHealedAmount > 0)
         {
             FloatingTextManager.instance.ShowHeal(actualHealedAmount, isCrit, transform.position + Vector3.up * 4.0f);
@@ -237,37 +270,37 @@ public class Health : MonoBehaviour
         OnHealthChanged?.Invoke();
     }
 
-    public void UpdateMaxHealth(int newMaxHealth) { maxHealth = newMaxHealth; if (currentHealth > maxHealth) currentHealth = maxHealth; OnHealthChanged?.Invoke(); }
-    public void SetToMaxHealth() { currentHealth = maxHealth; OnHealthChanged?.Invoke(); }
-
     private void Die()
     {
+        if (isDead) return;
         isDead = true;
 
-        // --- FIX: Invoke the event for EnemyAI ---
+        // 1. Notify Systems (EnemyAI, Quests, etc)
         OnDeath?.Invoke();
-        // -----------------------------------------
 
-        // --- FIX: Trigger Death Animation properly ---
+        // 2. Play Animation
         if (root != null && root.Animator != null)
         {
-            root.Animator.SetTrigger("Death");
+            root.Animator.SetTrigger(DeathHash);
         }
         else
         {
-            // Fallback for simple enemies without CharacterRoot
+            // Fallback for simple enemies
             Animator anim = GetComponentInChildren<Animator>();
-            if (anim != null) anim.SetTrigger("Death");
+            if (anim != null) anim.SetTrigger(DeathHash);
         }
-        // ---------------------------------------------
 
+        // 3. Drop Loot
         if (lootGenerator != null) lootGenerator.DropLoot();
 
+        // 4. Disable Physical Presence
         Collider col = GetComponent<Collider>();
         if (col != null) col.enabled = false;
 
         if (healthUI != null) healthUI.gameObject.SetActive(false);
 
+        // 5. Cleanup
+        // Note: EnemyAI has its own cleanup, but this ensures non-AI objects still disappear.
         Destroy(gameObject, 3f);
     }
 }

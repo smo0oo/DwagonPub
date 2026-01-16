@@ -1,155 +1,192 @@
 using UnityEngine;
 using UnityEngine.AI;
-using System;
 using System.Collections;
-using DG.Tweening;
 
 [RequireComponent(typeof(NavMeshAgent))]
-public class CharacterMovementHandler : MonoBehaviour
+public class CharacterMovementHandler : MonoBehaviour, IMovementHandler
 {
-    [Header("Leap Settings")]
-    public float leapPower = 5f;
-    public float leapDuration = 0.5f;
+    [Header("Movement Settings")]
+    public float rotationSpeed = 10f;
 
-    [Header("Charge Settings")]
-    public float chargeSpeed = 20f;
-    public float chargeAcceleration = 50f;
+    // Default to true. Enemies use this. Players will auto-disable it.
+    public bool handleStandardMovement = true;
 
     public bool IsSpecialMovementActive { get; private set; } = false;
 
-    private NavMeshAgent navMeshAgent;
-    private Collider mainCollider;
-    private CharacterRoot characterRoot;
+    private NavMeshAgent navAgent;
+    private Animator animator;
+    private int speedHash;
+    private CharacterRoot myRoot;
 
     void Awake()
     {
-        navMeshAgent = GetComponent<NavMeshAgent>();
-        mainCollider = GetComponent<Collider>();
-        characterRoot = GetComponent<CharacterRoot>();
-    }
+        navAgent = GetComponent<NavMeshAgent>();
+        animator = GetComponentInChildren<Animator>();
+        myRoot = GetComponent<CharacterRoot>() ?? GetComponentInParent<CharacterRoot>();
+        speedHash = Animator.StringToHash("Speed");
 
-    public Coroutine ExecuteRelativeMove(Vector3 offset, float duration)
-    {
-        if (IsSpecialMovementActive) return null;
-        return StartCoroutine(RelativeMoveCoroutine(offset, duration));
-    }
-
-    private IEnumerator RelativeMoveCoroutine(Vector3 offset, float duration)
-    {
-        IsSpecialMovementActive = true;
-
-        try
+        // --- FIX: Don't overwrite speed. Use Inspector value. ---
+        if (navAgent != null)
         {
-            if (navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath();
+            navAgent.updateRotation = false;
+        }
 
-            Vector3 worldOffset = transform.TransformDirection(offset);
-            Vector3 destination = transform.position + worldOffset;
+        // --- FIX: Auto-detect Player to stop conflict ---
+        if (GetComponent<PlayerMovement>() != null)
+        {
+            handleStandardMovement = false;
+        }
+    }
 
-            if (NavMesh.SamplePosition(destination, out var hit, 2f, NavMesh.AllAreas))
+    void Update()
+    {
+        // If we are doing a special move (Leap/Charge), we control the character.
+        // If not, and handleStandardMovement is FALSE (Player), we do nothing and let PlayerMovement take over.
+        if (IsSpecialMovementActive) return;
+        if (!handleStandardMovement) return;
+
+        HandleStandardMovement();
+    }
+
+    private void HandleStandardMovement()
+    {
+        if (navAgent == null) return;
+
+        // 1. Rotation
+        if (navAgent.hasPath && navAgent.velocity.sqrMagnitude > 0.01f)
+        {
+            Vector3 direction = navAgent.velocity.normalized;
+            direction.y = 0;
+
+            if (direction.sqrMagnitude > 0.001f)
             {
-                destination = hit.position;
+                Quaternion targetRot = Quaternion.LookRotation(direction);
+                transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, Time.deltaTime * rotationSpeed);
             }
-            else
-            {
-                destination = transform.position;
-            }
+        }
 
-            if (navMeshAgent.isOnNavMesh) navMeshAgent.enabled = false;
+        // 2. Animation (Only for generic mobs using "Speed")
+        if (animator != null)
+        {
+            float speedPercent = navAgent.velocity.magnitude / navAgent.speed;
+            animator.SetFloat(speedHash, speedPercent, 0.1f, Time.deltaTime);
+        }
+    }
 
-            float elapsedTime = 0f;
-            Vector3 startPosition = transform.position;
-            while (elapsedTime < duration)
-            {
-                transform.position = Vector3.Lerp(startPosition, destination, elapsedTime / duration);
-                elapsedTime += Time.deltaTime;
-                yield return null;
-            }
+    // --- Interface Implementation: Teleport ---
+    public void ExecuteTeleport(Vector3 destination)
+    {
+        if (IsSpecialMovementActive)
+        {
+            StopAllCoroutines();
+            IsSpecialMovementActive = false;
+            if (navAgent != null) navAgent.enabled = true;
+        }
+
+        if (navAgent != null && navAgent.isActiveAndEnabled && navAgent.isOnNavMesh)
+        {
+            navAgent.Warp(destination);
+        }
+        else
+        {
             transform.position = destination;
         }
-        finally
-        {
-            if (navMeshAgent != null)
-            {
-                navMeshAgent.enabled = true;
-                // Force warp without checking isOnNavMesh immediately, as it may lag by a frame
-                if (navMeshAgent.isActiveAndEnabled) navMeshAgent.Warp(transform.position);
-            }
-            IsSpecialMovementActive = false;
-        }
     }
 
-    public void ExecuteLeap(Vector3 destination, Action onLandAction)
+    public void ExecuteLeap(Vector3 destination, System.Action onLandAction)
     {
         if (IsSpecialMovementActive) return;
-        StartCoroutine(LeapCoroutine(destination, onLandAction));
+        StartCoroutine(LeapRoutine(destination, onLandAction));
     }
 
-    private IEnumerator LeapCoroutine(Vector3 destination, Action onLandAction)
+    private IEnumerator LeapRoutine(Vector3 destination, System.Action onLandAction)
     {
         IsSpecialMovementActive = true;
+        if (navAgent != null) navAgent.enabled = false;
 
-        if (navMeshAgent.isOnNavMesh) navMeshAgent.enabled = false;
+        float flightDuration = 0.8f;
+        Vector3 startPos = transform.position;
+        float elapsedTime = 0f;
 
-        transform.DOJump(destination, leapPower, 1, leapDuration)
-            .SetEase(Ease.OutQuad)
-            .OnComplete(() => {
-                onLandAction?.Invoke();
-                if (navMeshAgent != null)
-                {
-                    // --- FIX: Force Enable and Warp ---
-                    navMeshAgent.enabled = true;
-                    navMeshAgent.Warp(transform.position);
-                    // ----------------------------------
-                }
+        while (elapsedTime < flightDuration)
+        {
+            elapsedTime += Time.deltaTime;
+            float t = elapsedTime / flightDuration;
 
-                IsSpecialMovementActive = false;
-            });
+            Vector3 currentPos = Vector3.Lerp(startPos, destination, t);
+            float height = Mathf.Sin(t * Mathf.PI) * 2.5f;
+            currentPos.y += height;
 
-        yield return new WaitForSeconds(leapDuration);
+            transform.position = currentPos;
+
+            Vector3 dir = (destination - startPos).normalized;
+            if (dir != Vector3.zero) transform.rotation = Quaternion.LookRotation(dir);
+
+            yield return null;
+        }
+
+        transform.position = destination;
+        if (navAgent != null)
+        {
+            navAgent.enabled = true;
+            if (NavMesh.SamplePosition(destination, out NavMeshHit hit, 2f, NavMesh.AllAreas))
+            {
+                navAgent.Warp(hit.position);
+            }
+        }
+
+        IsSpecialMovementActive = false;
+        onLandAction?.Invoke();
     }
 
     public void ExecuteCharge(GameObject target, Ability chargeAbility)
     {
-        if (IsSpecialMovementActive) return;
-        StartCoroutine(ChargeCoroutine(target, chargeAbility));
+        if (IsSpecialMovementActive || target == null) return;
+        StartCoroutine(ChargeRoutine(target, chargeAbility));
     }
 
-    private IEnumerator ChargeCoroutine(GameObject target, Ability chargeAbility)
+    private IEnumerator ChargeRoutine(GameObject target, Ability ability)
     {
         IsSpecialMovementActive = true;
+        if (navAgent != null) navAgent.enabled = false;
 
-        bool wasUpdatePosition = navMeshAgent.updatePosition;
-        float originalSpeed = navMeshAgent.speed;
-        float originalAccel = navMeshAgent.acceleration;
+        float chargeSpeed = 20f;
+        float stopDistance = 1.5f;
+        float maxTime = 2.0f;
+        float timer = 0f;
 
-        navMeshAgent.speed = chargeSpeed;
-        navMeshAgent.acceleration = chargeAcceleration;
-        navMeshAgent.stoppingDistance = 2f;
-        navMeshAgent.updatePosition = true;
-
-        while (target != null && Vector3.Distance(transform.position, target.transform.position) > navMeshAgent.stoppingDistance)
+        while (target != null && timer < maxTime)
         {
-            if (navMeshAgent.isOnNavMesh)
-            {
-                navMeshAgent.SetDestination(target.transform.position);
-            }
+            timer += Time.deltaTime;
+            float dist = Vector3.Distance(transform.position, target.transform.position);
+
+            if (dist <= stopDistance) break;
+
+            Vector3 dir = (target.transform.position - transform.position).normalized;
+            transform.position += dir * chargeSpeed * Time.deltaTime;
+            transform.rotation = Quaternion.LookRotation(dir);
+
             yield return null;
         }
 
-        if (target != null && characterRoot != null)
+        if (navAgent != null)
         {
-            foreach (var effect in chargeAbility.hostileEffects)
+            navAgent.enabled = true;
+            if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 2f, NavMesh.AllAreas))
             {
-                effect.Apply(characterRoot.gameObject, target);
+                navAgent.Warp(hit.position);
             }
         }
 
-        navMeshAgent.speed = originalSpeed;
-        navMeshAgent.acceleration = originalAccel;
-        navMeshAgent.updatePosition = wasUpdatePosition;
-
-        if (navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath();
-
         IsSpecialMovementActive = false;
+
+        if (ability != null && target != null)
+        {
+            GameObject caster = myRoot != null ? myRoot.gameObject : gameObject;
+            foreach (var effect in ability.hostileEffects)
+            {
+                effect.Apply(caster, target);
+            }
+        }
     }
 }

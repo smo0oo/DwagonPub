@@ -18,11 +18,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public Animator Animator { get; private set; }
     public CharacterMovementHandler MovementHandler { get; private set; }
 
-    // --- Additional Components to Cleanup ---
-    private MonoBehaviour lootGen; // Stored as MonoBehaviour to avoid dependency errors if script is missing
-    private MonoBehaviour statusEffectHolder;
-    private CharacterRoot characterRoot;
-
     // --- State Data ---
     public Transform currentTarget;
     public Vector3 StartPosition { get; private set; }
@@ -101,13 +96,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         Targeting = GetComponent<AITargeting>();
         AbilitySelector = GetComponent<AIAbilitySelector>();
         MovementHandler = GetComponent<CharacterMovementHandler>();
-        characterRoot = GetComponent<CharacterRoot>();
-
-        // Look for optional components by name string to avoid errors if you haven't created the scripts yet
-        // OR simply try GetComponent if they exist in your project.
-        // Assuming the class names "LootGen" and "StatusEffectHolder" exist:
-        lootGen = GetComponent("LootGen") as MonoBehaviour;
-        statusEffectHolder = GetComponent("StatusEffectHolder") as MonoBehaviour;
 
         speedHash = Animator.StringToHash("Speed");
         attackTriggerHash = Animator.StringToHash("AttackTrigger");
@@ -418,13 +406,13 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     private void OnDeath()
     {
+        if (isDead) return;
         isDead = true;
 
         // 1. Start Cleanup (Must do this BEFORE disabling 'this')
-        // Coroutines run on the GameObject, but starting them usually requires an active component instance.
         StartCoroutine(HandleCorpseCleanup());
 
-        // 2. Disable Logic Components
+        // 2. Stop all movement
         StopMovement();
         if (NavAgent != null) NavAgent.enabled = false;
 
@@ -434,21 +422,21 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         Rigidbody rb = GetComponent<Rigidbody>();
         if (rb != null) rb.isKinematic = true;
 
-        if (AbilityHolder != null) AbilityHolder.enabled = false;
-        if (Targeting != null) Targeting.enabled = false;
-        if (AbilitySelector != null) AbilitySelector.enabled = false;
-        if (MovementHandler != null) MovementHandler.enabled = false;
         if (enemyHealthUI != null) enemyHealthUI.gameObject.SetActive(false);
 
-        // Disable the extra components found in Awake
-        if (lootGen != null) lootGen.enabled = false;
-        if (statusEffectHolder != null) statusEffectHolder.enabled = false;
-        if (characterRoot != null) characterRoot.enabled = false;
+        // 3. SMART CLEANUP: Automatically disable all OTHER MonoBehaviours on this object
+        // This handles LootGen, StatusEffectHolder, CharacterRoot, etc. without needing manual references.
+        foreach (var comp in GetComponents<MonoBehaviour>())
+        {
+            // Do not disable 'this' script yet (we do it at the end)
+            // Do not disable 'Health' (some systems might query hp=0)
+            if (comp != this && !(comp is Health))
+            {
+                comp.enabled = false;
+            }
+        }
 
-        // Disable Health last (visuals might rely on it momentarily)
-        if (Health != null) Health.enabled = false;
-
-        // 3. Handle Animation
+        // 4. Handle Animation
         if (Animator != null)
         {
             Animator.SetFloat(speedHash, 0f);
@@ -457,7 +445,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
         SetAIStatus("Dead", "");
 
-        // 4. Disable THIS script (stops Update loop, keeps Inspector clean)
+        // 5. Disable THIS script (stops Update loop, keeps Inspector clean)
         this.enabled = false;
     }
 

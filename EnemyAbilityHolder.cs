@@ -9,47 +9,61 @@ public class EnemyAbilityHolder : MonoBehaviour
     public event Action OnCastFinished;
 
     [Header("Component References")]
+    [Tooltip("Assign the transform where projectiles spawn (e.g. Wand Tip, Mouth). Defaults to self if null.")]
     public Transform projectileSpawnPoint;
 
     [Header("Global Cooldown")]
     public float globalCooldownDuration = 1.5f;
 
+    // --- State ---
     public ChanneledBeamController ActiveBeam { get; private set; }
     public bool IsCasting { get; private set; } = false;
+    public bool IsOnGlobalCooldown() => Time.time < globalCooldownTimer;
 
+    // --- Internal Data ---
     private Dictionary<Ability, float> cooldowns = new Dictionary<Ability, float>();
-    private IMovementHandler movementHandler;
-    private Coroutine activeCastCoroutine;
-    private EnemyAI enemyAI;
     private float globalCooldownTimer = 0f;
+    private Collider[] hitBuffer = new Collider[20]; // Optimization: Reusable Physics Buffer
+
+    // --- Components ---
+    private IMovementHandler movementHandler;
+    private EnemyAI enemyAI;
     private Animator animator;
+    private CharacterRoot myRoot;
+    private Coroutine activeCastCoroutine;
 
-    // Physics Buffer
-    private Collider[] hitBuffer = new Collider[20];
+    // --- Optimization: Cached Animator Hashes ---
+    // These are 10x faster for Unity to read than Strings
+    private static readonly int CastTriggerHash = Animator.StringToHash("CastTrigger");
+    private static readonly int AttackSpeedHash = Animator.StringToHash("AttackSpeed");
 
-    // Debug Gizmos
-    private Vector3 debugBoxCenter;
-    private Vector3 debugBoxSize;
+    // --- Debug ---
+    private Vector3 debugBoxCenter, debugBoxSize;
     private Quaternion debugBoxRotation;
     private float debugDisplayTime;
-
-    public bool IsOnGlobalCooldown() => Time.time < globalCooldownTimer;
 
     void Awake()
     {
         movementHandler = GetComponentInParent<IMovementHandler>();
         enemyAI = GetComponentInParent<EnemyAI>();
         animator = GetComponentInParent<Animator>();
+        myRoot = GetComponentInParent<CharacterRoot>();
+
+        // Fail-safe if spawn point is missing
+        if (projectileSpawnPoint == null) projectileSpawnPoint = transform;
     }
 
     void OnDisable()
     {
-        if (activeCastCoroutine != null)
-        {
-            StopCoroutine(activeCastCoroutine);
-            activeCastCoroutine = null;
-        }
+        StopCasting();
+    }
+
+    private void StopCasting()
+    {
+        if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
+        activeCastCoroutine = null;
         IsCasting = false;
+
         if (ActiveBeam != null)
         {
             ActiveBeam.Interrupt();
@@ -60,11 +74,14 @@ public class EnemyAbilityHolder : MonoBehaviour
     public void UseAbility(Ability ability, GameObject target, bool bypassCooldown = false)
     {
         if (!CanUseAbility(ability, target)) return;
+
+        // Determine target position (or self/forward if null)
         Vector3 position = (target != null) ? target.transform.position : transform.position;
 
+        // Decide: Coroutine (Telegraph/CastTime) vs Instant
         if (ability.castTime > 0 || ability.telegraphDuration > 0)
         {
-            if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
+            StopCasting();
             activeCastCoroutine = StartCoroutine(PerformCast(ability, target, position, bypassCooldown));
         }
         else
@@ -76,34 +93,42 @@ public class EnemyAbilityHolder : MonoBehaviour
     private IEnumerator PerformCast(Ability ability, GameObject target, Vector3 position, bool bypassCooldown)
     {
         IsCasting = true;
-        try
+
+        // 1. Telegraph Phase
+        if (ability.telegraphDuration > 0)
         {
-            if (ability.telegraphDuration > 0)
+            if (animator != null)
             {
-                if (animator != null && !string.IsNullOrEmpty(ability.telegraphAnimationTrigger))
+                // Optimization: Use Hash if generic, or String if specific override exists
+                if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger))
                     animator.SetTrigger(ability.telegraphAnimationTrigger);
-                yield return new WaitForSeconds(ability.telegraphDuration);
+                else
+                    animator.SetTrigger(CastTriggerHash);
             }
-
-            OnCastStarted?.Invoke(ability.abilityName, ability.castTime);
-            if (ability.castTime > 0) yield return new WaitForSeconds(ability.castTime);
-
-            ExecuteAbility(ability, target, position, bypassCooldown);
+            yield return new WaitForSeconds(ability.telegraphDuration);
         }
-        finally
+
+        // 2. Cast Timer Phase
+        OnCastStarted?.Invoke(ability.abilityName, ability.castTime);
+        if (ability.castTime > 0) yield return new WaitForSeconds(ability.castTime);
+
+        // 3. Execution
+        ExecuteAbility(ability, target, position, bypassCooldown);
+
+        // 4. Cleanup (Unless it's melee which manages its own state)
+        if (ability.abilityType != AbilityType.TargetedMelee && ability.abilityType != AbilityType.DirectionalMelee)
         {
-            if (ability.abilityType != AbilityType.TargetedMelee && ability.abilityType != AbilityType.DirectionalMelee)
-            {
-                IsCasting = false;
-                activeCastCoroutine = null;
-                OnCastFinished?.Invoke();
-            }
+            IsCasting = false;
+            activeCastCoroutine = null;
+            OnCastFinished?.Invoke();
         }
     }
 
     private void ExecuteAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown = false)
     {
         PayCostAndStartCooldown(ability, bypassCooldown);
+
+        // Audio/VFX
         if (ability.castSound != null) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
         if (ability.castVFX != null) ObjectPooler.instance.Get(ability.castVFX, transform.position, transform.rotation);
 
@@ -111,7 +136,7 @@ public class EnemyAbilityHolder : MonoBehaviour
         {
             case AbilityType.TargetedMelee:
             case AbilityType.DirectionalMelee:
-                if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
+                StopCasting(); // Ensure we don't overlap
                 activeCastCoroutine = StartCoroutine(PerformSmartMeleeAttack(ability));
                 break;
 
@@ -119,29 +144,31 @@ public class EnemyAbilityHolder : MonoBehaviour
             case AbilityType.ForwardProjectile:
                 HandleProjectile(ability, target);
                 break;
+
             case AbilityType.GroundAOE:
                 HandleGroundAOE(ability, position);
                 break;
+
             case AbilityType.Self:
                 HandleSelfCast(ability);
                 break;
+
             case AbilityType.ChanneledBeam:
                 HandleChanneledBeam(ability, target);
                 break;
+
             case AbilityType.Leap:
-                if (movementHandler != null) movementHandler.ExecuteLeap(position, () => HandleGroundAOE(ability, position));
+                if (movementHandler != null)
+                    movementHandler.ExecuteLeap(position, () => HandleGroundAOE(ability, position));
                 break;
+
             case AbilityType.Charge:
-                if (enemyAI != null && target != null) enemyAI.ExecuteCharge(target, ability);
+                if (enemyAI != null && target != null)
+                    enemyAI.ExecuteCharge(target, ability);
                 break;
+
             case AbilityType.Teleport:
-                if (movementHandler != null && enemyAI != null && enemyAI.currentTarget != null)
-                {
-                    Vector3 directionAway = (transform.position - enemyAI.currentTarget.position).normalized;
-                    Vector3 destination = transform.position + directionAway * 15f;
-                    if (UnityEngine.AI.NavMesh.SamplePosition(destination, out var hit, 5f, UnityEngine.AI.NavMesh.AllAreas))
-                        movementHandler.ExecuteTeleport(hit.position);
-                }
+                HandleTeleport(enemyAI?.currentTarget);
                 break;
         }
     }
@@ -150,20 +177,17 @@ public class EnemyAbilityHolder : MonoBehaviour
     {
         IsCasting = true;
 
-        // 1. Windup
-        float windup = (ability.hitboxOpenDelay > 0) ? ability.hitboxOpenDelay : 0.1f;
+        // Windup
+        float windup = Mathf.Max(0.1f, ability.hitboxOpenDelay);
         yield return new WaitForSeconds(windup);
 
-        // 2. Hit Check
+        // Strike
         CheckHit(ability);
 
-        // 3. Duration
-        float remainingDuration = ability.hitboxCloseDelay - ability.hitboxOpenDelay;
-        if (remainingDuration <= 0.05f) remainingDuration = 0.25f;
+        // Recovery
+        float recovery = Mathf.Max(0.25f, ability.hitboxCloseDelay - ability.hitboxOpenDelay);
+        yield return new WaitForSeconds(recovery);
 
-        yield return new WaitForSeconds(remainingDuration);
-
-        // 4. Reset
         IsCasting = false;
         activeCastCoroutine = null;
         OnCastFinished?.Invoke();
@@ -172,75 +196,86 @@ public class EnemyAbilityHolder : MonoBehaviour
     private void CheckHit(Ability ability)
     {
         float boxLength = ability.range + 0.5f;
-        float boxWidth = ability.attackBoxSize.x > 0 ? ability.attackBoxSize.x : 2f;
-        float boxHeight = ability.attackBoxSize.y > 0 ? ability.attackBoxSize.y : 2f;
-
+        Vector3 size = ability.attackBoxSize;
+        Vector3 halfExtents = new Vector3((size.x > 0 ? size.x : 2f) / 2f, (size.y > 0 ? size.y : 2f) / 2f, boxLength / 2f);
         Vector3 center = transform.position + (transform.forward * (boxLength / 2f)) + (Vector3.up * 1f);
-        Vector3 halfExtents = new Vector3(boxWidth / 2f, boxHeight / 2f, boxLength / 2f);
 
-        debugBoxCenter = center;
-        debugBoxSize = halfExtents * 2;
-        debugBoxRotation = transform.rotation;
-        debugDisplayTime = 0.5f;
+        // Debug visualization
+        debugBoxCenter = center; debugBoxSize = halfExtents * 2; debugBoxRotation = transform.rotation; debugDisplayTime = 0.5f;
 
+        // Optimization: NonAlloc avoids Garbage Collection
         int hitCount = Physics.OverlapBoxNonAlloc(center, halfExtents, hitBuffer, transform.rotation);
 
         for (int i = 0; i < hitCount; i++)
         {
             Collider hit = hitBuffer[i];
-            if (hit.transform.root == transform.root) continue;
+            // Skip self and own children
+            if (hit.transform.IsChildOf(transform.root)) continue;
 
-            Health targetHealth = hit.GetComponentInChildren<Health>();
-            if (targetHealth != null)
+            Health targetHealth = hit.GetComponentInChildren<Health>(); // Check children for parts
+            if (targetHealth == null) targetHealth = hit.GetComponentInParent<Health>(); // Check parent for root
+
+            if (targetHealth != null && myRoot != null)
             {
-                // --- FIX STARTS HERE ---
-                CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
+                // Root check handles complex hierarchies (e.g. Shield -> Player)
+                CharacterRoot targetRoot = targetHealth.GetComponentInParent<CharacterRoot>();
+                int targetLayer = (targetRoot != null) ? targetRoot.gameObject.layer : hit.gameObject.layer;
 
-                // Try to get root, but allow null (for buildings/domes)
-                CharacterRoot targetRoot = hit.GetComponentInParent<CharacterRoot>();
-
-                if (myRoot != null)
+                // Faction Check (Layer based)
+                if (myRoot.gameObject.layer != targetLayer)
                 {
-                    // Determine target's layer properly
-                    int targetLayer = (targetRoot != null) ? targetRoot.gameObject.layer : hit.gameObject.layer;
-
-                    // Allow hitting anything on a different layer
-                    if (myRoot.gameObject.layer != targetLayer)
-                    {
-                        // Use the Root if we have it, otherwise use the hit object itself as the "target"
-                        GameObject targetObj = (targetRoot != null) ? targetRoot.gameObject : hit.gameObject;
-
-                        foreach (var effect in ability.hostileEffects)
-                        {
-                            effect.Apply(myRoot.gameObject, targetObj);
-                        }
-                    }
+                    GameObject applyTarget = (targetRoot != null) ? targetRoot.gameObject : hit.gameObject;
+                    foreach (var effect in ability.hostileEffects) effect.Apply(myRoot.gameObject, applyTarget);
                 }
-                // --- FIX ENDS HERE ---
             }
         }
     }
 
-    private void OnDrawGizmos()
+    private void HandleProjectile(Ability ability, GameObject target)
     {
-        if (debugDisplayTime > 0)
+        GameObject prefab = ability.enemyProjectilePrefab ?? ability.playerProjectilePrefab;
+        if (prefab == null) return;
+
+        // Calculate Rotation
+        Quaternion rotation = projectileSpawnPoint.rotation;
+        if (target != null)
         {
-            Gizmos.color = new Color(1, 0, 0, 0.3f);
-            Matrix4x4 rotationMatrix = Matrix4x4.TRS(debugBoxCenter, debugBoxRotation, debugBoxSize);
-            Gizmos.matrix = rotationMatrix;
-            Gizmos.DrawCube(Vector3.zero, Vector3.one);
-            debugDisplayTime -= Time.deltaTime;
+            Vector3 dir = (target.transform.position - projectileSpawnPoint.position).normalized;
+            dir.y = 0; // Keep projectiles level typically
+            if (dir != Vector3.zero) rotation = Quaternion.LookRotation(dir);
+        }
+
+        GameObject projGO = ObjectPooler.instance.Get(prefab, projectileSpawnPoint.position, rotation);
+
+        // Setup Layers & Collisions
+        if (projGO.TryGetComponent<Projectile>(out var proj))
+        {
+            proj.gameObject.layer = LayerMask.NameToLayer("HostileRanged");
+            // Pass the Root's layer so the projectile knows who owns it (Faction logic)
+            proj.Initialize(ability, this.gameObject, myRoot != null ? myRoot.gameObject.layer : gameObject.layer);
+        }
+    }
+
+    private void HandleTeleport(Transform target)
+    {
+        if (movementHandler == null || target == null) return;
+
+        // Teleport 15 units AWAY from target (Kiting)
+        Vector3 dirAway = (transform.position - target.position).normalized;
+        Vector3 dest = transform.position + dirAway * 15f;
+
+        if (UnityEngine.AI.NavMesh.SamplePosition(dest, out var hit, 5f, UnityEngine.AI.NavMesh.AllAreas))
+        {
+            movementHandler.ExecuteTeleport(hit.position);
         }
     }
 
     // --- Helpers ---
-    private void PayCostAndStartCooldown(Ability ability, bool bypassCooldown)
+    private void PayCostAndStartCooldown(Ability ability, bool bypass)
     {
-        if (!bypassCooldown)
-        {
-            cooldowns[ability] = Time.time + ability.cooldown;
-            if (ability.triggersGlobalCooldown) globalCooldownTimer = Time.time + globalCooldownDuration;
-        }
+        if (bypass) return;
+        cooldowns[ability] = Time.time + ability.cooldown;
+        if (ability.triggersGlobalCooldown) globalCooldownTimer = Time.time + globalCooldownDuration;
     }
 
     public bool CanUseAbility(Ability ability, GameObject target)
@@ -248,82 +283,65 @@ public class EnemyAbilityHolder : MonoBehaviour
         if (ability == null || IsCasting) return false;
         if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false;
         if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false;
+
+        // Range Check (Squared optimization)
+        if (target != null)
+        {
+            float rangeSqr = ability.range * ability.range;
+            if ((target.transform.position - transform.position).sqrMagnitude > rangeSqr) return false;
+        }
         return true;
     }
 
-    private void HandleProjectile(Ability ability, GameObject target)
+    // Pass-throughs for other ability types
+    private void HandleGroundAOE(Ability a, Vector3 p) => ApplyAreaEffects(a, p);
+    private void HandleSelfCast(Ability a) => ApplyEffects(a.friendlyEffects, gameObject); // Self is always friendly
+
+    private void ApplyAreaEffects(Ability ability, Vector3 position)
     {
-        GameObject prefabToSpawn = ability.enemyProjectilePrefab != null ? ability.enemyProjectilePrefab : ability.playerProjectilePrefab;
-        if (prefabToSpawn == null) return;
+        if (ability.hitVFX != null) ObjectPooler.instance.Get(ability.hitVFX, position, Quaternion.identity);
 
-        Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
-        Vector3 spawnPos = spawnTransform.position;
-        Quaternion spawnRot = spawnTransform.rotation;
-
-        if (target != null)
+        Collider[] hits = Physics.OverlapSphere(position, ability.aoeRadius);
+        foreach (var hit in hits)
         {
-            Vector3 targetPosition = target.transform.position;
-            Vector3 direction = targetPosition - spawnPos;
-            direction.y = 0;
-            if (direction != Vector3.zero)
-                spawnRot = Quaternion.LookRotation(direction);
-        }
+            CharacterRoot hitRoot = hit.GetComponentInParent<CharacterRoot>();
+            if (hitRoot == null || hitRoot == myRoot) continue; // Skip self
 
-        GameObject projectileGO = ObjectPooler.instance.Get(prefabToSpawn, spawnPos, spawnRot);
-        if (projectileGO == null) return;
+            bool isAlly = (hitRoot.gameObject.layer == myRoot.gameObject.layer);
+            var effects = isAlly ? ability.friendlyEffects : ability.hostileEffects;
 
-        projectileGO.layer = LayerMask.NameToLayer("HostileRanged");
-        Collider projectileCollider = projectileGO.GetComponent<Collider>();
-        if (projectileCollider != null)
-        {
-            Collider[] casterColliders = GetComponentInParent<CharacterRoot>().GetComponentsInChildren<Collider>();
-            foreach (Collider c in casterColliders) Physics.IgnoreCollision(projectileCollider, c);
-        }
-        if (projectileGO.TryGetComponent<Projectile>(out var projectile))
-        {
-            int layer = GetComponentInParent<CharacterRoot>().gameObject.layer;
-            projectile.Initialize(ability, this.gameObject, layer);
+            foreach (var effect in effects) effect.Apply(myRoot.gameObject, hitRoot.gameObject);
         }
     }
 
-    private void HandleGroundAOE(Ability ability, Vector3 position)
+    private void ApplyEffects(List<IAbilityEffect> effects, GameObject target)
     {
-        if (ability.hitVFX != null) ObjectPooler.instance.Get(ability.hitVFX, position, Quaternion.identity);
-        Collider[] hits = Physics.OverlapSphere(position, ability.aoeRadius);
-        List<CharacterRoot> affectedCharacters = new List<CharacterRoot>();
-        foreach (var hit in hits)
-        {
-            CharacterRoot hitCharacter = hit.GetComponentInParent<CharacterRoot>();
-            if (hitCharacter == null || affectedCharacters.Contains(hitCharacter)) continue;
-            affectedCharacters.Add(hitCharacter);
-            CharacterRoot casterRoot = this.GetComponentInParent<CharacterRoot>();
-            if (casterRoot == null) return;
-            int casterLayer = casterRoot.gameObject.layer;
-            int targetLayer = hitCharacter.gameObject.layer;
-            bool isAlly = casterLayer == targetLayer;
-            var effectsToApply = isAlly ? ability.friendlyEffects : ability.hostileEffects;
-            foreach (var effect in effectsToApply) effect.Apply(casterRoot.gameObject, hitCharacter.gameObject);
-        }
+        foreach (var e in effects) e.Apply(myRoot != null ? myRoot.gameObject : gameObject, target);
     }
 
     private void HandleChanneledBeam(Ability ability, GameObject target)
     {
-        GameObject prefabToSpawn = ability.enemyProjectilePrefab != null ? ability.enemyProjectilePrefab : ability.playerProjectilePrefab;
-        if (prefabToSpawn != null)
+        GameObject prefab = ability.enemyProjectilePrefab ?? ability.playerProjectilePrefab;
+        if (prefab != null)
         {
-            GameObject beamObject = Instantiate(prefabToSpawn, transform.position, transform.rotation);
-            if (beamObject.TryGetComponent<ChanneledBeamController>(out var beam))
+            var beamObj = Instantiate(prefab, transform.position, transform.rotation);
+            if (beamObj.TryGetComponent<ChanneledBeamController>(out var beam))
             {
-                beam.Initialize(ability, this.gameObject, target);
+                beam.Initialize(ability, gameObject, target);
                 ActiveBeam = beam;
             }
         }
     }
 
-    private void HandleSelfCast(Ability ability)
+    // Debug Gizmos
+    private void OnDrawGizmos()
     {
-        foreach (var effect in ability.friendlyEffects) effect.Apply(this.gameObject, this.gameObject);
+        if (debugDisplayTime > 0)
+        {
+            Gizmos.color = new Color(1, 0, 0, 0.3f);
+            Gizmos.matrix = Matrix4x4.TRS(debugBoxCenter, debugBoxRotation, debugBoxSize);
+            Gizmos.DrawCube(Vector3.zero, Vector3.one);
+            debugDisplayTime -= Time.deltaTime;
+        }
     }
-
-    void Update() { if (ActiveBeam != null && ActiveBeam.gameObject == null) { ActiveBeam = null; } }
 }

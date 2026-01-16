@@ -1,98 +1,95 @@
 using UnityEngine;
-using System.Linq;
+using System.Collections.Generic;
 
 public class AITargeting : MonoBehaviour
 {
-    [Header("Sensing Settings")]
-    public float detectionRadius = 20f;
-    public LayerMask playerLayer;
-    public LayerMask domeMarkerLayer;
-
-    [Header("Siege Settings")]
-    public bool checkLineOfSight = true;
-    public float domePriorityMultiplier = 5.0f;
+    [Header("Detection Settings")]
+    public float detectionRadius = 15f; // Renamed back from lookRadius
+    public LayerMask playerLayer;       // Renamed back from targetLayers
     public LayerMask obstacleLayers;
+    public bool checkLineOfSight = true;
 
-    [Header("Aggro Logic")]
-    [Tooltip("Multiplier applied to the current target's score to make AI 'stick' to them.")]
-    public float stickyAggroMultiplier = 1.25f;
+    [Header("Behavior")]
+    public float targetRefreshRate = 0.5f;
 
-    private Collider[] _targetBuffer = new Collider[50];
+    // --- Optimization Caches ---
+    private float sqrLookRadius;
+    private Collider[] hitColliders = new Collider[20];
 
-    public Transform FindBestTarget(Transform currentFocus = null)
+    void Awake()
     {
-        LayerMask combinedMask = playerLayer | domeMarkerLayer;
-        int hitCount = Physics.OverlapSphereNonAlloc(transform.position, detectionRadius, _targetBuffer, combinedMask);
+        sqrLookRadius = detectionRadius * detectionRadius;
+    }
 
-        if (hitCount == 0) return null;
-
-        Transform bestTarget = null;
-        float bestScore = -1f;
-
-        for (int i = 0; i < hitCount; i++)
+    public Transform FindBestTarget(Transform currentTarget)
+    {
+        // 1. Fast Distance Check
+        if (currentTarget != null)
         {
-            var targetCollider = _targetBuffer[i];
-
-            // 1. Resolve Health Component
-            Health targetHealth = null;
-            CharacterRoot root = targetCollider.GetComponentInParent<CharacterRoot>();
-
-            if (root != null)
+            float sqrDist = (currentTarget.position - transform.position).sqrMagnitude;
+            if (sqrDist > sqrLookRadius)
             {
-                targetHealth = root.Health;
+                currentTarget = null;
             }
             else
             {
-                targetHealth = targetCollider.GetComponent<Health>() ?? targetCollider.GetComponentInParent<Health>();
+                // Fix: Check health directly in case isDead is private
+                Health h = currentTarget.GetComponent<CharacterRoot>()?.Health ?? currentTarget.GetComponent<Health>();
+                if (h == null || h.currentHealth <= 0 || h.isDowned) currentTarget = null;
             }
+        }
 
-            // --- FIX: Strictly ignore targets with NO Health component ---
-            // This prevents targeting "DomeMarkers" or props that don't have Health scripts
-            if (targetHealth == null) continue;
-            // ------------------------------------------------------------
+        if (currentTarget != null) return currentTarget;
 
-            // 2. Dead/Downed Check
-            if (targetHealth.isDowned || targetHealth.currentHealth <= 0)
-            {
-                continue;
-            }
+        // 2. Overlap Sphere
+        int numFound = Physics.OverlapSphereNonAlloc(transform.position, detectionRadius, hitColliders, playerLayer);
 
-            // 3. Line of Sight Check
+        Transform bestTarget = null;
+        float closestSqrDistance = Mathf.Infinity;
+
+        for (int i = 0; i < numFound; i++)
+        {
+            Collider col = hitColliders[i];
+            if (col == null) continue;
+
+            Transform potentialTarget = col.transform;
+            if (potentialTarget == transform || potentialTarget.IsChildOf(transform)) continue;
+
+            Vector3 directionToTarget = potentialTarget.position - transform.position;
+            float dSqrToTarget = directionToTarget.sqrMagnitude;
+
+            if (dSqrToTarget > closestSqrDistance) continue;
+
+            // Component Cache
+            CharacterRoot targetRoot = potentialTarget.GetComponent<CharacterRoot>();
+            Health targetHealth = targetRoot != null ? targetRoot.Health : potentialTarget.GetComponent<Health>();
+
+            // Fix: Check health <= 0 instead of isDead
+            if (targetHealth == null || targetHealth.currentHealth <= 0 || targetHealth.isDowned) continue;
+
+            // Line of Sight
             if (checkLineOfSight)
             {
-                Vector3 origin = transform.position + Vector3.up;
-                Vector3 targetPos = targetCollider.transform.position + Vector3.up;
-                Vector3 direction = targetPos - origin;
-
-                // --- FIX: Robust Raycast ---
-                // If we hit something, check if it's NOT the target. If we hit the target, LOS is good.
-                if (Physics.Raycast(origin, direction.normalized, out RaycastHit hit, direction.magnitude, obstacleLayers))
+                float dist = Mathf.Sqrt(dSqrToTarget);
+                if (Physics.Raycast(transform.position + Vector3.up, directionToTarget.normalized, out RaycastHit hit, dist, obstacleLayers))
                 {
-                    // If the ray hit something that isn't the target (and isn't a child of the target), we are blocked.
-                    if (hit.transform != targetCollider.transform && !hit.transform.IsChildOf(targetCollider.transform))
+                    if (hit.transform != potentialTarget && !hit.transform.IsChildOf(potentialTarget))
                     {
                         continue;
                     }
                 }
             }
 
-            // 4. Scoring
-            float distance = Vector3.Distance(transform.position, targetCollider.transform.position);
-            float score = 1.0f / (1.0f + distance);
-
-            if (targetCollider.CompareTag("DomeMarker")) score *= domePriorityMultiplier;
-
-            if (currentFocus != null && targetCollider.transform == currentFocus)
-            {
-                score *= stickyAggroMultiplier;
-            }
-
-            if (score > bestScore)
-            {
-                bestScore = score;
-                bestTarget = targetCollider.transform;
-            }
+            closestSqrDistance = dSqrToTarget;
+            bestTarget = potentialTarget;
         }
+
         return bestTarget;
+    }
+
+    void OnDrawGizmosSelected()
+    {
+        Gizmos.color = Color.yellow;
+        Gizmos.DrawWireSphere(transform.position, detectionRadius);
     }
 }
