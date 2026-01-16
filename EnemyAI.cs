@@ -9,16 +9,37 @@ using System;
 [RequireComponent(typeof(AITargeting), typeof(AIAbilitySelector))]
 public class EnemyAI : MonoBehaviour, IMovementHandler
 {
+    // --- Public Properties for State Access ---
+    public NavMeshAgent NavAgent { get; private set; }
+    public Health Health { get; private set; }
+    public EnemyAbilityHolder AbilityHolder { get; private set; }
+    public AITargeting Targeting { get; private set; }
+    public AIAbilitySelector AbilitySelector { get; private set; }
+    public Animator Animator { get; private set; }
+    public CharacterMovementHandler MovementHandler { get; private set; }
+
+    // --- Additional Components to Cleanup ---
+    private MonoBehaviour lootGen; // Stored as MonoBehaviour to avoid dependency errors if script is missing
+    private MonoBehaviour statusEffectHolder;
+    private CharacterRoot characterRoot;
+
+    // --- State Data ---
+    public Transform currentTarget;
+    public Vector3 StartPosition { get; private set; }
+    public Vector3 CombatStartPosition { get; set; }
+    public bool HasUsedInitialAbilities { get; set; }
+    public SurroundPoint AssignedSurroundPoint { get; set; }
+    public PatrolPoint[] CollectedPatrolPoints { get; private set; }
+    public int CurrentPatrolIndex { get; set; } = 0;
+    public bool IsWaitingAtPatrolPoint { get; set; } = false;
+    public float OriginalSpeed { get; private set; }
+
     public bool IsInActionSequence { get; set; } = false;
 
+    // --- Configuration ---
     [Header("Enemy Stats & Behavior")]
     public EnemyClass enemyClass;
     public AIBehaviorProfile behaviorProfile;
-
-    private List<HealthThresholdTrigger> triggeredHealthPhases = new List<HealthThresholdTrigger>();
-    private AITargeting targeting;
-    private AIAbilitySelector abilitySelector;
-    private CharacterMovementHandler movementHandler;
 
     [Header("Leashing & State")]
     public float chaseLeashRadius = 30f;
@@ -26,9 +47,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     [Header("Line of Sight")]
     public float lostSightSearchDuration = 5f;
-    private float lastLostSightCheckTime;
-    private const float LOS_CHECK_INTERVAL = 0.2f;
-    private bool cachedHasLOS = false;
 
     [Header("Combat Style")]
     public AIArchetype archetype;
@@ -39,47 +57,33 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public float retreatAndKiteSpeed = 8f;
     public bool isTimid = false;
 
-    // --- FIX: Add Recovery Delay ---
-    [Tooltip("How long the enemy stands still after an attack finishes. Prevents twitchy movement.")]
+    [Header("Combat Timing")]
     public float attackRecoveryDelay = 0.5f;
     private float recoveryTimer = 0f;
-    // -------------------------------
+
+    [Header("Death & Cleanup")]
+    [Tooltip("How long the body stays visible before being destroyed.")]
+    public float corpseDuration = 5.0f;
 
     [Header("Self Preservation")]
     [Range(0f, 1f)] public float retreatHealthThreshold = 0.3f;
     [Range(0f, 1f)] public float retreatChance = 0.5f;
     public float retreatDuration = 3f;
 
-    [Header("Surround System")]
-    public float waitingDistanceOffset = 8f;
-
-    private NavMeshAgent navMeshAgent;
-    private Health health;
-    private EnemyAbilityHolder abilityHolder;
+    private List<HealthThresholdTrigger> triggeredHealthPhases = new List<HealthThresholdTrigger>();
     private EnemyHealthUI enemyHealthUI;
-    private Animator animator;
-    private AIState currentState;
-    public Transform currentTarget;
-    private Vector3 startPosition;
-    private Vector3 combatStartPosition;
     private bool isDead = false;
-    private bool hasUsedInitialAbilities = false;
-    private Vector3 lastKnownPosition;
-    private float timeSinceLostSight = 0f;
     public bool startDeactivated = true;
-    private float retreatTimer;
-    private SurroundPoint assignedSurroundPoint = null;
-    private float originalSpeed;
-    private PatrolPoint[] collectedPatrolPoints;
-    private int currentPatrolIndex = 0;
-    private bool isWaitingAtPatrolPoint = false;
-    private float waitTimer = 0f;
-
-    private string lastState = "";
-    private string lastAction = "";
     private bool hasBeenActivated = false;
 
-    // --- ANIMATION HASHES ---
+    // --- UI State Tracking ---
+    private string lastState = "";
+    private string lastAction = "";
+
+    // --- State Machine ---
+    private IEnemyState currentState;
+
+    // --- Animation Hashes ---
     private int speedHash;
     private int attackTriggerHash;
     private int attackIndexHash;
@@ -87,52 +91,50 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private int walkIndexHash;
     private bool wasMoving = false;
 
-    private enum AIState { Idle, Combat, Returning, Retreating }
-
     void Awake()
     {
-        navMeshAgent = GetComponent<NavMeshAgent>();
-        health = GetComponent<Health>();
-        abilityHolder = GetComponent<EnemyAbilityHolder>();
+        NavAgent = GetComponent<NavMeshAgent>();
+        Health = GetComponent<Health>();
+        AbilityHolder = GetComponent<EnemyAbilityHolder>();
         enemyHealthUI = GetComponentInChildren<EnemyHealthUI>();
+        Animator = GetComponentInChildren<Animator>();
+        Targeting = GetComponent<AITargeting>();
+        AbilitySelector = GetComponent<AIAbilitySelector>();
+        MovementHandler = GetComponent<CharacterMovementHandler>();
+        characterRoot = GetComponent<CharacterRoot>();
 
-        animator = GetComponentInChildren<Animator>();
+        // Look for optional components by name string to avoid errors if you haven't created the scripts yet
+        // OR simply try GetComponent if they exist in your project.
+        // Assuming the class names "LootGen" and "StatusEffectHolder" exist:
+        lootGen = GetComponent("LootGen") as MonoBehaviour;
+        statusEffectHolder = GetComponent("StatusEffectHolder") as MonoBehaviour;
+
         speedHash = Animator.StringToHash("Speed");
         attackTriggerHash = Animator.StringToHash("AttackTrigger");
         attackIndexHash = Animator.StringToHash("AttackIndex");
         idleIndexHash = Animator.StringToHash("IdleIndex");
         walkIndexHash = Animator.StringToHash("WalkIndex");
-
-        targeting = GetComponent<AITargeting>();
-        abilitySelector = GetComponent<AIAbilitySelector>();
-        movementHandler = GetComponent<CharacterMovementHandler>();
     }
 
     void Start()
     {
-        if (enemyClass != null && health != null)
+        if (enemyClass != null && Health != null)
         {
-            health.UpdateMaxHealth(enemyClass.maxHealth);
-            health.SetToMaxHealth();
-            health.damageReductionPercent = enemyClass.damageMitigation;
+            Health.UpdateMaxHealth(enemyClass.maxHealth);
+            Health.SetToMaxHealth();
+            Health.damageReductionPercent = enemyClass.damageMitigation;
         }
 
-        startPosition = transform.position;
-        currentState = AIState.Idle;
-        originalSpeed = navMeshAgent.speed;
+        StartPosition = transform.position;
+        OriginalSpeed = NavAgent.speed;
 
-        if (navMeshAgent != null) navMeshAgent.updateRotation = false;
+        if (NavAgent != null) NavAgent.updateRotation = false;
 
         CollectPatrolPoints();
+        SwitchState(new IdleState());
 
-        if (startDeactivated && !hasBeenActivated)
-        {
-            DeactivateAI();
-        }
-        else
-        {
-            ActivateAI();
-        }
+        if (startDeactivated && !hasBeenActivated) DeactivateAI();
+        else ActivateAI();
 
         HandleHealthChanged();
     }
@@ -140,94 +142,38 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     void OnEnable()
     {
         PlayerAbilityHolder.OnPlayerAbilityUsed += HandlePlayerAbilityUsed;
-        if (health != null)
-        {
-            health.OnHealthChanged += HandleHealthChanged;
-            health.OnDeath += OnDeath;
-        }
-        if (abilityHolder != null)
-        {
-            abilityHolder.OnCastStarted += HandleCastStarted;
-            abilityHolder.OnCastFinished += HandleCastFinished;
-        }
-
+        if (Health != null) { Health.OnHealthChanged += HandleHealthChanged; Health.OnDeath += OnDeath; }
+        if (AbilityHolder != null) { AbilityHolder.OnCastStarted += HandleCastStarted; AbilityHolder.OnCastFinished += HandleCastFinished; }
         if (!isDead) StartCoroutine(AIThinkRoutine());
     }
 
     void OnDisable()
     {
         PlayerAbilityHolder.OnPlayerAbilityUsed -= HandlePlayerAbilityUsed;
-        if (health != null)
-        {
-            health.OnHealthChanged -= HandleHealthChanged;
-            health.OnDeath -= OnDeath;
-        }
-        if (abilityHolder != null)
-        {
-            abilityHolder.OnCastStarted -= HandleCastStarted;
-            abilityHolder.OnCastFinished -= HandleCastFinished;
-        }
-
+        if (Health != null) { Health.OnHealthChanged -= HandleHealthChanged; Health.OnDeath -= OnDeath; }
+        if (AbilityHolder != null) { AbilityHolder.OnCastStarted -= HandleCastStarted; AbilityHolder.OnCastFinished -= HandleCastFinished; }
         StopAllCoroutines();
-        if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
-        {
-            navMeshAgent.ResetPath();
-            navMeshAgent.velocity = Vector3.zero;
-        }
+        if (NavAgent != null && NavAgent.isActiveAndEnabled && NavAgent.isOnNavMesh) { NavAgent.ResetPath(); NavAgent.velocity = Vector3.zero; }
     }
 
-    private void OnDeath()
+    // --- State Machine Logic ---
+    public void SwitchState(IEnemyState newState)
     {
-        isDead = true;
-
-        StopMovement();
-        if (navMeshAgent != null) navMeshAgent.enabled = false;
-
-        if (animator != null)
-        {
-            animator.SetFloat(speedHash, 0f);
-            animator.ResetTrigger(attackTriggerHash);
-        }
-
-        if (enemyHealthUI != null) enemyHealthUI.gameObject.SetActive(false);
-        SetAIStatus("Dead", "");
-
-        Collider c = GetComponent<Collider>();
-        if (c != null) c.enabled = false;
-
-        this.enabled = false;
-    }
-
-    public void ActivateAI()
-    {
-        hasBeenActivated = true;
-        this.enabled = true;
-
-        if (navMeshAgent != null) navMeshAgent.enabled = true;
-        if (animator != null) animator.enabled = true;
-    }
-
-    public void DeactivateAI()
-    {
-        if (currentTarget != null) return;
-
-        this.enabled = false;
-        if (navMeshAgent != null) navMeshAgent.enabled = false;
-        if (animator != null) animator.enabled = false;
+        currentState?.Exit(this);
+        currentState = newState;
+        currentState?.Enter(this);
     }
 
     private IEnumerator AIThinkRoutine()
     {
-        if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && !navMeshAgent.isOnNavMesh)
+        if (NavAgent != null && NavAgent.isActiveAndEnabled && !NavAgent.isOnNavMesh)
         {
             if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 5.0f, NavMesh.AllAreas))
-            {
-                navMeshAgent.Warp(hit.position);
-            }
+                NavAgent.Warp(hit.position);
         }
 
         int timeout = 10;
-        while (timeout > 0 && navMeshAgent != null && navMeshAgent.isActiveAndEnabled && !navMeshAgent.isOnNavMesh)
+        while (timeout > 0 && NavAgent != null && NavAgent.isActiveAndEnabled && !NavAgent.isOnNavMesh)
         {
             timeout--;
             yield return null;
@@ -238,12 +184,18 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
         while (!isDead && this.enabled)
         {
-            if (navMeshAgent != null && navMeshAgent.isOnNavMesh && navMeshAgent.isActiveAndEnabled)
+            if (NavAgent != null && NavAgent.isOnNavMesh && NavAgent.isActiveAndEnabled)
             {
                 Think();
             }
             yield return wait;
         }
+    }
+
+    private void Think()
+    {
+        if (Time.time < recoveryTimer) return;
+        currentState?.Execute(this);
     }
 
     void Update()
@@ -252,24 +204,41 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
         HandleRotation();
 
-        // --- FIX: Recovery Delay Check ---
-        // If we are recovering from an attack, force animation to Idle and stop moving
-        if (Time.time < recoveryTimer)
+        // 1. Check Animation Locks FIRST
+        bool isAnimationLocked = false;
+
+        if (Animator != null)
+        {
+            AnimatorStateInfo stateInfo = Animator.GetCurrentAnimatorStateInfo(0);
+            if (stateInfo.IsTag("Attack"))
+            {
+                isAnimationLocked = true;
+            }
+            else if (Animator.IsInTransition(0))
+            {
+                AnimatorTransitionInfo transInfo = Animator.GetAnimatorTransitionInfo(0);
+                if (transInfo.anyState && stateInfo.IsTag("Attack")) isAnimationLocked = true;
+            }
+        }
+
+        bool isRecovering = Time.time < recoveryTimer;
+
+        // 2. Enforce Lock
+        if (isAnimationLocked || isRecovering)
         {
             StopMovement();
-            // Force animator to reflect "stopped" state
-            if (animator != null) animator.SetFloat(speedHash, 0f);
+            if (Animator != null) Animator.SetFloat(speedHash, 0f);
             return;
         }
-        // ---------------------------------
 
+        // 3. Normal Update
         UpdateAnimator();
 
-        bool isSpecialMovementActive = movementHandler != null && movementHandler.IsSpecialMovementActive;
-        if (IsInActionSequence || isDead || isSpecialMovementActive || abilityHolder.IsCasting || abilityHolder.ActiveBeam != null)
+        bool isSpecialMovementActive = MovementHandler != null && MovementHandler.IsSpecialMovementActive;
+        if (IsInActionSequence || isDead || isSpecialMovementActive || AbilityHolder.IsCasting || AbilityHolder.ActiveBeam != null)
         {
-            if (abilityHolder.IsCasting) StopMovement();
-            if (abilityHolder.ActiveBeam != null && currentTarget != null)
+            if (AbilityHolder.IsCasting) StopMovement();
+            if (AbilityHolder.ActiveBeam != null && currentTarget != null)
             {
                 transform.LookAt(new Vector3(currentTarget.position.x, transform.position.y, currentTarget.position.z));
             }
@@ -277,92 +246,107 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
-    private void UpdateAnimator()
+    // --- Shared Logic called by States ---
+
+    public void PerformAttack(Ability ability)
     {
-        if (animator == null) return;
-
-        float currentSpeed = 0f;
-        if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
-        {
-            Vector3 effectiveVelocity = navMeshAgent.velocity;
-            if (effectiveVelocity.magnitude < 0.1f && navMeshAgent.hasPath && !navMeshAgent.isStopped)
-            {
-                effectiveVelocity = navMeshAgent.desiredVelocity;
-            }
-
-            float maxSpeed = navMeshAgent.speed > 0 ? navMeshAgent.speed : 3.5f;
-            currentSpeed = effectiveVelocity.magnitude / maxSpeed;
-
-            if (navMeshAgent.hasPath && !navMeshAgent.isStopped && navMeshAgent.remainingDistance > 0.1f)
-            {
-                if (currentSpeed < 0.15f) currentSpeed = 0.15f;
-            }
-        }
-
-        animator.SetFloat(speedHash, currentSpeed, 0f, Time.deltaTime);
-
-        bool isMoving = currentSpeed > 0.05f;
-
-        if (isMoving && !wasMoving)
-        {
-            int randomWalk = UnityEngine.Random.Range(0, 2);
-            animator.SetInteger(walkIndexHash, randomWalk);
-        }
-        else if (!isMoving && wasMoving)
-        {
-            int randomIdle = UnityEngine.Random.Range(0, 3);
-            animator.SetInteger(idleIndexHash, randomIdle);
-        }
-
-        wasMoving = isMoving;
-    }
-
-    private void PerformAttack(Ability ability)
-    {
-        if (animator != null)
+        if (Animator != null)
         {
             if (!string.IsNullOrEmpty(ability.overrideTriggerName))
             {
-                animator.SetTrigger(ability.overrideTriggerName);
+                Animator.SetTrigger(ability.overrideTriggerName);
             }
             else if (ability.attackStyleIndex > 0)
             {
-                animator.SetInteger(attackIndexHash, ability.attackStyleIndex);
-                animator.SetTrigger(attackTriggerHash);
+                Animator.SetInteger(attackIndexHash, ability.attackStyleIndex);
+                Animator.SetTrigger(attackTriggerHash);
             }
             else
             {
                 int randomAttack = UnityEngine.Random.Range(0, 3);
-                animator.SetInteger(attackIndexHash, randomAttack);
-                animator.SetTrigger(attackTriggerHash);
+                Animator.SetInteger(attackIndexHash, randomAttack);
+                Animator.SetTrigger(attackTriggerHash);
             }
         }
-        abilityHolder.UseAbility(ability, currentTarget.gameObject);
+        AbilityHolder.UseAbility(ability, currentTarget.gameObject);
     }
 
-    private void Think()
+    public void StopMovement()
     {
-        // Don't think if recovering
-        if (Time.time < recoveryTimer) return;
-
-        switch (currentState)
+        if (NavAgent != null && NavAgent.isActiveAndEnabled && NavAgent.isOnNavMesh)
         {
-            case AIState.Idle: UpdateIdleState(); break;
-            case AIState.Combat: UpdateCombatState(); break;
-            case AIState.Returning: UpdateReturningState(); break;
-            case AIState.Retreating: UpdateRetreatingState(); break;
+            NavAgent.ResetPath();
+            NavAgent.velocity = Vector3.zero;
         }
+    }
+
+    public void RetreatFromTarget()
+    {
+        if (NavAgent == null || !NavAgent.isActiveAndEnabled || !NavAgent.isOnNavMesh) return;
+
+        if (currentTarget == null) return;
+        Vector3 directionAwayFromTarget = (transform.position - currentTarget.position).normalized;
+        float bestPathLength = 0;
+        Vector3 bestRetreatPoint = Vector3.zero;
+        bool foundRetreatPoint = false;
+        int numSamples = 8;
+        float retreatArc = 120f;
+        for (int i = 0; i < numSamples; i++) { float angle = (i / (float)(numSamples - 1) - 0.5f) * retreatArc; Vector3 sampleDirection = Quaternion.Euler(0, angle, 0) * directionAwayFromTarget; Vector3 potentialDestination = transform.position + sampleDirection * kiteDistance; if (NavMesh.SamplePosition(potentialDestination, out NavMeshHit hit, 2.0f, NavMesh.AllAreas)) { NavMeshPath path = new NavMeshPath(); if (NavAgent.CalculatePath(hit.position, path) && path.status == NavMeshPathStatus.PathComplete) { float pathLength = 0f; for (int j = 1; j < path.corners.Length; j++) { pathLength += Vector3.Distance(path.corners[j - 1], path.corners[j]); } if (pathLength > bestPathLength) { bestPathLength = pathLength; bestRetreatPoint = hit.position; foundRetreatPoint = true; } } } }
+        if (foundRetreatPoint) { NavAgent.SetDestination(bestRetreatPoint); }
+    }
+
+    public bool IsTargetInvalid(Transform target)
+    {
+        if (target == null) return true;
+        Health h = null;
+        CharacterRoot root = target.GetComponent<CharacterRoot>() ?? target.GetComponentInParent<CharacterRoot>();
+        if (root != null) h = root.Health;
+        else h = target.GetComponent<Health>() ?? target.GetComponentInParent<Health>() ?? target.GetComponentInChildren<Health>();
+        return h == null || h.isDowned || h.currentHealth <= 0;
+    }
+
+    public bool HasLineOfSight(Transform target)
+    {
+        if (Targeting != null && !Targeting.checkLineOfSight) return true;
+        if (target == null) return false;
+        Vector3 origin = transform.position + Vector3.up;
+        Vector3 targetPosition = target.position + Vector3.up;
+        Vector3 direction = targetPosition - origin;
+        float distance = direction.magnitude;
+        if (Physics.Raycast(origin, direction.normalized, out RaycastHit hit, distance, Targeting.obstacleLayers))
+        {
+            if (hit.transform == target || hit.transform.IsChildOf(target)) return true;
+            return false;
+        }
+        return true;
+    }
+
+    public void ResetCombatState()
+    {
+        HasUsedInitialAbilities = false;
+        if (AssignedSurroundPoint != null) { SurroundPointManager.instance.ReleasePoint(this); AssignedSurroundPoint = null; }
+        if (AbilityHolder.ActiveBeam != null) AbilityHolder.ActiveBeam.Interrupt();
+        currentTarget = null;
+    }
+
+    public void SetAIStatus(string state, string action)
+    {
+        if (lastState == state && lastAction == action) return;
+        lastState = state;
+        lastAction = action;
+        enemyHealthUI?.UpdateStatus(state, action);
+        if (FloatingTextManager.instance != null) FloatingTextManager.instance.ShowAIStatus(action, transform.position + Vector3.up * 3.5f);
     }
 
     private void HandleRotation()
     {
-        if (navMeshAgent == null || isDead) return;
+        if (NavAgent == null || isDead) return;
 
         Vector3 targetLookPos = Vector3.zero;
         bool shouldRotate = false;
+        bool inCombat = (currentTarget != null);
 
-        // --- FIX: Also look at target during Recovery ---
-        if ((currentState == AIState.Combat && currentTarget != null) || Time.time < recoveryTimer)
+        if (inCombat || Time.time < recoveryTimer)
         {
             if (currentTarget != null)
             {
@@ -370,9 +354,9 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
                 shouldRotate = true;
             }
         }
-        else if (navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh && navMeshAgent.velocity.sqrMagnitude > 0.1f)
+        else if (NavAgent.isActiveAndEnabled && NavAgent.isOnNavMesh && NavAgent.velocity.sqrMagnitude > 0.1f)
         {
-            targetLookPos = transform.position + navMeshAgent.velocity;
+            targetLookPos = transform.position + NavAgent.velocity;
             shouldRotate = true;
         }
 
@@ -387,335 +371,203 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
-    private void UpdateCombatState()
+    private void UpdateAnimator()
     {
-        if (currentTarget == null || Vector3.Distance(transform.position, combatStartPosition) > chaseLeashRadius)
+        if (Animator == null) return;
+        if (NavAgent == null || !NavAgent.isActiveAndEnabled || !NavAgent.isOnNavMesh)
         {
-            ResetCombatState();
-            currentState = AIState.Returning;
-            navMeshAgent.SetDestination(startPosition);
+            Animator.SetFloat(speedHash, 0f);
             return;
         }
 
-        if (IsTargetInvalid(currentTarget))
+        float currentSpeed = 0f;
+        if (NavAgent != null && NavAgent.isActiveAndEnabled && NavAgent.isOnNavMesh)
         {
-            ResetCombatState();
-            currentState = AIState.Idle;
-            return;
-        }
-
-        if (health.currentHealth / (float)health.maxHealth < retreatHealthThreshold)
-        {
-            if (UnityEngine.Random.value < retreatChance)
+            Vector3 effectiveVelocity = NavAgent.velocity;
+            if (effectiveVelocity.magnitude < 0.1f && NavAgent.hasPath && !NavAgent.isStopped)
             {
-                currentState = AIState.Retreating;
-                retreatTimer = retreatDuration;
-                if (assignedSurroundPoint != null)
+                effectiveVelocity = NavAgent.desiredVelocity;
+            }
+
+            float maxSpeed = NavAgent.speed > 0 ? NavAgent.speed : 3.5f;
+            currentSpeed = effectiveVelocity.magnitude / maxSpeed;
+
+            if (NavAgent.hasPath && !NavAgent.isStopped && NavAgent.remainingDistance > 0.1f)
+            {
+                if (currentSpeed < 0.15f) currentSpeed = 0.15f;
+            }
+        }
+
+        Animator.SetFloat(speedHash, currentSpeed, 0f, Time.deltaTime);
+
+        bool isMoving = currentSpeed > 0.05f;
+        if (isMoving && !wasMoving)
+        {
+            int randomWalk = UnityEngine.Random.Range(0, 2);
+            Animator.SetInteger(walkIndexHash, randomWalk);
+        }
+        else if (!isMoving && wasMoving)
+        {
+            int randomIdle = UnityEngine.Random.Range(0, 3);
+            Animator.SetInteger(idleIndexHash, randomIdle);
+        }
+        wasMoving = isMoving;
+    }
+
+    // --- Death Handling ---
+
+    private void OnDeath()
+    {
+        isDead = true;
+
+        // 1. Start Cleanup (Must do this BEFORE disabling 'this')
+        // Coroutines run on the GameObject, but starting them usually requires an active component instance.
+        StartCoroutine(HandleCorpseCleanup());
+
+        // 2. Disable Logic Components
+        StopMovement();
+        if (NavAgent != null) NavAgent.enabled = false;
+
+        Collider c = GetComponent<Collider>();
+        if (c != null) c.enabled = false;
+
+        Rigidbody rb = GetComponent<Rigidbody>();
+        if (rb != null) rb.isKinematic = true;
+
+        if (AbilityHolder != null) AbilityHolder.enabled = false;
+        if (Targeting != null) Targeting.enabled = false;
+        if (AbilitySelector != null) AbilitySelector.enabled = false;
+        if (MovementHandler != null) MovementHandler.enabled = false;
+        if (enemyHealthUI != null) enemyHealthUI.gameObject.SetActive(false);
+
+        // Disable the extra components found in Awake
+        if (lootGen != null) lootGen.enabled = false;
+        if (statusEffectHolder != null) statusEffectHolder.enabled = false;
+        if (characterRoot != null) characterRoot.enabled = false;
+
+        // Disable Health last (visuals might rely on it momentarily)
+        if (Health != null) Health.enabled = false;
+
+        // 3. Handle Animation
+        if (Animator != null)
+        {
+            Animator.SetFloat(speedHash, 0f);
+            Animator.ResetTrigger(attackTriggerHash);
+        }
+
+        SetAIStatus("Dead", "");
+
+        // 4. Disable THIS script (stops Update loop, keeps Inspector clean)
+        this.enabled = false;
+    }
+
+    private IEnumerator HandleCorpseCleanup()
+    {
+        yield return new WaitForSeconds(corpseDuration);
+
+        // Placeholder for future VFX
+        // Instantiate(meltVFX, transform.position, ...);
+
+        Destroy(gameObject);
+    }
+
+    public void ActivateAI()
+    {
+        hasBeenActivated = true;
+        this.enabled = true;
+        if (NavAgent != null) NavAgent.enabled = true;
+        if (Animator != null) Animator.enabled = true;
+    }
+
+    public void DeactivateAI()
+    {
+        if (currentTarget != null) return;
+        this.enabled = false;
+        if (NavAgent != null) NavAgent.enabled = false;
+        if (Animator != null) Animator.enabled = false;
+    }
+
+    private void CollectPatrolPoints()
+    {
+        if (patrolPaths == null || patrolPaths.Length == 0) return;
+        List<PatrolPoint> points = new List<PatrolPoint>();
+        foreach (PatrolPath path in patrolPaths)
+        {
+            if (path == null) continue;
+            Collider pathCollider = path.GetComponent<Collider>();
+            if (pathCollider == null) continue;
+            Collider[] collidersInVolume = Physics.OverlapBox(path.transform.position, pathCollider.bounds.extents, path.transform.rotation);
+            foreach (Collider col in collidersInVolume)
+            {
+                if (col.TryGetComponent<PatrolPoint>(out PatrolPoint point))
                 {
-                    SurroundPointManager.instance.ReleasePoint(this);
-                    assignedSurroundPoint = null;
+                    if (!points.Contains(point)) points.Add(point);
                 }
-                return;
             }
         }
-
-        float distToTarget = Vector3.Distance(transform.position, currentTarget.position);
-        if (Time.time - lastLostSightCheckTime > LOS_CHECK_INTERVAL || distToTarget < meleeAttackRange)
-        {
-            cachedHasLOS = HasLineOfSight(currentTarget);
-            lastLostSightCheckTime = Time.time;
-        }
-
-        if (cachedHasLOS)
-        {
-            lastKnownPosition = currentTarget.position;
-            timeSinceLostSight = 0f;
-
-            Ability abilityToUse = abilitySelector.SelectBestAbility(currentTarget, hasUsedInitialAbilities);
-
-            bool isReady = abilityToUse != null && abilityHolder.CanUseAbility(abilityToUse, currentTarget.gameObject);
-
-            float effectiveRange = (abilityToUse != null) ? abilityToUse.range : meleeAttackRange;
-
-            if (isReady && distToTarget <= effectiveRange)
-            {
-                StopMovement();
-                SetAIStatus("Combat", $"Attacking: {abilityToUse.displayName}");
-                PerformAttack(abilityToUse);
-
-                if (abilitySelector.initialAbilities.Contains(abilityToUse)) hasUsedInitialAbilities = true;
-            }
-            else
-            {
-                HandleCombatMovement(isReady, abilityToUse);
-            }
-        }
-        else
-        {
-            if (isTimid) { currentTarget = null; return; }
-            timeSinceLostSight += 0.1f;
-            SetAIStatus("Combat", "Searching...");
-            if (timeSinceLostSight > lostSightSearchDuration) currentTarget = null;
-            else navMeshAgent.SetDestination(lastKnownPosition);
-        }
+        CollectedPatrolPoints = points.OrderBy(p => p.gameObject.name).ToArray();
     }
 
-    private bool IsTargetInvalid(Transform target)
+    private void HandleHealthChanged()
     {
-        if (target == null) return true;
-        Health h = null;
-        CharacterRoot root = target.GetComponent<CharacterRoot>() ?? target.GetComponentInParent<CharacterRoot>();
-        if (root != null) h = root.Health;
-        else h = target.GetComponent<Health>() ?? target.GetComponentInParent<Health>() ?? target.GetComponentInChildren<Health>();
-        return h == null || h.isDowned || h.currentHealth <= 0;
-    }
-
-    private void HandleCombatMovement(bool isReady, Ability abilityToUse)
-    {
-        bool isTargetDomeMarker = currentTarget.CompareTag("DomeMarker");
-        if (isTargetDomeMarker)
+        if (Health.currentHealth <= 0 && !isDead) { OnDeath(); }
+        if (behaviorProfile != null && !isDead)
         {
-            ExecuteDirectMovement();
-        }
-        else if (isReady && archetype == AIArchetype.Melee)
-        {
-            ExecuteClosingMovement(abilityToUse);
-        }
-        else
-        {
-            switch (archetype)
+            float currentHealthPercent = (float)Health.currentHealth / Health.maxHealth;
+            foreach (var trigger in behaviorProfile.healthTriggers)
             {
-                case AIArchetype.Melee: ExecuteMeleeMovement(); break;
-                case AIArchetype.Ranged: ExecuteRangedMovement(); break;
-                case AIArchetype.Hybrid:
-                    if (isReady && abilityToUse.range <= meleeAttackRange) ExecuteClosingMovement(abilityToUse);
-                    else ExecuteRangedMovement();
+                if (currentHealthPercent <= trigger.healthPercentage && !triggeredHealthPhases.Contains(trigger))
+                {
+                    triggeredHealthPhases.Add(trigger);
+                    GameObject targetForAbility = (currentTarget != null) ? currentTarget.gameObject : this.gameObject;
+                    AbilityHolder.UseAbility(trigger.abilityToUse, targetForAbility);
                     break;
+                }
             }
         }
     }
 
-    private void ExecuteClosingMovement(Ability ability)
+    private void HandlePlayerAbilityUsed(PlayerAbilityHolder player, Ability usedAbility)
     {
-        navMeshAgent.speed = originalSpeed;
-        if (assignedSurroundPoint != null) { SurroundPointManager.instance.ReleasePoint(this); assignedSurroundPoint = null; }
-        float range = (ability != null) ? ability.range : meleeAttackRange;
-        navMeshAgent.stoppingDistance = range * 0.8f;
-        navMeshAgent.SetDestination(currentTarget.position);
-        SetAIStatus("Combat", "Closing In");
-    }
-
-    private void ExecuteDirectMovement()
-    {
-        navMeshAgent.speed = originalSpeed;
-        Ability ability = abilitySelector.SelectBestAbility(currentTarget, hasUsedInitialAbilities) ?? abilitySelector.abilities.FirstOrDefault();
-        float range = (ability != null) ? ability.range : meleeAttackRange;
-        navMeshAgent.stoppingDistance = range * 0.8f;
-        navMeshAgent.SetDestination(currentTarget.position);
-        SetAIStatus("Combat", "Advancing on Dome");
-    }
-
-    private void ExecuteMeleeMovement()
-    {
-        navMeshAgent.speed = originalSpeed;
-        if (assignedSurroundPoint == null) assignedSurroundPoint = SurroundPointManager.instance.RequestPoint(this, currentTarget);
-        Vector3 destination = assignedSurroundPoint != null ? assignedSurroundPoint.position : currentTarget.position;
-        navMeshAgent.stoppingDistance = 0.5f;
-        navMeshAgent.SetDestination(destination);
-        SetAIStatus("Combat", assignedSurroundPoint != null ? "Circling" : "Waiting");
-    }
-
-    private void UpdateIdleState()
-    {
-        currentTarget = targeting.FindBestTarget(null);
-        if (currentTarget != null)
+        PlayerMovement playerMovement = player.GetComponentInParent<PlayerMovement>();
+        if (isDead || AbilityHolder.IsCasting || playerMovement == null || playerMovement.TargetObject != this.gameObject) return;
+        if (behaviorProfile != null)
         {
-            hasUsedInitialAbilities = false;
-            currentState = AIState.Combat;
-            combatStartPosition = transform.position;
-            lastKnownPosition = currentTarget.position;
-            if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
-            return;
-        }
-
-        if (collectedPatrolPoints == null || collectedPatrolPoints.Length == 0)
-        {
-            SetAIStatus("Idle", "Searching...");
-            return;
-        }
-
-        if (isWaitingAtPatrolPoint)
-        {
-            SetAIStatus("Idle", "Waiting");
-            waitTimer -= 0.1f;
-            if (waitTimer <= 0)
+            foreach (var trigger in behaviorProfile.reactiveTriggers)
             {
-                isWaitingAtPatrolPoint = false;
-                AdvancePatrolIndex();
-                navMeshAgent.SetDestination(collectedPatrolPoints[currentPatrolIndex].transform.position);
+                if (trigger.triggerType == usedAbility.abilityType)
+                {
+                    if (UnityEngine.Random.value <= trigger.chanceToReact)
+                    {
+                        AbilityHolder.UseAbility(trigger.reactionAbility, player.gameObject);
+                        break;
+                    }
+                }
             }
         }
-        else if (navMeshAgent.isOnNavMesh && !navMeshAgent.pathPending && navMeshAgent.remainingDistance < 0.5f)
-        {
-            PatrolPoint currentPoint = collectedPatrolPoints[currentPatrolIndex];
-            if (!string.IsNullOrEmpty(currentPoint.animationTriggerName) && animator != null) animator.SetTrigger(currentPoint.animationTriggerName);
-            if (currentPoint.onArrive != null) currentPoint.onArrive.Invoke();
-            if (!string.IsNullOrEmpty(currentPoint.sendMessageToNPC)) SendMessage(currentPoint.sendMessageToNPC, SendMessageOptions.DontRequireReceiver);
-
-            float waitTime = UnityEngine.Random.Range(currentPoint.minWaitTime, currentPoint.maxWaitTime);
-            if (waitTime > 0)
-            {
-                isWaitingAtPatrolPoint = true;
-                waitTimer = waitTime;
-            }
-            else
-            {
-                AdvancePatrolIndex();
-                navMeshAgent.SetDestination(collectedPatrolPoints[currentPatrolIndex].transform.position);
-            }
-        }
-        else
-        {
-            SetAIStatus("Idle", "Patrolling");
-        }
     }
 
-    private void AdvancePatrolIndex()
+    private void HandleCastStarted(string abilityName, float castDuration)
     {
-        PatrolPoint lastPoint = collectedPatrolPoints[currentPatrolIndex];
-        if (lastPoint.nextPointOverride != null)
-        {
-            int nextIndex = Array.IndexOf(collectedPatrolPoints, lastPoint.nextPointOverride);
-            currentPatrolIndex = (nextIndex >= 0) ? nextIndex : 0;
-        }
-        else if (lastPoint.jumpToRandomPoint)
-        {
-            currentPatrolIndex = UnityEngine.Random.Range(0, collectedPatrolPoints.Length);
-        }
-        else
-        {
-            currentPatrolIndex = (currentPatrolIndex + 1) % collectedPatrolPoints.Length;
-        }
+        if (enemyHealthUI != null) enemyHealthUI.StartCast(abilityName, castDuration);
+        SetAIStatus("Combat", "Casting");
+        if (NavAgent.isOnNavMesh) NavAgent.ResetPath();
     }
 
-    private void UpdateReturningState()
-    {
-        navMeshAgent.speed = originalSpeed;
-        SetAIStatus("Returning", "Leashing");
-        currentTarget = targeting.FindBestTarget(null);
-        if (currentTarget != null)
-        {
-            currentState = AIState.Combat;
-            combatStartPosition = transform.position;
-            return;
-        }
-        if (navMeshAgent.isOnNavMesh && !navMeshAgent.pathPending && navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance)
-        {
-            navMeshAgent.ResetPath();
-            currentState = AIState.Idle;
-        }
-    }
-
-    private void UpdateRetreatingState()
-    {
-        retreatTimer -= 0.1f;
-        if (retreatTimer > 0 && currentTarget != null)
-        {
-            SetAIStatus("Combat", "Retreating");
-            navMeshAgent.speed = retreatAndKiteSpeed;
-            RetreatFromTarget();
-        }
-        else
-        {
-            navMeshAgent.speed = originalSpeed;
-            currentState = AIState.Combat;
-        }
-    }
-
-    private void StopMovement()
-    {
-        if (navMeshAgent.isOnNavMesh)
-        {
-            navMeshAgent.velocity = Vector3.zero;
-            if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
-        }
-    }
-
-    private void ResetCombatState() { hasUsedInitialAbilities = false; if (assignedSurroundPoint != null) { SurroundPointManager.instance.ReleasePoint(this); assignedSurroundPoint = null; } if (abilityHolder.ActiveBeam != null) abilityHolder.ActiveBeam.Interrupt(); currentTarget = null; }
-    private void ExecuteRangedMovement() { float distanceToTarget = Vector3.Distance(transform.position, currentTarget.position); if (distanceToTarget < minimumRangedAttackRange) { navMeshAgent.speed = retreatAndKiteSpeed; RetreatFromTarget(); } else { navMeshAgent.speed = originalSpeed; if (distanceToTarget > preferredCombatRange) { Vector3 destination = currentTarget.position - (currentTarget.position - transform.position).normalized * preferredCombatRange; navMeshAgent.SetDestination(destination); SetAIStatus("Combat", "Advancing"); } else { navMeshAgent.ResetPath(); SetAIStatus("Combat", "In Range"); } } }
-
-    private void RetreatFromTarget()
-    {
-        if (currentTarget == null) return;
-        Vector3 directionAwayFromTarget = (transform.position - currentTarget.position).normalized;
-        float bestPathLength = 0;
-        Vector3 bestRetreatPoint = Vector3.zero;
-        bool foundRetreatPoint = false;
-        int numSamples = 8;
-        float retreatArc = 120f;
-        for (int i = 0; i < numSamples; i++) { float angle = (i / (float)(numSamples - 1) - 0.5f) * retreatArc; Vector3 sampleDirection = Quaternion.Euler(0, angle, 0) * directionAwayFromTarget; Vector3 potentialDestination = transform.position + sampleDirection * kiteDistance; if (NavMesh.SamplePosition(potentialDestination, out NavMeshHit hit, 2.0f, NavMesh.AllAreas)) { NavMeshPath path = new NavMeshPath(); if (navMeshAgent.CalculatePath(hit.position, path) && path.status == NavMeshPathStatus.PathComplete) { float pathLength = 0f; for (int j = 1; j < path.corners.Length; j++) { pathLength += Vector3.Distance(path.corners[j - 1], path.corners[j]); } if (pathLength > bestPathLength) { bestPathLength = pathLength; bestRetreatPoint = hit.position; foundRetreatPoint = true; } } } }
-        if (foundRetreatPoint) { navMeshAgent.SetDestination(bestRetreatPoint); }
-    }
-
-    private bool HasLineOfSight(Transform target)
-    {
-        if (targeting != null && !targeting.checkLineOfSight) return true;
-        if (target == null) return false;
-        Vector3 origin = transform.position + Vector3.up;
-        Vector3 targetPosition = target.position + Vector3.up;
-        Vector3 direction = targetPosition - origin;
-        float distance = direction.magnitude;
-        if (Physics.Raycast(origin, direction.normalized, out RaycastHit hit, distance, targeting.obstacleLayers))
-        {
-            if (hit.transform == target || hit.transform.IsChildOf(target)) return true;
-            return false;
-        }
-        return true;
-    }
-
-    private void HandleHealthChanged() { if (health.currentHealth <= 0 && !isDead) { OnDeath(); } if (behaviorProfile != null && !isDead) { float currentHealthPercent = (float)health.currentHealth / health.maxHealth; foreach (var trigger in behaviorProfile.healthTriggers) { if (currentHealthPercent <= trigger.healthPercentage && !triggeredHealthPhases.Contains(trigger)) { triggeredHealthPhases.Add(trigger); GameObject targetForAbility = (currentTarget != null) ? currentTarget.gameObject : this.gameObject; abilityHolder.UseAbility(trigger.abilityToUse, targetForAbility); break; } } } }
-    private void HandlePlayerAbilityUsed(PlayerAbilityHolder player, Ability usedAbility) { PlayerMovement playerMovement = player.GetComponentInParent<PlayerMovement>(); if (isDead || abilityHolder.IsCasting || playerMovement == null || playerMovement.TargetObject != this.gameObject) return; if (behaviorProfile != null) { foreach (var trigger in behaviorProfile.reactiveTriggers) { if (trigger.triggerType == usedAbility.abilityType) { if (UnityEngine.Random.value <= trigger.chanceToReact) { abilityHolder.UseAbility(trigger.reactionAbility, player.gameObject); break; } } } } }
-    private void HandleCastStarted(string abilityName, float castDuration) { if (enemyHealthUI != null) enemyHealthUI.StartCast(abilityName, castDuration); SetAIStatus("Combat", "Casting"); if (navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath(); }
-
-    // --- FIX: Trigger Recovery Period ---
     private void HandleCastFinished()
     {
         if (enemyHealthUI != null) enemyHealthUI.StopCast();
-
-        // Prevents the AI from instantly snapping to Run.
         recoveryTimer = Time.time + attackRecoveryDelay;
     }
-    // ------------------------------------
 
-    public void ExecuteLeap(Vector3 destination, Action onLandAction) { movementHandler?.ExecuteLeap(destination, onLandAction); }
-    public void ExecuteCharge(GameObject target, Ability chargeAbility) { if (abilitySelector.abilities.Contains(chargeAbility)) movementHandler?.ExecuteCharge(target, chargeAbility); }
-    public void ExecuteTeleport(Vector3 destination) { if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(destination); else transform.position = destination; }
+    public void ExecuteLeap(Vector3 destination, Action onLandAction) { MovementHandler?.ExecuteLeap(destination, onLandAction); }
+    public void ExecuteCharge(GameObject target, Ability chargeAbility) { if (AbilitySelector.abilities.Contains(chargeAbility)) MovementHandler?.ExecuteCharge(target, chargeAbility); }
+    public void ExecuteTeleport(Vector3 destination) { if (NavAgent.isOnNavMesh) NavAgent.Warp(destination); else transform.position = destination; }
 
-    private void SetAIStatus(string state, string action)
-    {
-        if (lastState == state && lastAction == action) return;
-        lastState = state;
-        lastAction = action;
-        enemyHealthUI?.UpdateStatus(state, action);
-        if (FloatingTextManager.instance != null) FloatingTextManager.instance.ShowAIStatus(action, transform.position + Vector3.up * 3.5f);
-    }
-
-    private void CollectPatrolPoints() { if (patrolPaths == null || patrolPaths.Length == 0) return; List<PatrolPoint> points = new List<PatrolPoint>(); foreach (PatrolPath path in patrolPaths) { if (path == null) continue; Collider pathCollider = path.GetComponent<Collider>(); if (pathCollider == null) continue; Collider[] collidersInVolume = Physics.OverlapBox(path.transform.position, pathCollider.bounds.extents, path.transform.rotation); foreach (Collider col in collidersInVolume) { if (col.TryGetComponent<PatrolPoint>(out PatrolPoint point)) { if (!points.Contains(point)) points.Add(point); } } } collectedPatrolPoints = points.OrderBy(p => p.gameObject.name).ToArray(); }
     void OnDestroy()
     {
-        if (assignedSurroundPoint != null && SurroundPointManager.instance != null)
-        {
-            SurroundPointManager.instance.ReleasePoint(this);
-        }
-        if (health != null)
-        {
-            health.OnHealthChanged -= HandleHealthChanged;
-            health.OnDeath -= OnDeath;
-        }
-        if (abilityHolder != null)
-        {
-            abilityHolder.OnCastStarted -= HandleCastStarted;
-            abilityHolder.OnCastFinished -= HandleCastFinished;
-        }
+        if (AssignedSurroundPoint != null && SurroundPointManager.instance != null) { SurroundPointManager.instance.ReleasePoint(this); }
+        if (Health != null) { Health.OnHealthChanged -= HandleHealthChanged; Health.OnDeath -= OnDeath; }
+        if (AbilityHolder != null) { AbilityHolder.OnCastStarted -= HandleCastStarted; AbilityHolder.OnCastFinished -= HandleCastFinished; }
     }
 }
