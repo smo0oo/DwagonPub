@@ -8,42 +8,62 @@ public class CharacterMovementHandler : MonoBehaviour, IMovementHandler
     [Header("Movement Settings")]
     public float rotationSpeed = 10f;
 
-    // Default to true. Enemies use this. Players will auto-disable it.
     public bool handleStandardMovement = true;
 
     public bool IsSpecialMovementActive { get; private set; } = false;
 
     private NavMeshAgent navAgent;
     private Animator animator;
+
+    // Animation Hashes
     private int speedHash;
+    private int velocityXHash;
+    private int velocityZHash;
+
+    // Parameter Flags
+    private bool hasSpeedParam = false;
+    private bool hasVelocityParams = false;
+
     private CharacterRoot myRoot;
+    private PlayerMovement playerMovement;
+    private PartyMemberAI partyAI;
 
     void Awake()
     {
         navAgent = GetComponent<NavMeshAgent>();
         animator = GetComponentInChildren<Animator>();
         myRoot = GetComponent<CharacterRoot>() ?? GetComponentInParent<CharacterRoot>();
-        speedHash = Animator.StringToHash("Speed");
 
-        // --- FIX: Don't overwrite speed. Use Inspector value. ---
+        playerMovement = GetComponent<PlayerMovement>();
+        partyAI = GetComponent<PartyMemberAI>();
+
+        if (playerMovement != null || partyAI != null)
+        {
+            handleStandardMovement = false;
+        }
+
+        // --- FIX: Check for BOTH types of parameters ---
+        if (animator != null)
+        {
+            speedHash = Animator.StringToHash("Speed");
+            velocityXHash = Animator.StringToHash("VelocityX");
+            velocityZHash = Animator.StringToHash("VelocityZ");
+
+            hasSpeedParam = HasParameter(animator, speedHash);
+            hasVelocityParams = HasParameter(animator, velocityXHash) && HasParameter(animator, velocityZHash);
+        }
+
         if (navAgent != null)
         {
             navAgent.updateRotation = false;
-        }
-
-        // --- FIX: Auto-detect Player to stop conflict ---
-        if (GetComponent<PlayerMovement>() != null)
-        {
-            handleStandardMovement = false;
         }
     }
 
     void Update()
     {
-        // If we are doing a special move (Leap/Charge), we control the character.
-        // If not, and handleStandardMovement is FALSE (Player), we do nothing and let PlayerMovement take over.
         if (IsSpecialMovementActive) return;
         if (!handleStandardMovement) return;
+        if (playerMovement != null && playerMovement.enabled) return;
 
         HandleStandardMovement();
     }
@@ -52,7 +72,7 @@ public class CharacterMovementHandler : MonoBehaviour, IMovementHandler
     {
         if (navAgent == null) return;
 
-        // 1. Rotation
+        // Rotation
         if (navAgent.hasPath && navAgent.velocity.sqrMagnitude > 0.01f)
         {
             Vector3 direction = navAgent.velocity.normalized;
@@ -65,15 +85,41 @@ public class CharacterMovementHandler : MonoBehaviour, IMovementHandler
             }
         }
 
-        // 2. Animation (Only for generic mobs using "Speed")
+        // Animation
         if (animator != null)
         {
-            float speedPercent = navAgent.velocity.magnitude / navAgent.speed;
-            animator.SetFloat(speedHash, speedPercent, 0.1f, Time.deltaTime);
+            float maxSpeed = navAgent.speed > 0 ? navAgent.speed : 3.5f;
+            Vector3 worldVelocity = navAgent.velocity;
+
+            // 2D Blend Tree (Prioritize if available)
+            if (hasVelocityParams)
+            {
+                Vector3 localVelocity = transform.InverseTransformDirection(worldVelocity);
+                float vX = localVelocity.x / maxSpeed;
+                float vZ = localVelocity.z / maxSpeed;
+
+                animator.SetFloat(velocityXHash, vX, 0.1f, Time.deltaTime);
+                animator.SetFloat(velocityZHash, vZ, 0.1f, Time.deltaTime);
+            }
+            // 1D Blend Tree (Fallback)
+            else if (hasSpeedParam)
+            {
+                float speedPercent = worldVelocity.magnitude / maxSpeed;
+                animator.SetFloat(speedHash, speedPercent, 0.1f, Time.deltaTime);
+            }
         }
     }
 
-    // --- Interface Implementation: Teleport ---
+    private bool HasParameter(Animator anim, int paramHash)
+    {
+        foreach (AnimatorControllerParameter param in anim.parameters)
+        {
+            if (param.nameHash == paramHash) return true;
+        }
+        return false;
+    }
+
+    // --- Interface Implementations ---
     public void ExecuteTeleport(Vector3 destination)
     {
         if (IsSpecialMovementActive)

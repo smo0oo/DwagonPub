@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.VFX; // Required for VisualEffectAsset
 using System;
 
 public class Health : MonoBehaviour
@@ -24,13 +25,22 @@ public class Health : MonoBehaviour
     public bool isInvulnerable = false;
     public bool debugGodMode = false;
 
+    // --- AAA VISUAL FX SYSTEM ---
+    [Header("Visual Effects (Surface System)")]
+    [Tooltip("Defines how this object reacts to different damage types (Flesh, Metal, Bone, etc.). Assign a SurfaceDefinition asset here.")]
+    public SurfaceDefinition surfaceDefinition;
+
+    [Tooltip("Offset from the character's pivot for hit effects. Set Y to ~1.5 to hit the chest.")]
+    public Vector3 hitVFXOffset = new Vector3(0, 1.5f, 0);
+    // ----------------------------
+
     // --- State ---
     public bool isDowned { get; private set; } = false;
 
     [Header("AI Settings")]
     [Tooltip("If this character is an NPC, it will call for help if its health drops below this percentage (0-1).")]
     public float callForHelpThreshold = 0.4f;
-    private int helpThresholdValue; // Optimization: Calculated once
+    private int helpThresholdValue;
 
     [HideInInspector] public float damageReductionPercent = 0f;
     [HideInInspector] public Health forwardDamageTo = null;
@@ -44,16 +54,15 @@ public class Health : MonoBehaviour
 
     // --- Optimization Caches ---
     private int originalLayer;
-    private static int ignoreRaycastLayer = -1; // Static so we only look it up once per game
+    private static int ignoreRaycastLayer = -1;
 
-    // Animator Hashes (Faster than string lookups)
+    // Animator Hashes
     private static readonly int IsDownedHash = Animator.StringToHash("IsDowned");
     private static readonly int DeathHash = Animator.StringToHash("Death");
     private static readonly int IdleHash = Animator.StringToHash("Idle");
 
     void Awake()
     {
-        // 1. One-time Layer Lookup
         if (ignoreRaycastLayer == -1) ignoreRaycastLayer = LayerMask.NameToLayer("Ignore Raycast");
 
         lootGenerator = GetComponent<LootGenerator>();
@@ -68,7 +77,6 @@ public class Health : MonoBehaviour
         currentHealth = maxHealth;
         originalLayer = gameObject.layer;
 
-        // 2. Pre-calculate Help Threshold
         UpdateHelpThreshold();
     }
 
@@ -94,39 +102,90 @@ public class Health : MonoBehaviour
 
     public void TakeDamage(int amount, DamageEffect.DamageType damageType, bool isCrit, GameObject caster)
     {
+        // 1. Forwarding Logic (e.g. for multi-part bosses)
         if (forwardDamageTo != null)
         {
             forwardDamageTo.TakeDamage(amount, damageType, isCrit, caster);
             return;
         }
 
+        // 2. Invulnerability Checks
         if (isInvulnerable || debugGodMode || isDead || isDowned) return;
 
         int healthBeforeDamage = currentHealth;
 
-        // Mitigation Logic
+        // 3. Mitigation Logic (Dodge / Resist)
         float finalDamage = amount;
         if (playerStats != null)
         {
-            // Dodge Calculation
-            if (UnityEngine.Random.value < (playerStats.secondaryStats.dodgeChance / 100f)) return;
+            // Dodge Check
+            if (UnityEngine.Random.value < (playerStats.secondaryStats.dodgeChance / 100f))
+            {
+                if (FloatingTextManager.instance != null)
+                    FloatingTextManager.instance.ShowText("Dodge!", transform.position + Vector3.up * 2f, Color.yellow);
+                return;
+            }
 
-            // Resistance Calculation
+            // Resistance Check
             if (damageType == DamageEffect.DamageType.Magical)
                 finalDamage *= (1 - playerStats.secondaryStats.magicResistance / 100f);
             else
                 finalDamage *= (1 - playerStats.secondaryStats.physicalResistance / 100f);
         }
 
+        // Global Reduction (e.g. Defensive Stance)
         finalDamage *= (1f - damageReductionPercent);
         int damageToDeal = Mathf.Max(0, Mathf.FloorToInt(finalDamage));
 
         currentHealth -= damageToDeal;
 
-        // Global Event
+        // --- 4. AAA VISUAL FX IMPLEMENTATION ---
+        if (surfaceDefinition != null && damageToDeal > 0)
+        {
+            // A. Get Data (Prefab, Graph, Sound) from Surface Profile
+            surfaceDefinition.GetReaction(damageType, out GameObject prefab, out VisualEffectAsset graph, out AudioClip sound);
+
+            // B. Calculate Rotation (Effect faces the attacker)
+            Quaternion rotation = Quaternion.identity;
+            if (caster != null)
+            {
+                Vector3 dir = (caster.transform.position - transform.position).normalized;
+                if (dir != Vector3.zero) rotation = Quaternion.LookRotation(dir);
+            }
+
+            // C. Spawn Logic
+            GameObject vfxInstance = null;
+
+            // Priority A: Use Raw Graph (Optimized with Container)
+            if (graph != null && surfaceDefinition.vfxContainerPrefab != null)
+            {
+                // Spawn the generic container
+                vfxInstance = ObjectPooler.instance.Get(surfaceDefinition.vfxContainerPrefab, transform.position + hitVFXOffset, rotation);
+
+                // Inject the specific asset (e.g. Blood Asset) into the container
+                if (vfxInstance != null && vfxInstance.TryGetComponent<VisualEffect>(out var vfxComp))
+                {
+                    vfxComp.visualEffectAsset = graph;
+                    vfxComp.Play();
+                }
+            }
+            // Priority B: Use Standard Prefab (Legacy)
+            else if (prefab != null)
+            {
+                vfxInstance = ObjectPooler.instance.Get(prefab, transform.position + hitVFXOffset, rotation);
+            }
+
+            // D. Play Sound
+            if (sound != null)
+            {
+                AudioSource.PlayClipAtPoint(sound, transform.position);
+            }
+        }
+        // ------------------------------------
+
+        // 5. Events & UI
         OnDamageTaken?.Invoke(new DamageInfo { Caster = caster, Target = this.gameObject, Amount = damageToDeal, IsCrit = isCrit, DamageType = damageType });
 
-        // Optimization: Integer comparison is faster than float division
         if (healthBeforeDamage > helpThresholdValue && currentHealth <= helpThresholdValue)
         {
             PartyMemberAI ai = GetComponentInParent<PartyMemberAI>();
@@ -141,6 +200,7 @@ public class Health : MonoBehaviour
         if (currentHealth < 0) currentHealth = 0;
         OnHealthChanged?.Invoke();
 
+        // 6. Death Logic
         if (currentHealth <= 0)
         {
             if (destroyOnDeath) Die();
@@ -275,32 +335,25 @@ public class Health : MonoBehaviour
         if (isDead) return;
         isDead = true;
 
-        // 1. Notify Systems (EnemyAI, Quests, etc)
         OnDeath?.Invoke();
 
-        // 2. Play Animation
         if (root != null && root.Animator != null)
         {
             root.Animator.SetTrigger(DeathHash);
         }
         else
         {
-            // Fallback for simple enemies
             Animator anim = GetComponentInChildren<Animator>();
             if (anim != null) anim.SetTrigger(DeathHash);
         }
 
-        // 3. Drop Loot
         if (lootGenerator != null) lootGenerator.DropLoot();
 
-        // 4. Disable Physical Presence
         Collider col = GetComponent<Collider>();
         if (col != null) col.enabled = false;
 
         if (healthUI != null) healthUI.gameObject.SetActive(false);
 
-        // 5. Cleanup
-        // Note: EnemyAI has its own cleanup, but this ensures non-AI objects still disappear.
         Destroy(gameObject, 3f);
     }
 }

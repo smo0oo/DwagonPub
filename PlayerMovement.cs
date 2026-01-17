@@ -15,26 +15,18 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     public float wasdMoveSpeed;
 
     [Header("PoE2 Rotation Style")]
-    [Tooltip("The body will not turn if the mouse is within this angle (e.g., 15 degrees left/right).")]
     public float bodyTurnThreshold = 15f;
-    [Tooltip("How fast the body catches up to the mouse. Lower = Heavy/Laggy. Higher = Snappy.")]
     public float bodyTurnSpeed = 5f;
 
     [Space(10)]
-    [Tooltip("How much the head looks at the mouse (0 to 1).")]
     [Range(0, 1)] public float headLookWeight = 1f;
-    [Tooltip("How fast the head physically turns to face the target. Lower = Natural/Latent. Higher = Robotic.")]
-    public float headLookSpeed = 8f; // <--- RE-ADDED THIS for smoothing
-    [Tooltip("How fast the head weight blends in/out (engaging/disengaging).")]
+    public float headLookSpeed = 8f;
     public float headWeightBlendSpeed = 5f;
-    [Tooltip("The height offset for the eyes. Forces the look target to this height to prevent looking down at feet.")]
     public float headLookHeight = 1.6f;
 
-    // --- PUBLIC PROPERTIES FOR IK RELAY ---
-    public Vector3 CurrentHeadLookPosition { get; private set; } // The SMOOTHED position
-    public Vector3 CurrentLookTarget { get; private set; } // The RAW target (cursor pos)
+    public Vector3 CurrentHeadLookPosition { get; private set; }
+    public Vector3 CurrentLookTarget { get; private set; }
     public float CurrentHeadLookWeight { get; private set; }
-    // --------------------------------------
 
     [Header("Dodge Roll")]
     public float dodgeDistance = 5f;
@@ -84,15 +76,12 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     private Collider mainCollider;
     private Health myHealth;
 
-    // Animation Hashes
     private int velocityZHash;
     private int velocityXHash;
     private int weaponTypeHash;
     private int dodgeHash;
 
-    // --- OPTIMIZATION VARIABLES ---
     private int frameSkipCounter = 0;
-    // ------------------------------
 
     void Awake()
     {
@@ -131,10 +120,9 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
     void Start()
     {
+        // Capture the initial speed as the "True" speed
         if (navMeshAgent != null) wasdMoveSpeed = navMeshAgent.speed;
         UpdateWeaponTypeParameter();
-
-        // Initialize look position to forward so head doesn't snap on start
         CurrentHeadLookPosition = transform.position + transform.forward * 5f;
     }
 
@@ -193,11 +181,9 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         HandleRotation();
         UpdateAnimator();
-
         UpdateHeadLookLogic();
     }
 
-    // --- UPDATED: Head Look Logic with Latency ---
     private void UpdateHeadLookLogic()
     {
         if (mainCamera == null) return;
@@ -205,7 +191,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
         int groundLayerMask = LayerMask.GetMask("Terrain", "Water");
 
-        // 1. Calculate the Raw Target (Where mouse/enemy actually is)
         Vector3 targetLookPos = transform.position + transform.forward * 5f;
 
         if (TargetObject != null)
@@ -217,21 +202,13 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             targetLookPos = hit.point;
         }
 
-        // Flatten Y-Axis to prevent looking down/up
         targetLookPos.y = transform.position.y + headLookHeight;
-
-        // Store Raw Target (useful for debug or shooting logic)
         CurrentLookTarget = targetLookPos;
-
-        // 2. Calculate Smoothed Position (This creates the latency/natural feel)
-        // Lerp from current smoothed pos -> raw target
         CurrentHeadLookPosition = Vector3.Lerp(CurrentHeadLookPosition, CurrentLookTarget, Time.deltaTime * headLookSpeed);
 
-        // 3. Update Weight
         float targetWeight = (isDodging || (myHealth != null && myHealth.isDowned)) ? 0f : headLookWeight;
         CurrentHeadLookWeight = Mathf.Lerp(CurrentHeadLookWeight, targetWeight, Time.deltaTime * headWeightBlendSpeed);
     }
-    // -------------------------------------------------------------
 
     private void HandleInteractionClick()
     {
@@ -328,8 +305,38 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     }
 
     private void ToggleMovementMode() { if (PartyManager.instance != null) PartyManager.instance.ToggleMovementMode(); }
-    public void OnMovementModeChanged(MovementMode newMode) { if (newMode == MovementMode.WASD) { if (navMeshAgent.hasPath) navMeshAgent.ResetPath(); navMeshAgent.updatePosition = false; } else { navMeshAgent.Warp(transform.position); navMeshAgent.updatePosition = true; } }
-    void OnEnable() { if (navMeshAgent != null && navMeshAgent.isOnNavMesh) { navMeshAgent.isStopped = false; navMeshAgent.updateRotation = false; } if (playerEquipment != null) playerEquipment.OnEquipmentChanged += HandleEquipmentChanged; if (PartyManager.instance != null) OnMovementModeChanged(PartyManager.instance.currentMovementMode); }
+
+    public void OnMovementModeChanged(MovementMode newMode)
+    {
+        if (newMode == MovementMode.WASD)
+        {
+            if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
+            navMeshAgent.updatePosition = false;
+        }
+        else
+        {
+            navMeshAgent.Warp(transform.position);
+            navMeshAgent.updatePosition = true;
+        }
+    }
+
+    void OnEnable()
+    {
+        if (navMeshAgent != null && navMeshAgent.isOnNavMesh)
+        {
+            navMeshAgent.isStopped = false;
+            navMeshAgent.updateRotation = false;
+
+            // --- FIX: Force Speed Reset when taking control ---
+            // If AI set speed to 50% for wandering, we must restore it here.
+            navMeshAgent.speed = wasdMoveSpeed;
+            // --------------------------------------------------
+        }
+
+        if (playerEquipment != null) playerEquipment.OnEquipmentChanged += HandleEquipmentChanged;
+        if (PartyManager.instance != null) OnMovementModeChanged(PartyManager.instance.currentMovementMode);
+    }
+
     void OnDisable() { if (navMeshAgent != null && navMeshAgent.isOnNavMesh) { navMeshAgent.isStopped = true; navMeshAgent.ResetPath(); navMeshAgent.updatePosition = true; } StopAllCoroutines(); IsMovingToAttack = false; if (playerEquipment != null) playerEquipment.OnEquipmentChanged -= HandleEquipmentChanged; }
     private void UpdateAnimator() { if (animator == null) return; Vector3 worldVelocity = (currentMode == MovementMode.WASD && wasdVelocity.sqrMagnitude > 0.01f) ? wasdVelocity : navMeshAgent.velocity; Vector3 localVelocity = transform.InverseTransformDirection(worldVelocity); float speed = navMeshAgent.speed; float vZ = localVelocity.z / speed; float vX = localVelocity.x / speed; if (Mathf.Abs(vZ) < 0.05f) vZ = 0f; if (Mathf.Abs(vX) < 0.05f) vX = 0f; animator.SetFloat(velocityZHash, vZ, animationDampTime, Time.deltaTime); animator.SetFloat(velocityXHash, vX, animationDampTime, Time.deltaTime); }
 
@@ -459,14 +466,8 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         else if (targetObject.TryGetComponent<NPCInteraction>(out var npc))
         {
             Vector3 targetSpot = npc.GetInteractionPosition();
-            if (NavMesh.SamplePosition(targetSpot, out NavMeshHit hit, 2.0f, NavMesh.AllAreas))
-            {
-                destination = hit.position;
-            }
-            else
-            {
-                destination = targetSpot;
-            }
+            if (NavMesh.SamplePosition(targetSpot, out NavMeshHit hit, 2.0f, NavMesh.AllAreas)) destination = hit.position;
+            else destination = targetSpot;
             currentInteractionRange = 0.2f;
         }
 

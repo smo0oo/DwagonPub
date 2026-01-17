@@ -27,6 +27,13 @@ public class FloatingTextManager : MonoBehaviour
         else instance = this;
     }
 
+    // --- NEW: Generic Text Method ---
+    public void ShowText(string text, Vector3 position, Color color)
+    {
+        SpawnText(text, position, false, color);
+    }
+    // --------------------------------
+
     public void ShowAIStatus(string text, Vector3 position)
     {
         SpawnText(text, position, false, aiStatusColor);

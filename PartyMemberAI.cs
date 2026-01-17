@@ -20,16 +20,13 @@ public class PartyMemberAI : MonoBehaviour
     public float rotationSpeed = 12f;
 
     [Header("Idle Behavior")]
-    [Tooltip("If true, character will wander slightly when holding position.")]
     public bool enableIdleWander = true;
-    [Tooltip("How far from their anchor point they can wander.")]
     public float wanderRadius = 3.0f;
     public float minWanderWait = 2.0f;
     public float maxWanderWait = 6.0f;
     private float idleTimer = 0f;
 
     [Header("Self Preservation")]
-    [Tooltip("If health drops below this % (0-1), stop fighting and run to leader.")]
     [Range(0f, 1f)] public float retreatThreshold = 0.3f;
     private bool isRetreating = false;
 
@@ -60,10 +57,8 @@ public class PartyMemberAI : MonoBehaviour
     private float originalNavMeshSpeed;
     private Vector3 commandMovePosition;
 
-    // --- OPTIMIZATION VARIABLES ---
     private float lastPathUpdateTime = 0f;
-    private const float PATH_UPDATE_INTERVAL = 0.25f; // Update path 4 times per second max
-    // ------------------------------
+    private const float PATH_UPDATE_INTERVAL = 0.25f;
 
     public string CurrentStatus { get; private set; }
 
@@ -85,7 +80,7 @@ public class PartyMemberAI : MonoBehaviour
         if (navMeshAgent != null)
         {
             originalNavMeshSpeed = navMeshAgent.speed;
-            navMeshAgent.updateRotation = false; // Manual rotation handling
+            navMeshAgent.updateRotation = false;
         }
     }
 
@@ -96,7 +91,6 @@ public class PartyMemberAI : MonoBehaviour
 
     private IEnumerator InitializeAgent()
     {
-        // Safety Check for NavMesh Binding
         if (navMeshAgent != null && !navMeshAgent.isOnNavMesh)
         {
             if (NavMesh.SamplePosition(transform.position, out NavMeshHit hit, 3.0f, NavMesh.AllAreas))
@@ -134,11 +128,18 @@ public class PartyMemberAI : MonoBehaviour
 
         UpdateAnimator();
 
+        // --- FIX: Logic to yield control to player ---
         if (PartyManager.instance != null && PartyManager.instance.ActivePlayer == this.gameObject)
         {
-            if (navMeshAgent != null && navMeshAgent.hasPath) navMeshAgent.ResetPath();
+            // Reset state if we accidentally left it dirty (e.g. slowed down from wandering)
+            if (navMeshAgent != null)
+            {
+                if (navMeshAgent.speed != originalNavMeshSpeed) navMeshAgent.speed = originalNavMeshSpeed;
+                if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
+            }
             return;
         }
+        // ---------------------------------------------
 
         if (navMeshAgent == null || !navMeshAgent.isOnNavMesh || health == null || health.currentHealth <= 0) return;
 
@@ -251,7 +252,6 @@ public class PartyMemberAI : MonoBehaviour
         }
     }
 
-    // --- UPDATED HELPER: Throttled Movement Logic ---
     private void MoveTo(Vector3 destination)
     {
         if (abilityHolder != null && (abilityHolder.IsCasting || abilityHolder.ActiveBeam != null))
@@ -268,16 +268,12 @@ public class PartyMemberAI : MonoBehaviour
             }
         }
     }
-    // ------------------------------------------------
 
     private void HandleFollowState()
     {
         Vector3 formationPos = PartyAIManager.instance.GetFormationPositionFor(this);
         float distToFormation = Vector3.Distance(transform.position, formationPos);
 
-        // --- FIX: Relax the leash calculation ---
-        // If wandering is enabled, we only force them back if they wander BEYOND the allowed radius.
-        // Otherwise, standard stopping distance logic applies.
         float leashThreshold = (enableIdleWander && !isRetreating) ? wanderRadius + 1.0f : followStoppingDistance + 0.5f;
 
         if (distToFormation > leashThreshold || isRetreating)
@@ -293,7 +289,6 @@ public class PartyMemberAI : MonoBehaviour
         }
         else if (enableIdleWander && !isRetreating)
         {
-            // Wander around formation spot
             HandleIdleWander(formationPos);
         }
         else
@@ -307,14 +302,12 @@ public class PartyMemberAI : MonoBehaviour
     private void HandleMoveToAndDefendState()
     {
         float distToCommand = Vector3.Distance(transform.position, commandMovePosition);
-
-        // --- FIX: Relax the leash for command position as well ---
-        float commandLeash = enableIdleWander ? wanderRadius + 1.0f : 1.0f; // Default 1.0f tolerance if wandering off
+        float commandLeash = enableIdleWander ? wanderRadius + 1.0f : 1.0f;
 
         if (distToCommand > commandLeash)
         {
             navMeshAgent.speed = originalNavMeshSpeed;
-            navMeshAgent.stoppingDistance = 1.0f; // Ensure they actually stop near the point
+            navMeshAgent.stoppingDistance = 1.0f;
             MoveTo(commandMovePosition);
             UpdateStatus("Moving to Position");
             HandleSmoothRotation();
@@ -335,7 +328,6 @@ public class PartyMemberAI : MonoBehaviour
 
     private void HandleIdleWander(Vector3 anchorPosition)
     {
-        // If moving, just let them finish
         if (navMeshAgent.hasPath && navMeshAgent.remainingDistance > 0.5f)
         {
             HandleSmoothRotation();
@@ -354,9 +346,6 @@ public class PartyMemberAI : MonoBehaviour
             if (NavMesh.SamplePosition(potentialTarget, out NavMeshHit hit, 2.0f, NavMesh.AllAreas))
             {
                 navMeshAgent.speed = originalNavMeshSpeed * 0.5f; // Walk slow
-
-                // --- CRITICAL FIX: Reduce stopping distance ---
-                // Otherwise they think they are "close enough" (because of the 1.5f buffer) and won't move.
                 navMeshAgent.stoppingDistance = 0.1f;
 
                 MoveTo(hit.position);
@@ -387,7 +376,7 @@ public class PartyMemberAI : MonoBehaviour
 
             if (distanceToTarget > abilityToUse.range)
             {
-                navMeshAgent.stoppingDistance = abilityToUse.range * 0.8f; // Ensure we stop in range
+                navMeshAgent.stoppingDistance = abilityToUse.range * 0.8f;
                 MoveTo(currentTarget.transform.position);
                 UpdateStatus("Closing In");
             }
@@ -445,17 +434,6 @@ public class PartyMemberAI : MonoBehaviour
         {
             Quaternion lookRotation = Quaternion.LookRotation(navMeshAgent.velocity.normalized);
             transform.rotation = Quaternion.Slerp(transform.rotation, lookRotation, Time.deltaTime * rotationSpeed);
-        }
-        else if (!hasExplicitCommand && PartyAIManager.instance.ActivePlayer != null)
-        {
-            // Optional: Face leader if idle
-            /*
-            Vector3 dirToPlayer = (PartyAIManager.instance.ActivePlayer.transform.position - transform.position).normalized;
-            if (dirToPlayer != Vector3.zero) {
-                Quaternion targetRotation = Quaternion.LookRotation(dirToPlayer);
-                transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * 2f);
-            }
-            */
         }
     }
 
