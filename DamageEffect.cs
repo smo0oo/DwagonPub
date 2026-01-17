@@ -4,16 +4,14 @@ using System.Collections.Generic;
 [System.Serializable]
 public class DamageEffect : IAbilityEffect
 {
-    [Tooltip("The base damage of the effect.")]
+    [Tooltip("The base damage of the Ability itself (e.g. 16 for your Heavy Hit).")]
     public int baseDamage = 5;
 
     public enum DamageType { Physical, Magical }
     public DamageType damageType = DamageType.Physical;
 
-    // --- NEW SETTING ---
-    [Tooltip("If true, adds the caster's global damage multiplier (e.g. Strength) to this attack. Uncheck this for small attacks like Punch.")]
+    [Tooltip("If true, adds the caster's global damage multiplier (e.g. Strength) to this attack.")]
     public bool useGlobalStatBonus = true;
-    // -------------------
 
     [Header("Stat Scaling")]
     [Tooltip("How the damage scales with the caster's primary stats.")]
@@ -32,7 +30,7 @@ public class DamageEffect : IAbilityEffect
         Health targetHealth = target.GetComponentInChildren<Health>();
         if (targetHealth == null) return;
 
-        float finalDamage = baseDamage;
+        float finalDamage = baseDamage; // Start with Ability Base Damage
         bool isCrit = false;
 
         CharacterRoot casterRoot = caster.GetComponentInParent<CharacterRoot>();
@@ -42,8 +40,10 @@ public class DamageEffect : IAbilityEffect
         {
             if (damageType == DamageType.Physical)
             {
-                float weaponDamage = baseDamage;
+                // 1. Calculate Weapon Damage
+                float weaponDamage = 0f; // Default to 0 if unarmed/creature
                 PlayerEquipment equipment = caster.GetComponentInParent<PlayerEquipment>();
+
                 if (equipment != null)
                 {
                     equipment.equippedItems.TryGetValue(EquipmentType.RightHand, out ItemStack rightHandItem);
@@ -59,15 +59,17 @@ public class DamageEffect : IAbilityEffect
                         weaponDamage = Random.Range(weaponStats.DamageLow, weaponStats.DamageHigh + 1);
                 }
 
-                finalDamage = weaponDamage;
+                // --- FIX: ADD Weapon Damage, don't overwrite Ability Base ---
+                finalDamage += weaponDamage;
+                // -----------------------------------------------------------
 
-                // --- FIX: Only add global stats if the box is checked ---
+                // 2. Global Bonuses
                 if (useGlobalStatBonus)
                 {
                     finalDamage += casterStats.secondaryStats.damageMultiplier;
                 }
-                // --------------------------------------------------------
 
+                // 3. Stat Scaling (Strength/Agility etc)
                 foreach (var scaling in scalingFactors)
                 {
                     switch (scaling.stat)
@@ -79,15 +81,16 @@ public class DamageEffect : IAbilityEffect
                     }
                 }
 
+                // 4. Critical Hit
                 if (Random.value < (casterStats.secondaryStats.critChance / 100f))
                 {
-                    finalDamage *= 2;
+                    finalDamage *= 2; // Standard Crit Multiplier
                     isCrit = true;
                 }
             }
             else // Magical Damage
             {
-                // Magic usually uses percentage multipliers, so we keep this logic standard
+                // Magic usually scales by %, but we still add base stats
                 finalDamage *= (1 + casterStats.secondaryStats.magicAttackDamage / 100f);
 
                 foreach (var scaling in scalingFactors)
@@ -100,6 +103,7 @@ public class DamageEffect : IAbilityEffect
                         case StatType.Faith: finalDamage += casterStats.finalFaith * scaling.ratio; break;
                     }
                 }
+
                 if (Random.value < (casterStats.secondaryStats.spellCritChance / 100f))
                 {
                     finalDamage *= 2;
@@ -111,28 +115,36 @@ public class DamageEffect : IAbilityEffect
         int finalDamageInt = Mathf.FloorToInt(finalDamage);
         targetHealth.TakeDamage(finalDamageInt, damageType, isCrit, caster);
 
+        // --- Splash Logic ---
         if (isSplash)
         {
-            int hitCount = Physics.OverlapSphereNonAlloc(target.transform.position, splashRadius, _splashBuffer);
-            int splashDamage = Mathf.FloorToInt(finalDamageInt * splashDamageMultiplier);
+            HandleSplash(target, caster, finalDamageInt, damageType, casterRoot);
+        }
+    }
 
-            for (int i = 0; i < hitCount; i++)
+    private void HandleSplash(GameObject mainTarget, GameObject caster, int mainDamage, DamageType type, CharacterRoot casterRoot)
+    {
+        int hitCount = Physics.OverlapSphereNonAlloc(mainTarget.transform.position, splashRadius, _splashBuffer);
+        int splashDamage = Mathf.FloorToInt(mainDamage * splashDamageMultiplier);
+
+        for (int i = 0; i < hitCount; i++)
+        {
+            var hit = _splashBuffer[i];
+            // Don't hit self or main target again
+            if (hit.transform.root == mainTarget.transform.root || hit.transform.root == caster.transform.root) continue;
+
+            CharacterRoot splashTargetRoot = hit.GetComponentInParent<CharacterRoot>();
+            if (splashTargetRoot == null) continue;
+
+            // Faction Check
+            bool isHostile = (casterRoot == null) || (splashTargetRoot.gameObject.layer != casterRoot.gameObject.layer);
+
+            if (isHostile)
             {
-                var hit = _splashBuffer[i];
-                if (hit.transform.root == target.transform.root || hit.transform.root == caster.transform.root) continue;
-
-                CharacterRoot splashTargetRoot = hit.GetComponentInParent<CharacterRoot>();
-                if (splashTargetRoot == null) continue;
-
-                bool isHostile = (casterRoot == null) || (splashTargetRoot.gameObject.layer != casterRoot.gameObject.layer);
-
-                if (isHostile)
+                Health splashTargetHealth = splashTargetRoot.GetComponentInChildren<Health>();
+                if (splashTargetHealth != null)
                 {
-                    Health splashTargetHealth = splashTargetRoot.GetComponentInChildren<Health>();
-                    if (splashTargetHealth != null)
-                    {
-                        splashTargetHealth.TakeDamage(splashDamage, damageType, false, caster);
-                    }
+                    splashTargetHealth.TakeDamage(splashDamage, type, false, caster);
                 }
             }
         }
