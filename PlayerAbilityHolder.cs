@@ -141,7 +141,21 @@ public class PlayerAbilityHolder : MonoBehaviour
         float finalCastTime = ability.castTime;
         if (playerStats != null) finalCastTime /= playerStats.secondaryStats.attackSpeed;
 
-        Vector3 targetPosition = (target != null) ? target.transform.position : transform.position;
+        // --- FIX: Default to Mouse Cursor, not Feet ---
+        Vector3 targetPosition;
+        if (target != null)
+        {
+            targetPosition = target.transform.position;
+        }
+        else if (playerMovement != null)
+        {
+            targetPosition = playerMovement.CurrentLookTarget;
+        }
+        else
+        {
+            targetPosition = transform.position + transform.forward * 5f; // Fallback
+        }
+        // ----------------------------------------------
 
         if (finalCastTime > 0 || ability.telegraphDuration > 0)
         {
@@ -190,7 +204,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             // Wait for Cast Time
             if (castTime > 0) yield return new WaitForSeconds(castTime);
 
-            // Re-aim at mouse cursor just before firing
+            // Re-aim at mouse cursor just before firing (Ensures long casts aim correctly)
             if (target == null && playerMovement != null) position = playerMovement.CurrentLookTarget;
 
             // Execute (don't re-trigger animation, we did windup)
@@ -266,7 +280,6 @@ public class PlayerAbilityHolder : MonoBehaviour
             case AbilityType.DirectionalMelee:
                 if (activeMeleeCoroutine != null) { StopCoroutine(activeMeleeCoroutine); meleeHitbox.gameObject.SetActive(false); }
                 activeMeleeCoroutine = StartCoroutine(PerformMeleeAttackWithTimers(ability));
-                // Melee usually relies on the animation trigger above or specific timing
                 break;
             case AbilityType.GroundAOE:
                 HandleGroundAOE(ability, position);
@@ -385,7 +398,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    // --- FIX: Added default value for bypass to match PlayerMovement calls ---
     public void PayCostAndStartCooldown(Ability ability, bool bypassCooldown = false)
     {
         if (playerStats != null) { playerStats.SpendMana(ability.manaCost); }
@@ -427,7 +439,9 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
         else
         {
+            // Calculate direction to cursor
             Vector3 direction = targetPos - spawnPos;
+            // Flatten Y so projectile flies straight relative to spawn point height
             direction.y = 0;
             if (direction.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(direction);
         }

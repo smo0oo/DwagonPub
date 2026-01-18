@@ -17,7 +17,7 @@ public class SecondaryStats
     public int magicAttackRating;
     public int physicalResistanceRating;
 
-    // --- Final Percentages (calculated from ratings and level) ---
+    // --- Final Percentages / Values ---
     public float blockChance;
     public float parryChance;
     public float damageMultiplier;
@@ -31,9 +31,13 @@ public class SecondaryStats
     public float magicAttackDamage;
     public float physicalResistance;
 
+    // --- NEW: Mana Regen ---
+    public float manaRegen; // Mana restored per second
+    // ----------------------
+
     // --- Tooltip Strings ---
-    public string healthTooltip; // <-- ADD THIS
-    public string manaTooltip;   // <-- ADD THIS
+    public string healthTooltip;
+    public string manaTooltip;
     public string critChanceTooltip;
     public string spellCritChanceTooltip;
     public string attackSpeedTooltip;
@@ -43,4 +47,8 @@ public class SecondaryStats
     public string blockChanceTooltip;
     public string magicResistTooltip;
     public string healingBonusTooltip;
+
+    // --- NEW: Tooltip ---
+    public string manaRegenTooltip;
+    // --------------------
 }

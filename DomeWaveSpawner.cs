@@ -21,20 +21,16 @@ public class DomeWaveSpawner : MonoBehaviour
     public List<Transform> spawnPoints;
 
     [Header("Siege Settings")]
-    [Tooltip("Overrides the enemy's detection range so they can see the dome from spawn.")]
     public float siegeDetectionRadius = 500f;
-    [Tooltip("Overrides the enemy's leash distance so they don't retreat.")]
     public float siegeLeashRadius = 500f;
 
     private int currentWaveIndex = 0;
     private int enemiesAlive = 0;
-
     public bool IsSpawning { get; private set; } = false;
 
     public void StartSpawning()
     {
-        if (waves.Count == 0) return;
-        if (IsSpawning) return;
+        if (waves.Count == 0 || IsSpawning) return;
         IsSpawning = true;
         currentWaveIndex = 0;
         StartCoroutine(WaveRoutine());
@@ -81,9 +77,7 @@ public class DomeWaveSpawner : MonoBehaviour
         Transform spawnPoint = spawnPoints[Random.Range(0, spawnPoints.Count)];
         GameObject enemy = Instantiate(prefab, spawnPoint.position, spawnPoint.rotation);
 
-        // --- Apply Siege Settings ---
-
-        // 1. AI Setup
+        // 1. Configure AI
         EnemyAI ai = enemy.GetComponent<EnemyAI>();
         if (ai != null)
         {
@@ -91,32 +85,36 @@ public class DomeWaveSpawner : MonoBehaviour
             ai.chaseLeashRadius = siegeLeashRadius;
         }
 
-        // 2. Targeting Setup
+        // 2. Configure Targeting (The Critical Fix)
         AITargeting targeting = enemy.GetComponent<AITargeting>();
         if (targeting != null)
         {
             targeting.detectionRadius = siegeDetectionRadius;
-            targeting.checkLineOfSight = false; // X-Ray vision for the dome
+            targeting.checkLineOfSight = false; // X-Ray vision for dome
 
-            // --- CRITICAL FIX: Tell AI to hunt DomeMarkers by Tag ---
+            // Enable Siege Priority Logic
             targeting.prioritizeDomeMarkers = true;
-            // -------------------------------------------------------
+
+            // --- CRITICAL FIX: Patch Layer Mask ---
+            // If the enemy's mask doesn't include "DomeMarker", they can't see it physically.
+            // We force add Layer 16 ("DomeMarker") to their mask.
+            int domeLayer = LayerMask.NameToLayer("DomeMarker");
+            if (domeLayer != -1)
+            {
+                targeting.playerLayer |= (1 << domeLayer);
+            }
+            // --------------------------------------
         }
 
-        // 3. Health Tracking
         EnemyHealthTracker tracker = enemy.AddComponent<EnemyHealthTracker>();
         tracker.spawner = this;
 
         enemiesAlive++;
     }
 
-    public void OnEnemyKilled()
-    {
-        enemiesAlive--;
-    }
+    public void OnEnemyKilled() { enemiesAlive--; }
 }
 
-// Helper component
 public class EnemyHealthTracker : MonoBehaviour
 {
     public DomeWaveSpawner spawner;
