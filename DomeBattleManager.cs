@@ -125,7 +125,6 @@ public class DomeBattleManager : MonoBehaviour
         if (startNightButton != null) startNightButton.onClick.AddListener(OnStartNightClicked);
     }
 
-    // --- OPTIMIZATION: Check for win condition efficiently ---
     void Update()
     {
         if (!IsBattleActive) return;
@@ -144,7 +143,6 @@ public class DomeBattleManager : MonoBehaviour
         if (waveSpawner != null && waveSpawner.IsSpawning) return;
 
         // 2. Efficient check for enemies
-        // We avoid calling this every frame (now only once per sec)
         GameObject[] enemies = GameObject.FindGameObjectsWithTag("Enemy");
 
         bool anyAlive = false;
@@ -163,7 +161,6 @@ public class DomeBattleManager : MonoBehaviour
             OnVictory();
         }
     }
-    // ---------------------------------------------------------
 
     private void OnLootBagClosed()
     {

@@ -6,7 +6,7 @@ using System.Collections.Generic;
 public class Wave
 {
     public string waveName = "Wave 1";
-    public List<GameObject> enemyPrefabs; // List of possible enemies
+    public List<GameObject> enemyPrefabs;
     public int count = 5;
     public float spawnInterval = 1.5f;
 }
@@ -29,17 +29,13 @@ public class DomeWaveSpawner : MonoBehaviour
     private int currentWaveIndex = 0;
     private int enemiesAlive = 0;
 
-    // --- FIX: Changed from private field to Public Property ---
     public bool IsSpawning { get; private set; } = false;
-    // ----------------------------------------------------------
 
     public void StartSpawning()
     {
         if (waves.Count == 0) return;
-
         if (IsSpawning) return;
         IsSpawning = true;
-
         currentWaveIndex = 0;
         StartCoroutine(WaveRoutine());
     }
@@ -48,7 +44,7 @@ public class DomeWaveSpawner : MonoBehaviour
     {
         StopAllCoroutines();
         IsSpawning = false;
-        enemiesAlive = 0; // Reset count just in case
+        enemiesAlive = 0;
     }
 
     private IEnumerator WaveRoutine()
@@ -58,7 +54,6 @@ public class DomeWaveSpawner : MonoBehaviour
             Wave currentWave = waves[currentWaveIndex];
             Debug.Log($"Starting {currentWave.waveName}");
 
-            // 1. Spawn Enemies
             for (int i = 0; i < currentWave.count; i++)
             {
                 if (currentWave.enemyPrefabs.Count > 0)
@@ -68,25 +63,15 @@ public class DomeWaveSpawner : MonoBehaviour
                 yield return new WaitForSeconds(currentWave.spawnInterval);
             }
 
-            // 2. Wait for clear
             yield return new WaitUntil(() => enemiesAlive <= 0);
-
             Debug.Log($"{currentWave.waveName} Cleared!");
             currentWaveIndex++;
 
-            // 3. Delay before next wave
-            if (currentWaveIndex < waves.Count)
-            {
-                yield return new WaitForSeconds(timeBetweenWaves);
-            }
+            if (currentWaveIndex < waves.Count) yield return new WaitForSeconds(timeBetweenWaves);
         }
 
-        // 4. All waves complete
         IsSpawning = false;
-        if (DomeBattleManager.instance != null)
-        {
-            DomeBattleManager.instance.OnVictory();
-        }
+        if (DomeBattleManager.instance != null) DomeBattleManager.instance.OnVictory();
     }
 
     private void SpawnEnemy(GameObject prefab)
@@ -94,32 +79,31 @@ public class DomeWaveSpawner : MonoBehaviour
         if (prefab == null || spawnPoints.Count == 0) return;
 
         Transform spawnPoint = spawnPoints[Random.Range(0, spawnPoints.Count)];
-
         GameObject enemy = Instantiate(prefab, spawnPoint.position, spawnPoint.rotation);
 
         // --- Apply Siege Settings ---
 
-        // 1. Configure AI (Leash & Activation)
+        // 1. AI Setup
         EnemyAI ai = enemy.GetComponent<EnemyAI>();
         if (ai != null)
         {
             ai.ActivateAI();
-            // This prevents them from turning back when walking from spawn to the dome
             ai.chaseLeashRadius = siegeLeashRadius;
         }
 
-        // 2. Configure Targeting (Vision)
+        // 2. Targeting Setup
         AITargeting targeting = enemy.GetComponent<AITargeting>();
         if (targeting != null)
         {
             targeting.detectionRadius = siegeDetectionRadius;
+            targeting.checkLineOfSight = false; // X-Ray vision for the dome
 
-            // Give them X-Ray vision so they don't get stuck searching behind walls
-            targeting.checkLineOfSight = false;
+            // --- CRITICAL FIX: Tell AI to hunt DomeMarkers by Tag ---
+            targeting.prioritizeDomeMarkers = true;
+            // -------------------------------------------------------
         }
-        // -----------------------------------
 
-        // Add tracker
+        // 3. Health Tracking
         EnemyHealthTracker tracker = enemy.AddComponent<EnemyHealthTracker>();
         tracker.spawner = this;
 
@@ -132,7 +116,7 @@ public class DomeWaveSpawner : MonoBehaviour
     }
 }
 
-// Helper component added dynamically to spawned enemies
+// Helper component
 public class EnemyHealthTracker : MonoBehaviour
 {
     public DomeWaveSpawner spawner;
@@ -149,11 +133,7 @@ public class EnemyHealthTracker : MonoBehaviour
         if (health.currentHealth <= 0)
         {
             if (spawner != null) spawner.OnEnemyKilled();
-
-            // Clean up listener
             health.OnHealthChanged -= CheckDeath;
-
-            // Destroy this tracker so it doesn't fire twice
             Destroy(this);
         }
     }

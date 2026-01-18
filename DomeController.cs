@@ -22,13 +22,9 @@ public class DomeController : MonoBehaviour
     private const int markerCount = 36;
 
     [Header("Defense Mechanism")]
-    [Tooltip("The layer(s) of enemies that should burn when entering the dome.")]
     public LayerMask enemyLayer;
-    [Tooltip("How much damage per second enemies take while inside the dome.")]
     public float burnDamagePerSecond = 35f;
-    [Tooltip("How often (in seconds) the burn damage applies. 0.5 = twice per second.")]
     public float burnTickRate = 0.5f;
-    [Tooltip("Optional: A particle effect prefab to spawn on enemies when they burn.")]
     public GameObject burnVFX;
 
     private DomeUIManager uiManager;
@@ -45,53 +41,27 @@ public class DomeController : MonoBehaviour
 
     void Awake()
     {
-        if (instance != null && instance != this)
-        {
-            Destroy(gameObject);
-            return;
-        }
+        if (instance != null && instance != this) { Destroy(gameObject); return; }
         instance = this;
-
         domeHealth = GetComponent<Health>();
         domeCollider = GetComponent<SphereCollider>();
-
-        if (domeCollider != null)
-        {
-            domeCollider.isTrigger = false;
-        }
+        if (domeCollider != null) domeCollider.isTrigger = false;
     }
 
-    void Start()
-    {
-        // --- FIX: Removed the Race Condition Check ---
-        // We no longer check GameManager scene type here because Start() runs 
-        // before GameManager finishes updating its state during transitions.
-        // We rely on DomeStateController to call SetDomeActive() at the right time.
-        // ---------------------------------------------
+    void Start() { ActivateDome(); }
 
-        // Default to active initialization, DomeStateController will disable us next frame if needed.
-        ActivateDome();
-    }
-
-    // --- NEW: Public Authority Method ---
     public void SetDomeActive(bool isActive)
     {
         if (isActive) ActivateDome();
         else DeactivateDome();
     }
-    // ------------------------------------
 
     private void ActivateDome()
     {
-        // 1. Re-enable this script so Update() runs for burning logic
         this.enabled = true;
-
-        // 2. Set Layer to 'Dome' so enemies can target it
-        gameObject.layer = LayerMask.NameToLayer("Dome");
-
+        gameObject.layer = LayerMask.NameToLayer("Dome"); // Center is "Dome"
         if (domeCollider != null) domeCollider.enabled = true;
 
-        // 3. Ensure Health is vulnerable and on correct layer
         if (domeHealth != null)
         {
             domeHealth.isInvulnerable = false;
@@ -100,7 +70,6 @@ public class DomeController : MonoBehaviour
 
         SpawnEdgeMarkers();
 
-        // 4. Force Stat & UI Refresh
         HandlePartyStatsChanged(null);
         if (domeHealth != null)
         {
@@ -111,20 +80,11 @@ public class DomeController : MonoBehaviour
 
     private void DeactivateDome()
     {
-        // 1. Hide from AI Targeting
         gameObject.layer = LayerMask.NameToLayer("Default");
-
-        // 2. Disable Physics
         if (domeCollider != null) domeCollider.enabled = false;
-
-        // 3. Make Invulnerable
         if (domeHealth != null) domeHealth.isInvulnerable = true;
-
-        // 4. Cleanup Markers
         foreach (var marker in edgeMarkers) { if (marker != null) Destroy(marker); }
         edgeMarkers.Clear();
-
-        // 5. Disable this script's Update loop
         this.enabled = false;
     }
 
@@ -136,10 +96,8 @@ public class DomeController : MonoBehaviour
     private void HandleDomeDefense()
     {
         if (currentRadius <= 0.1f) return;
-
         burnTimer += Time.deltaTime;
         if (burnTimer < burnTickRate) return;
-
         burnTimer = 0f;
 
         int hitCount = Physics.OverlapSphereNonAlloc(transform.position, currentRadius, burnBuffer, enemyLayer);
@@ -149,17 +107,11 @@ public class DomeController : MonoBehaviour
         {
             var enemyCollider = burnBuffer[i];
             if (enemyCollider == null) continue;
-
             Health enemyHealth = enemyCollider.GetComponentInChildren<Health>();
-
             if (enemyHealth != null && enemyHealth.currentHealth > 0)
             {
                 enemyHealth.TakeDamage(damagePerTick, DamageEffect.DamageType.Magical, false, this.gameObject);
-
-                if (burnVFX != null)
-                {
-                    Instantiate(burnVFX, enemyCollider.transform.position, Quaternion.identity);
-                }
+                if (burnVFX != null) Instantiate(burnVFX, enemyCollider.transform.position, Quaternion.identity);
             }
         }
     }
@@ -185,82 +137,47 @@ public class DomeController : MonoBehaviour
 
     private void HandlePartyStatsChanged(GameObject activePlayer)
     {
-        // Allow update if enabled OR if explicitly forcing active state logic
-        if (!this.enabled) return;
-
-        if (PartyManager.instance == null) return;
+        if (!this.enabled || PartyManager.instance == null) return;
 
         minPower = PartyManager.instance.domeBasePower;
-
         int totalFaith = 0;
         foreach (var member in PartyManager.instance.partyMembers)
         {
             if (member != null && member.activeInHierarchy)
             {
                 PlayerStats stats = member.GetComponentInChildren<PlayerStats>();
-                if (stats != null)
-                {
-                    totalFaith += stats.finalFaith;
-                }
+                if (stats != null) totalFaith += stats.finalFaith;
             }
         }
 
-        float faithBonus = totalFaith * healthPerFaithPoint;
-        maxPower = minPower + faithBonus;
-
-        if (domeHealth != null)
+        maxPower = minPower + (totalFaith * healthPerFaithPoint);
+        if (domeHealth != null && Mathf.Abs(domeHealth.maxHealth - (int)maxPower) > 1)
         {
-            if (Mathf.Abs(domeHealth.maxHealth - (int)maxPower) > 1)
-            {
-                domeHealth.UpdateMaxHealth((int)maxPower);
-                domeHealth.SetToMaxHealth();
-            }
+            domeHealth.UpdateMaxHealth((int)maxPower);
+            domeHealth.SetToMaxHealth();
         }
 
-        if (uiManager != null)
-        {
-            uiManager.UpdateSliderRange(minPower, maxPower);
-        }
-
-        if (domeHealth != null)
-        {
-            UpdateDomePower(domeHealth.currentHealth);
-        }
+        if (uiManager != null) uiManager.UpdateSliderRange(minPower, maxPower);
+        if (domeHealth != null) UpdateDomePower(domeHealth.currentHealth);
     }
 
     private void UpdateDomeHealthUI()
     {
-        if (uiManager != null && domeHealth != null)
-        {
-            uiManager.UpdateHealthUI(domeHealth.currentHealth, domeHealth.maxHealth);
-        }
+        if (uiManager != null && domeHealth != null) uiManager.UpdateHealthUI(domeHealth.currentHealth, domeHealth.maxHealth);
     }
 
     public void UpdateDomePower(float currentPower)
     {
         if (!this.enabled) return;
-
-        float powerPercent = 0f;
-        if (maxPower > minPower)
-        {
-            powerPercent = Mathf.InverseLerp(minPower, maxPower, currentPower);
-        }
-
+        float powerPercent = (maxPower > minPower) ? Mathf.InverseLerp(minPower, maxPower, currentPower) : 0f;
         currentRadius = Mathf.Lerp(minRadius, maxRadius, powerPercent);
 
-        if (domeVisuals != null)
-        {
-            domeVisuals.localScale = new Vector3(currentRadius * 2, currentRadius * 2, currentRadius * 2);
-        }
-        if (domeCollider != null)
-        {
-            domeCollider.radius = currentRadius;
-        }
+        if (domeVisuals != null) domeVisuals.localScale = new Vector3(currentRadius * 2, currentRadius * 2, currentRadius * 2);
+        if (domeCollider != null) domeCollider.radius = currentRadius;
 
         for (int i = 0; i < edgeMarkers.Count; i++)
         {
             if (edgeMarkers[i] == null) continue;
-
             float angle = i * (360f / markerCount);
             Vector3 direction = Quaternion.Euler(0, angle, 0) * Vector3.forward;
             edgeMarkers[i].transform.position = transform.position + (direction * currentRadius);
@@ -269,18 +186,13 @@ public class DomeController : MonoBehaviour
         if (domeHealth != null)
         {
             domeHealth.damageReductionPercent = Mathf.Lerp(0.75f, 0.25f, powerPercent);
-
-            if (uiManager != null)
-            {
-                uiManager.UpdateMitigationUI(domeHealth.damageReductionPercent);
-            }
+            if (uiManager != null) uiManager.UpdateMitigationUI(domeHealth.damageReductionPercent);
         }
     }
 
     private void SpawnEdgeMarkers()
     {
         if (edgeMarkerPrefab == null) return;
-
         foreach (var marker in edgeMarkers) { if (marker != null) Destroy(marker); }
         edgeMarkers.Clear();
 
@@ -291,7 +203,10 @@ public class DomeController : MonoBehaviour
 
             GameObject marker = Instantiate(edgeMarkerPrefab, transform.position + position, Quaternion.identity, this.transform);
 
-            marker.layer = this.gameObject.layer;
+            // --- FIX: Removed the line that overwrote the layer ---
+            // marker.layer = this.gameObject.layer; <--- DELETED THIS LINE
+            // Now the marker keeps its own Layer (16/DomeMarker) and Tag
+            // ----------------------------------------------------
 
             Health markerHealth = marker.GetComponent<Health>();
             if (markerHealth != null)
