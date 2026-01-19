@@ -2,17 +2,24 @@
 using System.IO;
 using System.Collections.Generic;
 using System.Linq;
-using Unity.VisualScripting;
+using System.Threading.Tasks; // Required for Async
+using System;
 
 public class SaveManager : MonoBehaviour
 {
     public static SaveManager instance;
 
+    // Optional Event to notify UI when saving starts/ends
+    public event Action OnSaveStarted;
+    public event Action OnSaveCompleted;
+
     private PartyManager partyManager;
     private WorldMapManager worldMapManager;
     private WagonResourceManager wagonResourceManager;
-    private DualModeManager dualModeManager; // Reference to Dual Mode
+    private DualModeManager dualModeManager;
     private List<GameObject> partyMembers;
+
+    private bool isSaving = false;
 
     void Awake()
     {
@@ -30,7 +37,7 @@ public class SaveManager : MonoBehaviour
         partyManager = PartyManager.instance;
         worldMapManager = FindAnyObjectByType<WorldMapManager>();
         wagonResourceManager = FindAnyObjectByType<WagonResourceManager>();
-        dualModeManager = DualModeManager.instance; // Find the singleton
+        dualModeManager = DualModeManager.instance;
 
         if (partyManager != null)
         {
@@ -40,17 +47,29 @@ public class SaveManager : MonoBehaviour
 
     public void SaveGame()
     {
+        if (isSaving) return; // Prevent double saves
+        StartCoroutine(SaveGameAsyncRoutine());
+    }
+
+    // --- FIX: Explicitly use System.Collections.IEnumerator to avoid generic type errors ---
+    private System.Collections.IEnumerator SaveGameAsyncRoutine()
+    {
+        isSaving = true;
+        OnSaveStarted?.Invoke();
+
+        // 1. Gather Data (MUST happen on Main Thread)
         FindManagerReferences();
 
         if (partyManager == null || partyMembers == null)
         {
             Debug.LogError("Save failed: Could not find required manager references.");
-            return;
+            isSaving = false;
+            yield break;
         }
 
         SaveData data = new SaveData();
 
-        // --- Save Wagon Data ---
+        // --- Collect Wagon Data ---
         if (wagonResourceManager != null)
         {
             data.wagonFuel = wagonResourceManager.currentFuel;
@@ -58,7 +77,7 @@ public class SaveManager : MonoBehaviour
             data.wagonIntegrity = wagonResourceManager.currentIntegrity;
         }
 
-        // --- Save World Data ---
+        // --- Collect World Data ---
         if (worldMapManager != null)
         {
             data.timeOfDay = worldMapManager.timeOfDay;
@@ -69,14 +88,12 @@ public class SaveManager : MonoBehaviour
             data.currentLocationNodeID = GameManager.instance.lastKnownLocationNodeID;
         }
 
-        // --- NEW: Save Last Location Type ---
         if (GameManager.instance != null)
         {
             data.lastLocationType = (int)GameManager.instance.lastLocationType;
         }
-        // ------------------------------------
 
-        // --- Save Dual Mode Data ---
+        // --- Collect Dual Mode Data ---
         if (dualModeManager != null)
         {
             data.dualModeData.isDualModeActive = dualModeManager.isDualModeActive;
@@ -84,7 +101,6 @@ public class SaveManager : MonoBehaviour
             data.dualModeData.dungeonTeamIndices = new List<int>(dualModeManager.dungeonTeamIndices);
             data.dualModeData.wagonTeamIndices = new List<int>(dualModeManager.wagonTeamIndices);
 
-            // Save Loot Bag
             data.dualModeData.dungeonLootBag = new List<ItemStackSaveData>();
             foreach (var stack in dualModeManager.dungeonLootBag)
             {
@@ -92,21 +108,19 @@ public class SaveManager : MonoBehaviour
                     data.dualModeData.dungeonLootBag.Add(new ItemStackSaveData(stack.itemData.id, stack.quantity));
             }
 
-            // Save Boss Buff Name
             if (dualModeManager.pendingBossBuff != null)
             {
                 data.dualModeData.pendingBossBuffName = dualModeManager.pendingBossBuff.abilityName;
             }
         }
-        // ---------------------------
 
-        // --- Save Party Data ---
+        // --- Collect Party Data ---
         data.partyLevel = partyManager.partyLevel;
         data.currentXP = partyManager.currentXP;
         data.xpToNextLevel = partyManager.xpToNextLevel;
         data.currencyGold = partyManager.currencyGold;
 
-        // --- Save Character Data ---
+        // --- Collect Character Data ---
         data.characterData = new List<CharacterSaveData>();
         foreach (var member in partyMembers)
         {
@@ -140,9 +154,31 @@ public class SaveManager : MonoBehaviour
             data.characterData.Add(charData);
         }
 
-        var json = JsonUtility.ToJson(data, true);
-        File.WriteAllText(GetSavePath(), json);
-        Debug.Log("Game Saved to: " + GetSavePath());
+        // 2. Offload to Background Thread
+        // Serialization and File writing are non-Unity thread safe
+        Task saveTask = Task.Run(() =>
+        {
+            string json = JsonUtility.ToJson(data, true);
+            File.WriteAllText(GetSavePath(), json);
+        });
+
+        // 3. Wait for completion
+        while (!saveTask.IsCompleted)
+        {
+            yield return null;
+        }
+
+        if (saveTask.IsFaulted)
+        {
+            Debug.LogError($"Save Failed: {saveTask.Exception}");
+        }
+        else
+        {
+            Debug.Log("Game Saved Successfully (Async).");
+        }
+
+        isSaving = false;
+        OnSaveCompleted?.Invoke();
     }
 
     public void LoadGame()
@@ -154,14 +190,12 @@ public class SaveManager : MonoBehaviour
             return;
         }
 
-        // Just trigger the GameManager sequence; it handles reading the JSON now
         if (GameManager.instance != null)
         {
             GameManager.instance.LoadSavedGame();
         }
     }
 
-    // --- NEW HELPER: Called by GameManager or DualModeManager after loading the file ---
     public void RestoreDualModeState(SaveData data)
     {
         if (DualModeManager.instance == null || data.dualModeData == null) return;
@@ -174,7 +208,6 @@ public class SaveManager : MonoBehaviour
         dmm.dungeonTeamIndices = new List<int>(saved.dungeonTeamIndices);
         dmm.wagonTeamIndices = new List<int>(saved.wagonTeamIndices);
 
-        // Restore Loot Bag
         dmm.dungeonLootBag.Clear();
         if (InventoryManager.instance != null)
         {
@@ -188,7 +221,6 @@ public class SaveManager : MonoBehaviour
             }
         }
 
-        // Restore Boss Buff
         if (!string.IsNullOrEmpty(saved.pendingBossBuffName))
         {
             dmm.pendingBossBuff = LoadBuffByName(saved.pendingBossBuffName);
@@ -199,8 +231,6 @@ public class SaveManager : MonoBehaviour
 
     private Ability LoadBuffByName(string abilityName)
     {
-        // ASSUMPTION: Abilities are in a Resources folder. 
-        // Adjust path if your abilities are stored differently (e.g. ScriptableObject database).
         return Resources.Load<Ability>("Abilities/" + abilityName);
     }
 }

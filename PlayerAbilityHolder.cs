@@ -15,7 +15,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     public Transform projectileSpawnPoint;
 
     [Header("Animation Settings")]
-    [Tooltip("The name of the Trigger parameter in your Animator Controller (e.g. 'Attack' or 'AttackTrigger').")]
+    [Tooltip("The name of the Trigger parameter in your Animator Controller.")]
     public string defaultAttackTrigger = "Attack";
     [Tooltip("The name of the Float parameter for attack speed.")]
     public string attackSpeedParam = "AttackSpeedMultiplier";
@@ -28,6 +28,18 @@ public class PlayerAbilityHolder : MonoBehaviour
     public float globalCooldownDuration = 1.0f;
     public float minGlobalCooldown = 0.5f;
     private float globalCooldownTimer = 0f;
+
+    // --- AAA FEATURE: Input Buffering ---
+    [Header("Game Feel (Input Buffering)")]
+    [Tooltip("Time window (in seconds) to queue an ability if pressed while busy.")]
+    public float inputBufferDuration = 0.4f;
+    private float bufferExpirationTime = 0f;
+
+    private Ability queuedAbility;
+    private GameObject queuedTarget;
+    private Vector3 queuedPosition;
+    private bool hasQueuedAction = false;
+    // ------------------------------------
 
     public ChanneledBeamController ActiveBeam { get; private set; }
     public bool IsCasting { get; private set; } = false;
@@ -57,6 +69,9 @@ public class PlayerAbilityHolder : MonoBehaviour
     private int attackStyleHash;
     private int castTriggerHash;
 
+    // Safety Flag
+    private bool hasCastTrigger = false;
+
     void Awake()
     {
         CharacterRoot characterRoot = GetComponentInParent<CharacterRoot>();
@@ -84,6 +99,19 @@ public class PlayerAbilityHolder : MonoBehaviour
         attackStyleHash = Animator.StringToHash("AttackStyle");
         castTriggerHash = Animator.StringToHash("CastTrigger");
 
+        // Check if CastTrigger exists to prevent warnings
+        if (animator != null)
+        {
+            foreach (var param in animator.parameters)
+            {
+                if (param.name == "CastTrigger")
+                {
+                    hasCastTrigger = true;
+                    break;
+                }
+            }
+        }
+
         if (targetLayers.value == 0)
         {
             targetLayers = LayerMask.GetMask("Default", "Player", "Enemy");
@@ -104,6 +132,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     void OnDisable()
     {
         CancelCast();
+        ClearInputBuffer();
         if (ActiveBeam != null)
         {
             ActiveBeam.Interrupt();
@@ -111,37 +140,49 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
+    void Update()
+    {
+        if (ActiveBeam != null && ActiveBeam.gameObject == null) { ActiveBeam = null; }
+
+        // --- INPUT BUFFER EXECUTION LOOP ---
+        if (hasQueuedAction)
+        {
+            // 1. Check Expiration
+            if (Time.time > bufferExpirationTime)
+            {
+                ClearInputBuffer(); // Too late, discard input
+            }
+            // 2. Check if we are free to act
+            else if (!IsCasting && !IsAnimationLocked && !IsOnGlobalCooldown())
+            {
+                // Capture data
+                Ability ab = queuedAbility;
+                GameObject tar = queuedTarget;
+                Vector3 pos = queuedPosition;
+
+                // Clear buffer immediately to prevent loops
+                ClearInputBuffer();
+
+                // Execute
+                if (CanUseAbility(ab, tar))
+                {
+                    UseAbility(ab, tar, pos, false);
+                }
+            }
+        }
+        // -----------------------------------
+    }
+
     public void UseAbility(Ability ability, GameObject target) => UseAbility(ability, target, false);
 
     public void UseAbility(Ability ability, Vector3 targetPosition)
     {
-        if (!CanUseAbility(ability, null)) return;
-
-        float distance = Vector3.Distance(transform.position, targetPosition);
-        if (distance > ability.range + 0.5f) return;
-
-        float finalCastTime = ability.castTime;
-        if (playerStats != null) finalCastTime /= playerStats.secondaryStats.attackSpeed;
-
-        if (finalCastTime > 0 || ability.telegraphDuration > 0)
-        {
-            if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
-            activeCastCoroutine = StartCoroutine(PerformCast(ability, null, targetPosition, finalCastTime, false));
-        }
-        else
-        {
-            ExecuteAbility(ability, null, targetPosition, false);
-        }
+        UseAbility(ability, null, targetPosition, false);
     }
 
     public void UseAbility(Ability ability, GameObject target, bool bypassCooldown)
     {
-        if (!CanUseAbility(ability, target)) return;
-
-        float finalCastTime = ability.castTime;
-        if (playerStats != null) finalCastTime /= playerStats.secondaryStats.attackSpeed;
-
-        // --- FIX: Default to Mouse Cursor, not Feet ---
+        // Default to aiming at cursor if no target provided (Prevent firing backwards)
         Vector3 targetPosition;
         if (target != null)
         {
@@ -153,19 +194,67 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
         else
         {
-            targetPosition = transform.position + transform.forward * 5f; // Fallback
+            targetPosition = transform.position + transform.forward * 5f;
         }
-        // ----------------------------------------------
+
+        UseAbility(ability, target, targetPosition, bypassCooldown);
+    }
+
+    // Centralized Method
+    private void UseAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown)
+    {
+        if (ability == null) return;
+
+        // 1. Mana Check
+        if (playerStats != null && playerStats.currentMana < ability.manaCost)
+        {
+            if (FloatingTextManager.instance != null)
+                FloatingTextManager.instance.ShowText("No Mana!", transform.position + Vector3.up * 2, Color.blue);
+            return;
+        }
+
+        // 2. Cooldown Check
+        if (!bypassCooldown && cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return;
+
+        // 3. State Check & BUFFERING
+        bool isBusy = IsCasting || (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) || IsAnimationLocked;
+
+        if (isBusy)
+        {
+            // AAA Standard: Don't ignore the click, queue it!
+            QueueAbility(ability, target, position);
+            return;
+        }
+
+        // 4. Execution
+        float finalCastTime = ability.castTime;
+        if (playerStats != null) finalCastTime /= playerStats.secondaryStats.attackSpeed;
 
         if (finalCastTime > 0 || ability.telegraphDuration > 0)
         {
             if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
-            activeCastCoroutine = StartCoroutine(PerformCast(ability, target, targetPosition, finalCastTime, bypassCooldown));
+            activeCastCoroutine = StartCoroutine(PerformCast(ability, target, position, finalCastTime, bypassCooldown));
         }
         else
         {
-            ExecuteAbility(ability, target, targetPosition, bypassCooldown);
+            ExecuteAbility(ability, target, position, bypassCooldown);
         }
+    }
+
+    private void QueueAbility(Ability ability, GameObject target, Vector3 position)
+    {
+        queuedAbility = ability;
+        queuedTarget = target;
+        queuedPosition = position;
+        bufferExpirationTime = Time.time + inputBufferDuration;
+        hasQueuedAction = true;
+    }
+
+    private void ClearInputBuffer()
+    {
+        hasQueuedAction = false;
+        queuedAbility = null;
+        queuedTarget = null;
     }
 
     private IEnumerator PerformCast(Ability ability, GameObject target, Vector3 position, float castTime, bool bypassCooldown)
@@ -177,9 +266,13 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (animator != null)
         {
             if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger))
+            {
                 animator.SetTrigger(ability.telegraphAnimationTrigger);
-            else
+            }
+            else if (hasCastTrigger)
+            {
                 animator.SetTrigger(castTriggerHash);
+            }
         }
 
         // 2. Spawn Casting VFX
@@ -204,7 +297,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             // Wait for Cast Time
             if (castTime > 0) yield return new WaitForSeconds(castTime);
 
-            // Re-aim at mouse cursor just before firing (Ensures long casts aim correctly)
+            // Re-aim at mouse cursor just before firing
             if (target == null && playerMovement != null) position = playerMovement.CurrentLookTarget;
 
             // Execute (don't re-trigger animation, we did windup)
@@ -260,9 +353,7 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         OnPlayerAbilityUsed?.Invoke(this, ability);
 
-        // --- TRIGGER ANIMATION (Instant Casts) ---
         if (triggerAnimation) TriggerAttackAnimation(ability);
-        // -----------------------------------------
 
         if (ability.movementLockDuration > 0)
         {
@@ -380,6 +471,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (activeCastCoroutine != null) { StopCoroutine(activeCastCoroutine); activeCastCoroutine = null; }
         IsCasting = false;
         CleanupCastingVFX();
+        ClearInputBuffer(); // Clear buffer if cancelled
 
         IsAnimationLocked = false;
         if (activeLockCoroutine != null) { StopCoroutine(activeLockCoroutine); activeLockCoroutine = null; }
@@ -439,9 +531,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
         else
         {
-            // Calculate direction to cursor
             Vector3 direction = targetPos - spawnPos;
-            // Flatten Y so projectile flies straight relative to spawn point height
             direction.y = 0;
             if (direction.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(direction);
         }
@@ -552,7 +642,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    void Update() { if (ActiveBeam != null && ActiveBeam.gameObject == null) { ActiveBeam = null; } }
     public bool GetCooldownStatus(Ability ability, out float remaining) { remaining = 0f; if (cooldowns.TryGetValue(ability, out float endTime)) { if (Time.time < endTime) { remaining = endTime - Time.time; return true; } } return false; }
     public bool CanUseAbility(Ability ability, GameObject target) { if (ability == null || IsCasting) return false; if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false; if (ability.requiresWeaponType && !IsCorrectWeaponEquipped(ability.requiredWeaponCategories)) return false; if ((ability.abilityType == AbilityType.TargetedMelee || ability.abilityType == AbilityType.TargetedProjectile || ability.abilityType == AbilityType.Charge) && target == null) return false; if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false; if (playerStats != null && playerStats.currentMana < ability.manaCost) return false; return true; }
     private float GetCurrentWeaponSpeed() { if (playerEquipment == null) return 2.0f; if (playerEquipment.equippedItems.TryGetValue(EquipmentType.RightHand, out var rightHandItem) && rightHandItem?.itemData.stats is ItemWeaponStats rightWeapon) return rightWeapon.baseAttackTime; if (playerEquipment.equippedItems.TryGetValue(EquipmentType.LeftHand, out var leftHandItem) && leftHandItem?.itemData.stats is ItemWeaponStats leftWeapon) return leftWeapon.baseAttackTime; return 2.0f; }

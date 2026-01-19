@@ -19,7 +19,10 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public CharacterMovementHandler MovementHandler { get; private set; }
 
     // --- State Data ---
+    // FIX: Added [HideInInspector] to prevent UnassignedReferenceException since this is runtime-only
+    [HideInInspector]
     public Transform currentTarget;
+
     public Vector3 StartPosition { get; private set; }
     public Vector3 CombatStartPosition { get; set; }
     public bool HasUsedInitialAbilities { get; set; }
@@ -87,6 +90,9 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private int idleIndexHash;
     private int walkIndexHash;
     private bool wasMoving = false;
+
+    // --- Caching ---
+    private Transform _cachedPlayerTransform;
 
     void Awake()
     {
@@ -351,6 +357,16 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         if (FloatingTextManager.instance != null) FloatingTextManager.instance.ShowAIStatus(action, transform.position + Vector3.up * 3.5f);
     }
 
+    private Transform GetPlayerTransform()
+    {
+        if (_cachedPlayerTransform == null)
+        {
+            GameObject playerGO = GameObject.FindGameObjectWithTag("Player");
+            if (playerGO != null) _cachedPlayerTransform = playerGO.transform;
+        }
+        return _cachedPlayerTransform;
+    }
+
     private void HandleRotation()
     {
         if (NavAgent == null || isDead) return;
@@ -358,7 +374,26 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         Vector3 targetLookPos = Vector3.zero;
         bool shouldRotate = false;
 
-        if (currentTarget != null)
+        // Sequence Priority Logic
+        if (IsInActionSequence)
+        {
+            if (currentTarget != null)
+            {
+                targetLookPos = currentTarget.position;
+                shouldRotate = true;
+            }
+            else
+            {
+                Transform player = GetPlayerTransform();
+                if (player != null)
+                {
+                    targetLookPos = player.position;
+                    shouldRotate = true;
+                }
+            }
+        }
+        // Standard Logic
+        else if (currentTarget != null)
         {
             targetLookPos = currentTarget.position;
             shouldRotate = true;
@@ -385,9 +420,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         if (isDead) return;
         isDead = true;
 
-        // --- FIX: Immediately stop any casting abilities so dead enemies don't fire ---
         if (AbilityHolder != null) AbilityHolder.CancelCast();
-        // --------------------------------------------------------------------------
 
         StartCoroutine(HandleCorpseCleanup());
         StopMovement();
@@ -440,7 +473,11 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
                 if (hpPercent <= trigger.healthPercentage && !triggeredHealthPhases.Contains(trigger))
                 {
                     triggeredHealthPhases.Add(trigger);
-                    AbilityHolder.UseAbility(trigger.abilityToUse, currentTarget?.gameObject ?? gameObject);
+
+                    // FIX: Use explicit null check instead of '?.' to avoid Unity object lifetime issues + ensure fallback works correctly
+                    GameObject targetObj = (currentTarget != null) ? currentTarget.gameObject : gameObject;
+                    AbilityHolder.UseAbility(trigger.abilityToUse, targetObj);
+
                     break;
                 }
             }
