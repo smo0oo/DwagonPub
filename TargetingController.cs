@@ -7,6 +7,7 @@ public class TargetingController : MonoBehaviour
     public static TargetingController instance;
 
     [Header("Configuration")]
+    [Tooltip("The default reticle used if the Ability does not have a specific override.")]
     public GameObject targetingReticlePrefab;
     public LayerMask groundLayer;
     public Material inRangeMaterial;
@@ -18,7 +19,6 @@ public class TargetingController : MonoBehaviour
     private MonoBehaviour currentCaster;
     private Camera mainCamera;
 
-    // --- NEW: Keep track of which player we locked so we can unlock them later ---
     private PlayerMovement lockedPlayerMovement;
 
     public bool IsTargeting { get; private set; } = false;
@@ -94,19 +94,14 @@ public class TargetingController : MonoBehaviour
         abilityToCast = ability;
         currentCaster = caster;
 
-        // --- FIX START: Lock the Active Player regardless of who is casting ---
-        // Previously, this only worked if 'caster' was the player. 
-        // Now we explicitly find the Active Player to stop them moving while the Wagon (or anyone else) aims.
-
+        // --- Lock Player Movement ---
         PlayerMovement pmToLock = null;
-
         if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
         {
             pmToLock = PartyManager.instance.ActivePlayer.GetComponent<PlayerMovement>();
         }
         else if (caster is PlayerAbilityHolder playerCaster)
         {
-            // Fallback for single-player testing scenes
             pmToLock = playerCaster.GetComponentInParent<PlayerMovement>();
         }
 
@@ -115,22 +110,34 @@ public class TargetingController : MonoBehaviour
             lockedPlayerMovement = pmToLock;
             lockedPlayerMovement.IsGroundTargeting = true;
         }
-        // --- FIX END ---
+        // -----------------------------
 
-        currentReticle = Instantiate(targetingReticlePrefab);
+        // --- NEW: Check for Per-Ability Override ---
+        GameObject prefabToUse = targetingReticlePrefab;
+        if (ability.targetingReticleOverride != null)
+        {
+            prefabToUse = ability.targetingReticleOverride;
+        }
+        // -------------------------------------------
+
+        currentReticle = Instantiate(prefabToUse);
         reticleRenderer = currentReticle.GetComponent<Renderer>();
 
-        float diameter = 1f;
-        if (ability.abilityType == AbilityType.GroundAOE)
+        // Only auto-scale if we are using the DEFAULT reticle.
+        // If we are using a custom override (like a cone or decal), we assume the prefab is already sized correctly.
+        if (ability.targetingReticleOverride == null)
         {
-            diameter = ability.aoeRadius * 2;
+            float diameter = 1f;
+            if (ability.abilityType == AbilityType.GroundAOE)
+            {
+                diameter = ability.aoeRadius * 2;
+            }
+            else if (ability.abilityType == AbilityType.GroundPlacement || ability.abilityType == AbilityType.Leap || ability.abilityType == AbilityType.Teleport)
+            {
+                diameter = 1f;
+            }
+            currentReticle.transform.localScale = new Vector3(diameter, currentReticle.transform.localScale.y, diameter);
         }
-        else if (ability.abilityType == AbilityType.GroundPlacement || ability.abilityType == AbilityType.Leap || ability.abilityType == AbilityType.Teleport)
-        {
-            diameter = 1f;
-        }
-
-        currentReticle.transform.localScale = new Vector3(diameter, currentReticle.transform.localScale.y, diameter);
     }
 
     private void ConfirmTargeting()
@@ -192,7 +199,6 @@ public class TargetingController : MonoBehaviour
             HotbarManager.instance.LockingAbility = null;
         }
 
-        // --- FIX: Safely unlock the specific player we locked earlier ---
         if (lockedPlayerMovement != null)
         {
             lockedPlayerMovement.StartCoroutine(lockedPlayerMovement.ResetGroundTargetingFlag());

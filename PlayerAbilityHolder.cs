@@ -4,9 +4,14 @@ using System.Collections.Generic;
 using System.Linq;
 using System;
 
+[RequireComponent(typeof(AudioSource))] // Added for better audio control
 public class PlayerAbilityHolder : MonoBehaviour
 {
     public static event Action<PlayerAbilityHolder, Ability> OnPlayerAbilityUsed;
+
+    // New Event for Camera Controller to subscribe to
+    public static event Action<float, float> OnCameraShakeRequest;
+
     public event Action<string, float> OnCastStarted;
     public event Action OnCastFinished;
 
@@ -15,13 +20,10 @@ public class PlayerAbilityHolder : MonoBehaviour
     public Transform projectileSpawnPoint;
 
     [Header("Animation Settings")]
-    [Tooltip("The name of the Trigger parameter in your Animator Controller.")]
     public string defaultAttackTrigger = "Attack";
-    [Tooltip("The name of the Float parameter for attack speed.")]
     public string attackSpeedParam = "AttackSpeedMultiplier";
 
     [Header("Targeting Settings")]
-    [Tooltip("Layers that abilities can hit.")]
     public LayerMask targetLayers;
 
     [Header("Global Cooldown")]
@@ -29,9 +31,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     public float minGlobalCooldown = 0.5f;
     private float globalCooldownTimer = 0f;
 
-    // --- AAA FEATURE: Input Buffering ---
     [Header("Game Feel (Input Buffering)")]
-    [Tooltip("Time window (in seconds) to queue an ability if pressed while busy.")]
     public float inputBufferDuration = 0.4f;
     private float bufferExpirationTime = 0f;
 
@@ -39,7 +39,6 @@ public class PlayerAbilityHolder : MonoBehaviour
     private GameObject queuedTarget;
     private Vector3 queuedPosition;
     private bool hasQueuedAction = false;
-    // ------------------------------------
 
     public ChanneledBeamController ActiveBeam { get; private set; }
     public bool IsCasting { get; private set; } = false;
@@ -54,6 +53,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     private PlayerEquipment playerEquipment;
     private UnityEngine.AI.NavMeshAgent navMeshAgent;
     private Animator animator;
+    private AudioSource audioSource; // For windups/channeling
 
     private Coroutine activeCastCoroutine;
     private Coroutine activeMeleeCoroutine;
@@ -68,8 +68,6 @@ public class PlayerAbilityHolder : MonoBehaviour
     private int attackSpeedHash;
     private int attackStyleHash;
     private int castTriggerHash;
-
-    // Safety Flag
     private bool hasCastTrigger = false;
 
     void Awake()
@@ -88,35 +86,24 @@ public class PlayerAbilityHolder : MonoBehaviour
             animator = GetComponentInChildren<Animator>();
         }
 
-        if (animator == null) Debug.LogError($"[PlayerAbilityHolder] CRITICAL: No Animator found on {gameObject.name}!");
-
+        audioSource = GetComponent<AudioSource>(); // Get the audio source
         movementHandler = GetComponentInParent<IMovementHandler>();
         meleeHitbox = GetComponentInChildren<MeleeHitbox>(true);
 
-        // Initialize Hashes
         attackHash = Animator.StringToHash(defaultAttackTrigger);
         attackSpeedHash = Animator.StringToHash(attackSpeedParam);
         attackStyleHash = Animator.StringToHash("AttackStyle");
         castTriggerHash = Animator.StringToHash("CastTrigger");
 
-        // Check if CastTrigger exists to prevent warnings
         if (animator != null)
         {
             foreach (var param in animator.parameters)
             {
-                if (param.name == "CastTrigger")
-                {
-                    hasCastTrigger = true;
-                    break;
-                }
+                if (param.name == "CastTrigger") { hasCastTrigger = true; break; }
             }
         }
 
-        if (targetLayers.value == 0)
-        {
-            targetLayers = LayerMask.GetMask("Default", "Player", "Enemy");
-        }
-
+        if (targetLayers.value == 0) targetLayers = LayerMask.GetMask("Default", "Player", "Enemy");
         if (projectileSpawnPoint == null) projectileSpawnPoint = transform;
     }
 
@@ -133,100 +120,57 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         CancelCast();
         ClearInputBuffer();
-        if (ActiveBeam != null)
-        {
-            ActiveBeam.Interrupt();
-            ActiveBeam = null;
-        }
+        if (ActiveBeam != null) { ActiveBeam.Interrupt(); ActiveBeam = null; }
     }
 
     void Update()
     {
         if (ActiveBeam != null && ActiveBeam.gameObject == null) { ActiveBeam = null; }
 
-        // --- INPUT BUFFER EXECUTION LOOP ---
         if (hasQueuedAction)
         {
-            // 1. Check Expiration
-            if (Time.time > bufferExpirationTime)
-            {
-                ClearInputBuffer(); // Too late, discard input
-            }
-            // 2. Check if we are free to act
+            if (Time.time > bufferExpirationTime) ClearInputBuffer();
             else if (!IsCasting && !IsAnimationLocked && !IsOnGlobalCooldown())
             {
-                // Capture data
                 Ability ab = queuedAbility;
                 GameObject tar = queuedTarget;
                 Vector3 pos = queuedPosition;
-
-                // Clear buffer immediately to prevent loops
                 ClearInputBuffer();
-
-                // Execute
-                if (CanUseAbility(ab, tar))
-                {
-                    UseAbility(ab, tar, pos, false);
-                }
+                if (CanUseAbility(ab, tar)) UseAbility(ab, tar, pos, false);
             }
         }
-        // -----------------------------------
     }
 
     public void UseAbility(Ability ability, GameObject target) => UseAbility(ability, target, false);
-
-    public void UseAbility(Ability ability, Vector3 targetPosition)
-    {
-        UseAbility(ability, null, targetPosition, false);
-    }
+    public void UseAbility(Ability ability, Vector3 targetPosition) => UseAbility(ability, null, targetPosition, false);
 
     public void UseAbility(Ability ability, GameObject target, bool bypassCooldown)
     {
-        // Default to aiming at cursor if no target provided (Prevent firing backwards)
         Vector3 targetPosition;
-        if (target != null)
-        {
-            targetPosition = target.transform.position;
-        }
-        else if (playerMovement != null)
-        {
-            targetPosition = playerMovement.CurrentLookTarget;
-        }
-        else
-        {
-            targetPosition = transform.position + transform.forward * 5f;
-        }
+        if (target != null) targetPosition = target.transform.position;
+        else if (playerMovement != null) targetPosition = playerMovement.CurrentLookTarget;
+        else targetPosition = transform.position + transform.forward * 5f;
 
         UseAbility(ability, target, targetPosition, bypassCooldown);
     }
 
-    // Centralized Method
     private void UseAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown)
     {
         if (ability == null) return;
-
-        // 1. Mana Check
         if (playerStats != null && playerStats.currentMana < ability.manaCost)
         {
-            if (FloatingTextManager.instance != null)
-                FloatingTextManager.instance.ShowText("No Mana!", transform.position + Vector3.up * 2, Color.blue);
+            if (FloatingTextManager.instance != null) FloatingTextManager.instance.ShowText("No Mana!", transform.position + Vector3.up * 2, Color.blue);
             return;
         }
-
-        // 2. Cooldown Check
         if (!bypassCooldown && cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return;
 
-        // 3. State Check & BUFFERING
         bool isBusy = IsCasting || (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) || IsAnimationLocked;
-
         if (isBusy)
         {
-            // AAA Standard: Don't ignore the click, queue it!
             QueueAbility(ability, target, position);
             return;
         }
 
-        // 4. Execution
         float finalCastTime = ability.castTime;
         if (playerStats != null) finalCastTime /= playerStats.secondaryStats.attackSpeed;
 
@@ -262,25 +206,27 @@ public class PlayerAbilityHolder : MonoBehaviour
         IsCasting = true;
         if (navMeshAgent != null && navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath();
 
-        // 1. Play Windup Animation (Casting)
+        // 1. Play Windup Animation
         if (animator != null)
         {
-            if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger))
-            {
-                animator.SetTrigger(ability.telegraphAnimationTrigger);
-            }
-            else if (hasCastTrigger)
-            {
-                animator.SetTrigger(castTriggerHash);
-            }
+            if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger)) animator.SetTrigger(ability.telegraphAnimationTrigger);
+            else if (hasCastTrigger) animator.SetTrigger(castTriggerHash);
         }
 
-        // 2. Spawn Casting VFX
+        // 2. Play Windup Audio (Looping check handled by clip settings usually, or re-triggered)
+        if (ability.windupSound != null && audioSource != null)
+        {
+            audioSource.clip = ability.windupSound;
+            audioSource.loop = true;
+            audioSource.Play();
+        }
+
+        // 3. Spawn Windup VFX (Respect Parenting Toggle)
         if (ability.castingVFX != null)
         {
             Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
             currentCastingVFXInstance = ObjectPooler.instance.Get(ability.castingVFX, spawnTransform.position, spawnTransform.rotation);
-            if (currentCastingVFXInstance != null)
+            if (currentCastingVFXInstance != null && ability.attachCastingVFX)
             {
                 currentCastingVFXInstance.transform.SetParent(spawnTransform);
             }
@@ -290,27 +236,31 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         try
         {
-            if (CastingBarUIManager.instance != null) { CastingBarUIManager.instance.StartCast(ability.abilityName, castTime); }
+            if (CastingBarUIManager.instance != null) CastingBarUIManager.instance.StartCast(ability.abilityName, castTime);
 
-            // Wait for Telegraph
             if (ability.telegraphDuration > 0) yield return new WaitForSeconds(ability.telegraphDuration);
-            // Wait for Cast Time
             if (castTime > 0) yield return new WaitForSeconds(castTime);
 
-            // Re-aim at mouse cursor just before firing
             if (target == null && playerMovement != null) position = playerMovement.CurrentLookTarget;
 
-            // Execute (don't re-trigger animation, we did windup)
             ExecuteAbility(ability, target, position, bypassCooldown, false);
         }
         finally
         {
             CleanupCastingVFX();
 
+            // Stop Windup Audio
+            if (audioSource != null && audioSource.clip == ability.windupSound)
+            {
+                audioSource.Stop();
+                audioSource.loop = false;
+                audioSource.clip = null;
+            }
+
             IsCasting = false;
             activeCastCoroutine = null;
             if (CastingBarUIManager.instance != null) CastingBarUIManager.instance.StopCast();
-            if (HotbarManager.instance != null && HotbarManager.instance.LockingAbility == ability) { HotbarManager.instance.LockingAbility = null; }
+            if (HotbarManager.instance != null && HotbarManager.instance.LockingAbility == ability) HotbarManager.instance.LockingAbility = null;
             OnCastFinished?.Invoke();
         }
     }
@@ -320,10 +270,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (currentCastingVFXInstance != null)
         {
             VFXGraphCleaner cleaner = currentCastingVFXInstance.GetComponent<VFXGraphCleaner>();
-            if (cleaner != null)
-            {
-                cleaner.StopAndFade();
-            }
+            if (cleaner != null) cleaner.StopAndFade();
             else
             {
                 PooledObject pooled = currentCastingVFXInstance.GetComponent<PooledObject>();
@@ -339,16 +286,25 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (ActiveBeam != null) ActiveBeam.Interrupt();
 
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
+
+        // --- AAA Audio: Play Cast Sound (Fire/Swing) ---
         if (ability.castSound != null) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
 
+        // --- AAA VFX: Spawn Cast VFX (Respect Parenting Toggle) ---
         Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
         if (ability.castVFX != null)
         {
             GameObject vfxInstance = ObjectPooler.instance.Get(ability.castVFX, spawnTransform.position, spawnTransform.rotation);
-            if (vfxInstance != null)
+            if (vfxInstance != null && ability.attachCastVFX)
             {
                 vfxInstance.transform.SetParent(spawnTransform);
             }
+        }
+
+        // --- AAA Feel: Screen Shake ---
+        if (ability.screenShakeIntensity > 0)
+        {
+            OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration);
         }
 
         OnPlayerAbilityUsed?.Invoke(this, ability);
@@ -469,9 +425,13 @@ public class PlayerAbilityHolder : MonoBehaviour
     public void CancelCast()
     {
         if (activeCastCoroutine != null) { StopCoroutine(activeCastCoroutine); activeCastCoroutine = null; }
+
+        // Clean up Audio on Cancel
+        if (audioSource != null) { audioSource.Stop(); audioSource.clip = null; }
+
         IsCasting = false;
         CleanupCastingVFX();
-        ClearInputBuffer(); // Clear buffer if cancelled
+        ClearInputBuffer();
 
         IsAnimationLocked = false;
         if (activeLockCoroutine != null) { StopCoroutine(activeLockCoroutine); activeLockCoroutine = null; }
@@ -556,7 +516,11 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     private void HandleGroundAOE(Ability ability, Vector3 position)
     {
+        // Spawns HitVFX at location (usually World Space)
         if (ability.hitVFX != null) ObjectPooler.instance.Get(ability.hitVFX, position, Quaternion.identity);
+
+        // Play Impact Sound
+        if (ability.impactSound != null) AudioSource.PlayClipAtPoint(ability.impactSound, position);
 
         int hitCount = Physics.OverlapSphereNonAlloc(position, ability.aoeRadius, _aoeBuffer, targetLayers);
         _affectedCharactersBuffer.Clear();
@@ -583,6 +547,9 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         CharacterRoot casterRoot = this.GetComponentInParent<CharacterRoot>();
         if (casterRoot == null) return;
+
+        // Play Impact Sound at self
+        if (ability.impactSound != null) AudioSource.PlayClipAtPoint(ability.impactSound, transform.position);
 
         if (ability.aoeRadius <= 0)
         {
