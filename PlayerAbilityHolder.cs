@@ -4,20 +4,32 @@ using System.Collections.Generic;
 using System.Linq;
 using System;
 
-[RequireComponent(typeof(AudioSource))] // Added for better audio control
+[RequireComponent(typeof(AudioSource))]
 public class PlayerAbilityHolder : MonoBehaviour
 {
     public static event Action<PlayerAbilityHolder, Ability> OnPlayerAbilityUsed;
-
-    // New Event for Camera Controller to subscribe to
     public static event Action<float, float> OnCameraShakeRequest;
 
     public event Action<string, float> OnCastStarted;
     public event Action OnCastFinished;
 
     [Header("Component References")]
-    [Tooltip("An optional transform to specify where projectiles should spawn from. If not set, the character's pivot point is used.")]
+    [Tooltip("Default spawn point (usually weapon tip). Used if VFX Anchor is set to 'ProjectileSpawnPoint'.")]
     public Transform projectileSpawnPoint;
+
+    // --- AAA FEATURE: Manual VFX Anchors ---
+    [Header("VFX Anchors (Optional Overrides)")]
+    [Tooltip("Assign a specific child object here to override the default Animator bone for Left Hand.")]
+    public Transform leftHandAnchor;
+    [Tooltip("Assign a specific child object here to override the default Animator bone for Right Hand.")]
+    public Transform rightHandAnchor;
+    [Tooltip("Assign a specific child object here to override the default Animator bone for Head/Eyes.")]
+    public Transform headAnchor;
+    [Tooltip("Assign a specific child object here to override the default Root/Feet.")]
+    public Transform feetAnchor;
+    [Tooltip("Assign a specific child object here to override the default Chest/Center.")]
+    public Transform centerAnchor;
+    // ---------------------------------------
 
     [Header("Animation Settings")]
     public string defaultAttackTrigger = "Attack";
@@ -53,7 +65,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     private PlayerEquipment playerEquipment;
     private UnityEngine.AI.NavMeshAgent navMeshAgent;
     private Animator animator;
-    private AudioSource audioSource; // For windups/channeling
+    private AudioSource audioSource;
 
     private Coroutine activeCastCoroutine;
     private Coroutine activeMeleeCoroutine;
@@ -86,7 +98,9 @@ public class PlayerAbilityHolder : MonoBehaviour
             animator = GetComponentInChildren<Animator>();
         }
 
-        audioSource = GetComponent<AudioSource>(); // Get the audio source
+        if (animator == null) Debug.LogError($"[PlayerAbilityHolder] CRITICAL: No Animator found on {gameObject.name}!");
+
+        audioSource = GetComponent<AudioSource>();
         movementHandler = GetComponentInParent<IMovementHandler>();
         meleeHitbox = GetComponentInChildren<MeleeHitbox>(true);
 
@@ -206,14 +220,12 @@ public class PlayerAbilityHolder : MonoBehaviour
         IsCasting = true;
         if (navMeshAgent != null && navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath();
 
-        // 1. Play Windup Animation
         if (animator != null)
         {
             if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger)) animator.SetTrigger(ability.telegraphAnimationTrigger);
             else if (hasCastTrigger) animator.SetTrigger(castTriggerHash);
         }
 
-        // 2. Play Windup Audio (Looping check handled by clip settings usually, or re-triggered)
         if (ability.windupSound != null && audioSource != null)
         {
             audioSource.clip = ability.windupSound;
@@ -221,14 +233,24 @@ public class PlayerAbilityHolder : MonoBehaviour
             audioSource.Play();
         }
 
-        // 3. Spawn Windup VFX (Respect Parenting Toggle)
+        // --- Casting VFX (Windup) ---
         if (ability.castingVFX != null)
         {
-            Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
-            currentCastingVFXInstance = ObjectPooler.instance.Get(ability.castingVFX, spawnTransform.position, spawnTransform.rotation);
-            if (currentCastingVFXInstance != null && ability.attachCastingVFX)
+            Transform anchor = GetAnchorTransform(ability.vfxAnchor);
+            currentCastingVFXInstance = ObjectPooler.instance.Get(ability.castingVFX, anchor.position, anchor.rotation);
+
+            if (currentCastingVFXInstance != null)
             {
-                currentCastingVFXInstance.transform.SetParent(spawnTransform);
+                // Always set parent initially to apply offsets correctly in local space
+                currentCastingVFXInstance.transform.SetParent(anchor);
+                currentCastingVFXInstance.transform.localPosition = ability.vfxPositionOffset;
+                currentCastingVFXInstance.transform.localRotation = Quaternion.Euler(ability.vfxRotationOffset);
+
+                // If we don't want it attached, detach it now (it stays at the offset location)
+                if (!ability.attachCastingVFX)
+                {
+                    currentCastingVFXInstance.transform.SetParent(null);
+                }
             }
         }
 
@@ -249,7 +271,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         {
             CleanupCastingVFX();
 
-            // Stop Windup Audio
             if (audioSource != null && audioSource.clip == ability.windupSound)
             {
                 audioSource.Stop();
@@ -287,21 +308,20 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
 
-        // --- AAA Audio: Play Cast Sound (Fire/Swing) ---
         if (ability.castSound != null) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
 
-        // --- AAA VFX: Spawn Cast VFX (Respect Parenting Toggle) ---
-        Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
         if (ability.castVFX != null)
         {
-            GameObject vfxInstance = ObjectPooler.instance.Get(ability.castVFX, spawnTransform.position, spawnTransform.rotation);
-            if (vfxInstance != null && ability.attachCastVFX)
+            if (ability.castVFXDelay > 0)
             {
-                vfxInstance.transform.SetParent(spawnTransform);
+                StartCoroutine(SpawnVFXWithDelay(ability));
+            }
+            else
+            {
+                SpawnCastVFX(ability);
             }
         }
 
-        // --- AAA Feel: Screen Shake ---
         if (ability.screenShakeIntensity > 0)
         {
             OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration);
@@ -350,6 +370,77 @@ public class PlayerAbilityHolder : MonoBehaviour
                 if (movementHandler != null) movementHandler.ExecuteTeleport(position);
                 break;
         }
+    }
+
+    private void SpawnCastVFX(Ability ability)
+    {
+        Transform anchor = GetAnchorTransform(ability.vfxAnchor);
+        GameObject vfxInstance = ObjectPooler.instance.Get(ability.castVFX, anchor.position, anchor.rotation);
+
+        if (vfxInstance != null)
+        {
+            // Apply offsets relative to the anchor
+            vfxInstance.transform.SetParent(anchor);
+            vfxInstance.transform.localPosition = ability.vfxPositionOffset;
+            vfxInstance.transform.localRotation = Quaternion.Euler(ability.vfxRotationOffset);
+
+            // Detach if requested
+            if (!ability.attachCastVFX)
+            {
+                vfxInstance.transform.SetParent(null);
+            }
+        }
+    }
+
+    // --- HELPER: Find the correct Transform on the body ---
+    private Transform GetAnchorTransform(VFXAnchor anchor)
+    {
+        // 1. Check for manual overrides first
+        switch (anchor)
+        {
+            case VFXAnchor.LeftHand:
+                if (leftHandAnchor != null) return leftHandAnchor;
+                if (animator != null) { var bone = animator.GetBoneTransform(HumanBodyBones.LeftHand); if (bone != null) return bone; }
+                break;
+
+            case VFXAnchor.RightHand:
+                if (rightHandAnchor != null) return rightHandAnchor;
+                if (animator != null) { var bone = animator.GetBoneTransform(HumanBodyBones.RightHand); if (bone != null) return bone; }
+                break;
+
+            case VFXAnchor.Head:
+                if (headAnchor != null) return headAnchor;
+                if (animator != null) { var bone = animator.GetBoneTransform(HumanBodyBones.Head); if (bone != null) return bone; }
+                break;
+
+            case VFXAnchor.Feet:
+                if (feetAnchor != null) return feetAnchor;
+                return transform; // Root
+
+            case VFXAnchor.Center:
+                if (centerAnchor != null) return centerAnchor;
+                if (animator != null) { var bone = animator.GetBoneTransform(HumanBodyBones.Chest); if (bone != null) return bone; }
+                return transform;
+
+            case VFXAnchor.ProjectileSpawnPoint:
+            default:
+                return projectileSpawnPoint != null ? projectileSpawnPoint : transform;
+        }
+
+        return transform; // Fallback
+    }
+    // -----------------------------------------------------
+
+    private IEnumerator SpawnVFXWithDelay(Ability ability)
+    {
+        float speedMultiplier = 1f;
+        if (playerStats != null && playerStats.secondaryStats.attackSpeed > 0)
+        {
+            speedMultiplier = playerStats.secondaryStats.attackSpeed;
+        }
+
+        yield return new WaitForSeconds(ability.castVFXDelay / speedMultiplier);
+        SpawnCastVFX(ability);
     }
 
     private IEnumerator HandleMovementLock(float baseDuration)
@@ -426,7 +517,6 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         if (activeCastCoroutine != null) { StopCoroutine(activeCastCoroutine); activeCastCoroutine = null; }
 
-        // Clean up Audio on Cancel
         if (audioSource != null) { audioSource.Stop(); audioSource.clip = null; }
 
         IsCasting = false;
@@ -516,10 +606,7 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     private void HandleGroundAOE(Ability ability, Vector3 position)
     {
-        // Spawns HitVFX at location (usually World Space)
         if (ability.hitVFX != null) ObjectPooler.instance.Get(ability.hitVFX, position, Quaternion.identity);
-
-        // Play Impact Sound
         if (ability.impactSound != null) AudioSource.PlayClipAtPoint(ability.impactSound, position);
 
         int hitCount = Physics.OverlapSphereNonAlloc(position, ability.aoeRadius, _aoeBuffer, targetLayers);
@@ -548,7 +635,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         CharacterRoot casterRoot = this.GetComponentInParent<CharacterRoot>();
         if (casterRoot == null) return;
 
-        // Play Impact Sound at self
         if (ability.impactSound != null) AudioSource.PlayClipAtPoint(ability.impactSound, transform.position);
 
         if (ability.aoeRadius <= 0)

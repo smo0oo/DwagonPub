@@ -16,6 +16,16 @@ public enum AbilityType
     DirectionalMelee
 }
 
+public enum VFXAnchor
+{
+    ProjectileSpawnPoint, // Default (Weapon tip)
+    LeftHand,
+    RightHand,
+    Feet,                 // Root
+    Center,               // Chest/Torso
+    Head
+}
+
 public enum AIUsageType
 {
     StandardDamage,
@@ -94,31 +104,41 @@ public class Ability : ScriptableObject
     [Tooltip("Optional: Override the default targeting reticle.")]
     public GameObject targetingReticleOverride;
 
+    [Header("VFX Locations")]
+    [Tooltip("Where should the VFX (both Casting and Cast) spawn on the character?")]
+    public VFXAnchor vfxAnchor = VFXAnchor.ProjectileSpawnPoint;
+
+    [Tooltip("Offset (X,Y,Z) relative to the chosen Anchor.")]
+    public Vector3 vfxPositionOffset;
+
+    [Tooltip("Rotation (X,Y,Z) relative to the chosen Anchor.")]
+    public Vector3 vfxRotationOffset;
+
+    [Header("VFX Prefabs")]
     [Tooltip("VFX played during wind-up (Casting/Telegraph). Loops until execution.")]
     public GameObject castingVFX;
-    [Tooltip("Should the wind-up VFX stick to the caster? (True = Charging in hand, False = Magic circle on ground)")]
+    [Tooltip("Should the wind-up VFX stick to the anchor (move with animation)?")]
     public bool attachCastingVFX = true;
 
     [Tooltip("VFX played at the moment of execution (The Swing/Muzzle Flash).")]
     public GameObject castVFX;
-    [Tooltip("Should the execution VFX stick to the caster? (True = Weapon Trail/Muzzle Flash, False = Ground Stomp/Dust)")]
-    public bool attachCastVFX = true; // Default to true for trails/flashes
+    [Tooltip("Should the execution VFX stick to the anchor (move with animation)?")]
+    public bool attachCastVFX = true;
+
+    [Tooltip("Delay (in seconds) after execution before the CastVFX spawns.")]
+    public float castVFXDelay = 0f;
 
     [Tooltip("VFX played at the target location/impact point.")]
     public GameObject hitVFX;
 
     [Header("Audio Layering (AAA)")]
-    [Tooltip("Looping sound played during the cast/wind-up.")]
     public AudioClip windupSound;
-    [Tooltip("One-shot sound played when the ability fires (Swing/Bang).")]
     public AudioClip castSound;
-    [Tooltip("Sound played on impact (Hit/Explosion).")]
     public AudioClip impactSound;
 
     [Header("Game Feel (AAA)")]
     [Range(0f, 2f)] public float screenShakeIntensity = 0f;
     [Range(0f, 1f)] public float screenShakeDuration = 0f;
-    // ------------------------------------------------
 
     [Header("Legacy / Simple Effects")]
     public List<string> effects = new List<string>();
