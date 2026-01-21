@@ -58,7 +58,13 @@ public class Ability : ScriptableObject
     public bool isAreaEffect = false;
     public AIUsageType usageType = AIUsageType.StandardDamage;
 
-    [Header("Casting")]
+    [Header("Casting Configuration")]
+    [Tooltip("If false, the casting bar UI will not appear for this ability.")]
+    public bool showCastBar = true;
+
+    [Tooltip("If true, the player can move freely while casting this ability.")]
+    public bool canMoveWhileCasting = false;
+
     public float castTime = 0f;
     public bool triggersGlobalCooldown = true;
     public float telegraphDuration = 0f;
@@ -104,24 +110,29 @@ public class Ability : ScriptableObject
     [Tooltip("Optional: Override the default targeting reticle.")]
     public GameObject targetingReticleOverride;
 
-    [Header("VFX Locations")]
-    [Tooltip("Where should the VFX (both Casting and Cast) spawn on the character?")]
-    public VFXAnchor vfxAnchor = VFXAnchor.ProjectileSpawnPoint;
-
-    [Tooltip("Offset (X,Y,Z) relative to the chosen Anchor.")]
-    public Vector3 vfxPositionOffset;
-
-    [Tooltip("Rotation (X,Y,Z) relative to the chosen Anchor.")]
-    public Vector3 vfxRotationOffset;
-
-    [Header("VFX Prefabs")]
+    // --- CASTING (WIND-UP) ---
+    [Header("Casting (Wind-up) Settings")]
     [Tooltip("VFX played during wind-up (Casting/Telegraph). Loops until execution.")]
     public GameObject castingVFX;
+    [Tooltip("Where should the Wind-up VFX appear?")]
+    public VFXAnchor castingVFXAnchor = VFXAnchor.LeftHand; // Default to hand for charging
+    [Tooltip("Offset (X,Y,Z) relative to the Casting Anchor.")]
+    public Vector3 castingVFXPositionOffset;
+    [Tooltip("Rotation (X,Y,Z) relative to the Casting Anchor.")]
+    public Vector3 castingVFXRotationOffset;
     [Tooltip("Should the wind-up VFX stick to the anchor (move with animation)?")]
     public bool attachCastingVFX = true;
 
+    // --- CAST (EXECUTION) ---
+    [Header("Cast (Execution) Settings")]
     [Tooltip("VFX played at the moment of execution (The Swing/Muzzle Flash).")]
     public GameObject castVFX;
+    [Tooltip("Where should the Execution VFX appear?")]
+    public VFXAnchor castVFXAnchor = VFXAnchor.ProjectileSpawnPoint; // Default to weapon tip
+    [Tooltip("Offset (X,Y,Z) relative to the Cast Anchor.")]
+    public Vector3 castVFXPositionOffset;
+    [Tooltip("Rotation (X,Y,Z) relative to the Cast Anchor.")]
+    public Vector3 castVFXRotationOffset;
     [Tooltip("Should the execution VFX stick to the anchor (move with animation)?")]
     public bool attachCastVFX = true;
 

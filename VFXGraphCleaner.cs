@@ -1,12 +1,12 @@
 using UnityEngine;
 using UnityEngine.VFX;
-using System.Collections; // Required for IEnumerator
+using System.Collections;
 
 [RequireComponent(typeof(VisualEffect))]
 public class VFXGraphCleaner : MonoBehaviour
 {
     [Header("Settings")]
-    [Tooltip("If > 0, the script will force the effect to STOP spawning after this many seconds. Use this for Constant Spawners (e.g., Smoke that lasts 2 seconds).")]
+    [Tooltip("If > 0, the script will force the effect to STOP spawning after this many seconds.")]
     public float duration = 0f;
 
     private VisualEffect vfx;
@@ -16,29 +16,34 @@ public class VFXGraphCleaner : MonoBehaviour
     void Awake()
     {
         vfx = GetComponent<VisualEffect>();
-        pooledObj = GetComponent<PooledObject>();
+        // Do NOT cache PooledObject here. It might not exist yet if instantiated by the pooler.
     }
 
     void OnEnable()
     {
+        // --- FIX: Get the component here ---
+        // OnEnable runs when the pooler calls SetActive(true), 
+        // which is GUARANTEED to happen after AddComponent<PooledObject>().
+        if (pooledObj == null)
+        {
+            pooledObj = GetComponent<PooledObject>();
+        }
+        // -----------------------------------
+
         stopSignalSent = false;
 
         if (vfx != null)
         {
-            // Reset the graph completely so it plays from the start
             vfx.Reinit();
             vfx.Play();
         }
 
-        // --- OPTIMIZATION: Start logic routines ---
         if (duration > 0)
         {
             StartCoroutine(DurationRoutine());
         }
         StartCoroutine(CheckAliveRoutine());
     }
-
-    // --- OPTIMIZATION: Replaced Update() with Coroutines ---
 
     private IEnumerator DurationRoutine()
     {
@@ -48,23 +53,20 @@ public class VFXGraphCleaner : MonoBehaviour
 
     private IEnumerator CheckAliveRoutine()
     {
-        // Wait a tiny bit to let particles spawn initially
         yield return new WaitForSeconds(0.1f);
 
-        WaitForSeconds wait = new WaitForSeconds(0.5f); // Check 2 times per second
+        WaitForSeconds wait = new WaitForSeconds(0.5f);
 
         while (true)
         {
             if (vfx != null && !stopSignalSent)
             {
-                // Only check if we are stopping or if it's a burst effect
                 if (vfx.aliveParticleCount == 0)
                 {
                     Cleanup();
-                    yield break; // Exit coroutine
+                    yield break;
                 }
             }
-            // If stop signal was sent, we specifically wait for particles to die
             else if (vfx != null && stopSignalSent)
             {
                 if (vfx.aliveParticleCount == 0)
@@ -76,7 +78,6 @@ public class VFXGraphCleaner : MonoBehaviour
             yield return wait;
         }
     }
-    // -------------------------------------------------------
 
     public void StopAndFade()
     {
@@ -85,19 +86,23 @@ public class VFXGraphCleaner : MonoBehaviour
         stopSignalSent = true;
         if (vfx != null)
         {
-            // This turns off the "Constant Spawn Rate" in the graph
             vfx.Stop();
         }
     }
 
     private void Cleanup()
     {
+        // Final safety check in case cached reference is somehow missing
+        if (pooledObj == null) pooledObj = GetComponent<PooledObject>();
+
         if (pooledObj != null)
         {
+            // Successfully return to pool
             pooledObj.ReturnToPool();
         }
         else
         {
+            // If it truly has no pool component, destroy it to prevent errors
             Destroy(gameObject);
         }
     }

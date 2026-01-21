@@ -19,15 +19,10 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     // --- AAA FEATURE: Manual VFX Anchors ---
     [Header("VFX Anchors (Optional Overrides)")]
-    [Tooltip("Assign a specific child object here to override the default Animator bone for Left Hand.")]
     public Transform leftHandAnchor;
-    [Tooltip("Assign a specific child object here to override the default Animator bone for Right Hand.")]
     public Transform rightHandAnchor;
-    [Tooltip("Assign a specific child object here to override the default Animator bone for Head/Eyes.")]
     public Transform headAnchor;
-    [Tooltip("Assign a specific child object here to override the default Root/Feet.")]
     public Transform feetAnchor;
-    [Tooltip("Assign a specific child object here to override the default Chest/Center.")]
     public Transform centerAnchor;
     // ---------------------------------------
 
@@ -52,8 +47,11 @@ public class PlayerAbilityHolder : MonoBehaviour
     private Vector3 queuedPosition;
     private bool hasQueuedAction = false;
 
+    // State Tracking
     public ChanneledBeamController ActiveBeam { get; private set; }
     public bool IsCasting { get; private set; } = false;
+    private Ability currentCastingAbility;
+
     public bool IsOnGlobalCooldown() => Time.time < globalCooldownTimer;
     public bool IsAnimationLocked { get; private set; } = false;
 
@@ -98,7 +96,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             animator = GetComponentInChildren<Animator>();
         }
 
-        if (animator == null) Debug.LogError($"[PlayerAbilityHolder] CRITICAL: No Animator found on {gameObject.name}!");
+        if (animator == null) Debug.LogWarning($"[PlayerAbilityHolder] No Animator found on {gameObject.name}!");
 
         audioSource = GetComponent<AudioSource>();
         movementHandler = GetComponentInParent<IMovementHandler>();
@@ -218,8 +216,15 @@ public class PlayerAbilityHolder : MonoBehaviour
     private IEnumerator PerformCast(Ability ability, GameObject target, Vector3 position, float castTime, bool bypassCooldown)
     {
         IsCasting = true;
-        if (navMeshAgent != null && navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath();
+        currentCastingAbility = ability;
 
+        // Only reset path if the ability demands standing still.
+        if (!ability.canMoveWhileCasting)
+        {
+            if (navMeshAgent != null && navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath();
+        }
+
+        // 1. Play Wind-up (Telegraph) Animation
         if (animator != null)
         {
             if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger)) animator.SetTrigger(ability.telegraphAnimationTrigger);
@@ -233,24 +238,19 @@ public class PlayerAbilityHolder : MonoBehaviour
             audioSource.Play();
         }
 
-        // --- Casting VFX (Windup) ---
+        // 2. Spawn Wind-up VFX
         if (ability.castingVFX != null)
         {
-            Transform anchor = GetAnchorTransform(ability.vfxAnchor);
+            Transform anchor = GetAnchorTransform(ability.castingVFXAnchor);
             currentCastingVFXInstance = ObjectPooler.instance.Get(ability.castingVFX, anchor.position, anchor.rotation);
 
             if (currentCastingVFXInstance != null)
             {
-                // Always set parent initially to apply offsets correctly in local space
                 currentCastingVFXInstance.transform.SetParent(anchor);
-                currentCastingVFXInstance.transform.localPosition = ability.vfxPositionOffset;
-                currentCastingVFXInstance.transform.localRotation = Quaternion.Euler(ability.vfxRotationOffset);
+                currentCastingVFXInstance.transform.localPosition = ability.castingVFXPositionOffset;
+                currentCastingVFXInstance.transform.localRotation = Quaternion.Euler(ability.castingVFXRotationOffset);
 
-                // If we don't want it attached, detach it now (it stays at the offset location)
-                if (!ability.attachCastingVFX)
-                {
-                    currentCastingVFXInstance.transform.SetParent(null);
-                }
+                if (!ability.attachCastingVFX) currentCastingVFXInstance.transform.SetParent(null);
             }
         }
 
@@ -258,14 +258,25 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         try
         {
-            if (CastingBarUIManager.instance != null) CastingBarUIManager.instance.StartCast(ability.abilityName, castTime);
+            if (ability.showCastBar && CastingBarUIManager.instance != null)
+            {
+                CastingBarUIManager.instance.StartCast(ability.abilityName, castTime);
+            }
 
             if (ability.telegraphDuration > 0) yield return new WaitForSeconds(ability.telegraphDuration);
             if (castTime > 0) yield return new WaitForSeconds(castTime);
 
             if (target == null && playerMovement != null) position = playerMovement.CurrentLookTarget;
 
-            ExecuteAbility(ability, target, position, bypassCooldown, false);
+            // --- FIX: Determine if we should play the Execution Animation ---
+            // If it's a projectile or melee attack, we MUST play the "Swing/Fire" animation 
+            // even if we just finished casting. 
+            // Channeled beams generally shouldn't re-trigger.
+            bool shouldPlayExecuteAnim = true;
+            if (ability.abilityType == AbilityType.ChanneledBeam) shouldPlayExecuteAnim = false;
+            // ----------------------------------------------------------------
+
+            ExecuteAbility(ability, target, position, bypassCooldown, shouldPlayExecuteAnim);
         }
         finally
         {
@@ -279,6 +290,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             }
 
             IsCasting = false;
+            currentCastingAbility = null;
             activeCastCoroutine = null;
             if (CastingBarUIManager.instance != null) CastingBarUIManager.instance.StopCast();
             if (HotbarManager.instance != null && HotbarManager.instance.LockingAbility == ability) HotbarManager.instance.LockingAbility = null;
@@ -374,17 +386,15 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     private void SpawnCastVFX(Ability ability)
     {
-        Transform anchor = GetAnchorTransform(ability.vfxAnchor);
+        Transform anchor = GetAnchorTransform(ability.castVFXAnchor);
         GameObject vfxInstance = ObjectPooler.instance.Get(ability.castVFX, anchor.position, anchor.rotation);
 
         if (vfxInstance != null)
         {
-            // Apply offsets relative to the anchor
             vfxInstance.transform.SetParent(anchor);
-            vfxInstance.transform.localPosition = ability.vfxPositionOffset;
-            vfxInstance.transform.localRotation = Quaternion.Euler(ability.vfxRotationOffset);
+            vfxInstance.transform.localPosition = ability.castVFXPositionOffset;
+            vfxInstance.transform.localRotation = Quaternion.Euler(ability.castVFXRotationOffset);
 
-            // Detach if requested
             if (!ability.attachCastVFX)
             {
                 vfxInstance.transform.SetParent(null);
@@ -392,10 +402,8 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    // --- HELPER: Find the correct Transform on the body ---
     private Transform GetAnchorTransform(VFXAnchor anchor)
     {
-        // 1. Check for manual overrides first
         switch (anchor)
         {
             case VFXAnchor.LeftHand:
@@ -415,7 +423,7 @@ public class PlayerAbilityHolder : MonoBehaviour
 
             case VFXAnchor.Feet:
                 if (feetAnchor != null) return feetAnchor;
-                return transform; // Root
+                return transform;
 
             case VFXAnchor.Center:
                 if (centerAnchor != null) return centerAnchor;
@@ -427,9 +435,8 @@ public class PlayerAbilityHolder : MonoBehaviour
                 return projectileSpawnPoint != null ? projectileSpawnPoint : transform;
         }
 
-        return transform; // Fallback
+        return transform;
     }
-    // -----------------------------------------------------
 
     private IEnumerator SpawnVFXWithDelay(Ability ability)
     {
@@ -513,13 +520,19 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    public void CancelCast()
+    public void CancelCast(bool isMovementInterrupt = false)
     {
+        if (isMovementInterrupt && IsCasting && currentCastingAbility != null && currentCastingAbility.canMoveWhileCasting)
+        {
+            return;
+        }
+
         if (activeCastCoroutine != null) { StopCoroutine(activeCastCoroutine); activeCastCoroutine = null; }
 
         if (audioSource != null) { audioSource.Stop(); audioSource.clip = null; }
 
         IsCasting = false;
+        currentCastingAbility = null;
         CleanupCastingVFX();
         ClearInputBuffer();
 

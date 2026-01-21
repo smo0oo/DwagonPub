@@ -120,7 +120,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
     void Start()
     {
-        // Capture the initial speed as the "True" speed
         if (navMeshAgent != null) wasdMoveSpeed = navMeshAgent.speed;
         UpdateWeaponTypeParameter();
         CurrentHeadLookPosition = transform.position + transform.forward * 5f;
@@ -215,7 +214,10 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         if (myHealth != null && myHealth.isDowned) return;
 
         bool isCommand = Input.GetKey(KeyCode.LeftControl);
-        if (abilityHolder != null) abilityHolder.CancelCast();
+
+        // --- FIX: Pass 'true' to signal this is a movement request ---
+        if (abilityHolder != null) abilityHolder.CancelCast(true);
+        // -------------------------------------------------------------
 
         Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
         RaycastHit[] allHits = Physics.RaycastAll(ray, 100f);
@@ -280,7 +282,9 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         if (clickLockoutFrames > 0) return;
         if (Input.GetKey(KeyCode.LeftControl)) return;
 
-        if (abilityHolder != null) abilityHolder.CancelCast();
+        // --- FIX: Pass 'true' to signal this is a movement request ---
+        if (abilityHolder != null) abilityHolder.CancelCast(true);
+        // -------------------------------------------------------------
 
         Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
         if (Physics.Raycast(ray, out RaycastHit hit, 100f, interactionLayers))
@@ -326,11 +330,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         {
             navMeshAgent.isStopped = false;
             navMeshAgent.updateRotation = false;
-
-            // --- FIX: Force Speed Reset when taking control ---
-            // If AI set speed to 50% for wandering, we must restore it here.
             navMeshAgent.speed = wasdMoveSpeed;
-            // --------------------------------------------------
         }
 
         if (playerEquipment != null) playerEquipment.OnEquipmentChanged += HandleEquipmentChanged;
@@ -340,9 +340,63 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     void OnDisable() { if (navMeshAgent != null && navMeshAgent.isOnNavMesh) { navMeshAgent.isStopped = true; navMeshAgent.ResetPath(); navMeshAgent.updatePosition = true; } StopAllCoroutines(); IsMovingToAttack = false; if (playerEquipment != null) playerEquipment.OnEquipmentChanged -= HandleEquipmentChanged; }
     private void UpdateAnimator() { if (animator == null) return; Vector3 worldVelocity = (currentMode == MovementMode.WASD && wasdVelocity.sqrMagnitude > 0.01f) ? wasdVelocity : navMeshAgent.velocity; Vector3 localVelocity = transform.InverseTransformDirection(worldVelocity); float speed = navMeshAgent.speed; float vZ = localVelocity.z / speed; float vX = localVelocity.x / speed; if (Mathf.Abs(vZ) < 0.05f) vZ = 0f; if (Mathf.Abs(vX) < 0.05f) vX = 0f; animator.SetFloat(velocityZHash, vZ, animationDampTime, Time.deltaTime); animator.SetFloat(velocityXHash, vX, animationDampTime, Time.deltaTime); }
 
-    private IEnumerator DodgeRollCoroutine() { isDodging = true; nextDodgeTime = Time.time + dodgeDuration + dodgeCooldown; abilityHolder.CancelCast(); StopMovement(); isFacingLocked = false; IsMovingToAttack = false; if (interactionCoroutine != null) StopCoroutine(interactionCoroutine); RotateTowardsMouse(true); if (animator != null) animator.SetTrigger(dodgeHash); Vector3 startPosition = transform.position; Vector3 destination = startPosition + transform.forward * dodgeDistance; if (NavMesh.SamplePosition(destination, out NavMeshHit hit, 2.0f, NavMesh.AllAreas)) destination = new Vector3(hit.position.x, startPosition.y, hit.position.z); else destination = startPosition; if (navMeshAgent.isOnNavMesh) navMeshAgent.enabled = false; if (mainCollider != null) mainCollider.enabled = false; float elapsedTime = 0f; while (elapsedTime < dodgeDuration) { transform.position = Vector3.Lerp(startPosition, destination, elapsedTime / dodgeDuration); elapsedTime += Time.deltaTime; yield return null; } transform.position = destination; if (mainCollider != null) mainCollider.enabled = true; navMeshAgent.enabled = true; if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(transform.position); isDodging = false; }
+    private IEnumerator DodgeRollCoroutine()
+    {
+        isDodging = true;
+        nextDodgeTime = Time.time + dodgeDuration + dodgeCooldown;
 
-    private void ProcessWasdInput() { float horizontal = Input.GetAxis("Horizontal"); float vertical = Input.GetAxis("Vertical"); if ((horizontal != 0 || vertical != 0)) { if (navMeshAgent.hasPath) navMeshAgent.ResetPath(); IsMovingToAttack = false; isFacingLocked = false; if (abilityHolder != null) abilityHolder.CancelCast(); } Vector3 cameraForward = mainCamera.transform.forward; Vector3 cameraRight = mainCamera.transform.right; cameraForward.y = 0; cameraRight.y = 0; cameraForward.Normalize(); cameraRight.Normalize(); Vector3 moveDirection = (cameraForward * vertical) + (cameraRight * horizontal); moveDirection.Normalize(); wasdVelocity = moveDirection * wasdMoveSpeed; navMeshAgent.Move(wasdVelocity * Time.deltaTime); transform.position = navMeshAgent.nextPosition; if (Input.GetMouseButtonDown(0)) HandleInteractionClick(); }
+        // Dodge should ALWAYS cancel cast, regardless of movement allowance
+        abilityHolder.CancelCast(false);
+
+        StopMovement();
+        isFacingLocked = false;
+        IsMovingToAttack = false;
+        if (interactionCoroutine != null) StopCoroutine(interactionCoroutine);
+        RotateTowardsMouse(true);
+        if (animator != null) animator.SetTrigger(dodgeHash);
+        Vector3 startPosition = transform.position;
+        Vector3 destination = startPosition + transform.forward * dodgeDistance;
+        if (NavMesh.SamplePosition(destination, out NavMeshHit hit, 2.0f, NavMesh.AllAreas)) destination = new Vector3(hit.position.x, startPosition.y, hit.position.z); else destination = startPosition;
+        if (navMeshAgent.isOnNavMesh) navMeshAgent.enabled = false;
+        if (mainCollider != null) mainCollider.enabled = false;
+        float elapsedTime = 0f;
+        while (elapsedTime < dodgeDuration) { transform.position = Vector3.Lerp(startPosition, destination, elapsedTime / dodgeDuration); elapsedTime += Time.deltaTime; yield return null; }
+        transform.position = destination;
+        if (mainCollider != null) mainCollider.enabled = true;
+        navMeshAgent.enabled = true;
+        if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(transform.position);
+        isDodging = false;
+    }
+
+    private void ProcessWasdInput()
+    {
+        float horizontal = Input.GetAxis("Horizontal");
+        float vertical = Input.GetAxis("Vertical");
+
+        if ((horizontal != 0 || vertical != 0))
+        {
+            if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
+            IsMovingToAttack = false;
+            isFacingLocked = false;
+
+            // --- FIX: Pass 'true' to signal movement ---
+            if (abilityHolder != null) abilityHolder.CancelCast(true);
+            // -------------------------------------------
+        }
+
+        Vector3 cameraForward = mainCamera.transform.forward;
+        Vector3 cameraRight = mainCamera.transform.right;
+        cameraForward.y = 0;
+        cameraRight.y = 0;
+        cameraForward.Normalize();
+        cameraRight.Normalize();
+        Vector3 moveDirection = (cameraForward * vertical) + (cameraRight * horizontal);
+        moveDirection.Normalize();
+        wasdVelocity = moveDirection * wasdMoveSpeed;
+        navMeshAgent.Move(wasdVelocity * Time.deltaTime);
+        transform.position = navMeshAgent.nextPosition;
+        if (Input.GetMouseButtonDown(0)) HandleInteractionClick();
+    }
 
     private void RotateTowardsMouse(bool forceRotation = false)
     {
