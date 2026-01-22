@@ -16,19 +16,19 @@ public class VFXGraphCleaner : MonoBehaviour
     void Awake()
     {
         vfx = GetComponent<VisualEffect>();
-        // Do NOT cache PooledObject here. It might not exist yet if instantiated by the pooler.
+        // DO NOT search for PooledObject here. 
+        // During the very first instantiation, ObjectPooler adds the component AFTER Awake runs.
     }
 
     void OnEnable()
     {
-        // --- FIX: Get the component here ---
-        // OnEnable runs when the pooler calls SetActive(true), 
-        // which is GUARANTEED to happen after AddComponent<PooledObject>().
+        // --- AAA FIX: Get the component here ---
+        // OnEnable runs when the pooler calls SetActive(true).
+        // By this time, the Pooler has definitely finished adding the component.
         if (pooledObj == null)
         {
             pooledObj = GetComponent<PooledObject>();
         }
-        // -----------------------------------
 
         stopSignalSent = false;
 
@@ -42,6 +42,7 @@ public class VFXGraphCleaner : MonoBehaviour
         {
             StartCoroutine(DurationRoutine());
         }
+
         StartCoroutine(CheckAliveRoutine());
     }
 
@@ -53,22 +54,16 @@ public class VFXGraphCleaner : MonoBehaviour
 
     private IEnumerator CheckAliveRoutine()
     {
+        // Give the VFX a frame to actually spawn particles
         yield return new WaitForSeconds(0.1f);
 
         WaitForSeconds wait = new WaitForSeconds(0.5f);
 
         while (true)
         {
-            if (vfx != null && !stopSignalSent)
+            if (vfx != null)
             {
-                if (vfx.aliveParticleCount == 0)
-                {
-                    Cleanup();
-                    yield break;
-                }
-            }
-            else if (vfx != null && stopSignalSent)
-            {
+                // If particles are finished and we haven't cleaned up yet
                 if (vfx.aliveParticleCount == 0)
                 {
                     Cleanup();
@@ -92,17 +87,17 @@ public class VFXGraphCleaner : MonoBehaviour
 
     private void Cleanup()
     {
-        // Final safety check in case cached reference is somehow missing
+        // Final safety check: If we somehow still don't have the reference, try one last time.
         if (pooledObj == null) pooledObj = GetComponent<PooledObject>();
 
         if (pooledObj != null)
         {
-            // Successfully return to pool
+            // Return to pool instead of destroying
             pooledObj.ReturnToPool();
         }
         else
         {
-            // If it truly has no pool component, destroy it to prevent errors
+            // Only destroy if this object was manually placed in the scene and NOT pooled.
             Destroy(gameObject);
         }
     }
