@@ -1,79 +1,122 @@
 using UnityEngine;
-using Cinemachine;
+using System.Collections;
 
 public class PlayerCameraController : MonoBehaviour
 {
-    [Header("References")]
-    // --- FIX: Corrected the typo in the class name ---
-    [Tooltip("Assign your main gameplay Cinemachine Virtual Camera here.")]
-    public CinemachineVirtualCamera gameplayCamera;
+    public static PlayerCameraController instance;
+
+    [Header("Target Settings")]
+    public Transform cameraTarget;
+    public Transform cameraPivot;
+    public GameObject cameraObject; // The actual Camera (or holder)
+
+    [Header("Movement Settings")]
+    public float moveSmoothTime = 0.1f;
+    public float rotateSmoothTime = 0.1f;
+    public float mouseSensitivity = 3.0f;
 
     [Header("Zoom Settings")]
-    [Tooltip("How fast the camera moves between the zoom points.")]
-    public float zoomSpeed = 5f;
+    public float minZoom = 2.0f;
+    public float maxZoom = 15.0f;
+    public float zoomSpeed = 5.0f;
+    public float currentZoom = 10.0f;
 
-    [Tooltip("The camera's offset from the player when fully zoomed OUT.")]
-    public Vector3 zoomedOutOffset = new Vector3(0, 10, -20);
-    [Tooltip("The camera's offset from the player when fully zoomed IN.")]
-    public Vector3 zoomedInOffset = new Vector3(0, 1, 0);
+    private Vector3 moveVelocity;
+    private Vector3 currentRotation;
+    private Vector3 targetRotation;
+    private float rotationVelocityX;
+    private float rotationVelocityY;
 
-    // This tracks the current zoom level, from 0 (out) to 1 (in).
-    private float currentZoom = 0f;
+    // --- AAA Shake Fix ---
+    private Vector3 shakeOffset;
+    private Coroutine shakeCoroutine;
+    // ---------------------
 
-    private CinemachineTransposer transposer;
-
-    void Start()
+    void Awake()
     {
-        if (gameplayCamera != null)
-        {
-            transposer = gameplayCamera.GetCinemachineComponent<CinemachineTransposer>();
-            // Set the initial camera position to the fully zoomed-out offset
-            if (transposer != null)
-            {
-                transposer.m_FollowOffset = zoomedOutOffset;
-            }
-        }
-
-        if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
-        {
-            HandleActivePlayerChanged(PartyManager.instance.ActivePlayer);
-        }
+        instance = this;
     }
 
     void OnEnable()
     {
-        PartyManager.OnActivePlayerChanged += HandleActivePlayerChanged;
+        // Listen for the ability shake event
+        PlayerAbilityHolder.OnCameraShakeRequest += TriggerCameraShake;
     }
 
     void OnDisable()
     {
-        PartyManager.OnActivePlayerChanged -= HandleActivePlayerChanged;
+        PlayerAbilityHolder.OnCameraShakeRequest -= TriggerCameraShake;
     }
 
-    private void HandleActivePlayerChanged(GameObject newPlayer)
+    void LateUpdate()
     {
-        if (gameplayCamera != null && newPlayer != null)
+        HandleCameraLogic();
+    }
+
+    private void HandleCameraLogic()
+    {
+        if (cameraTarget == null || cameraPivot == null || cameraObject == null) return;
+
+        // 1. Follow Target
+        transform.position = Vector3.SmoothDamp(transform.position, cameraTarget.position, ref moveVelocity, moveSmoothTime);
+
+        // 2. Handle Rotation
+        if (Input.GetMouseButton(1)) // Right click to rotate
         {
-            gameplayCamera.Follow = newPlayer.transform;
-            gameplayCamera.LookAt = newPlayer.transform;
+            float mouseX = Input.GetAxis("Mouse X") * mouseSensitivity;
+            float mouseY = Input.GetAxis("Mouse Y") * mouseSensitivity;
+
+            targetRotation.y += mouseX;
+            targetRotation.x -= mouseY;
+            targetRotation.x = Mathf.Clamp(targetRotation.x, -40, 85);
         }
+
+        currentRotation.x = Mathf.SmoothDampAngle(currentRotation.x, targetRotation.x, ref rotationVelocityX, rotateSmoothTime);
+        currentRotation.y = Mathf.SmoothDampAngle(currentRotation.y, targetRotation.y, ref rotationVelocityY, rotateSmoothTime);
+
+        cameraPivot.localRotation = Quaternion.Euler(currentRotation.x, 0, 0);
+        transform.rotation = Quaternion.Euler(0, currentRotation.y, 0);
+
+        // 3. Handle Zoom & Shake
+        HandleCameraZoom();
     }
 
-    void Update()
+    private void HandleCameraZoom()
     {
-        if (transposer == null) return;
-
         float scrollInput = Input.GetAxis("Mouse ScrollWheel");
-
-        if (scrollInput != 0)
+        if (Mathf.Abs(scrollInput) > 0.01f)
         {
-            currentZoom += scrollInput * zoomSpeed * Time.deltaTime;
-
-            currentZoom = Mathf.Clamp01(currentZoom);
-
-            Vector3 newOffset = Vector3.Lerp(zoomedOutOffset, zoomedInOffset, currentZoom);
-
-            transposer.m_FollowOffset = newOffset;
+            currentZoom -= scrollInput * zoomSpeed;
+            currentZoom = Mathf.Clamp(currentZoom, minZoom, maxZoom);
         }
+
+        // AAA FIX: Add the shakeOffset to the zoom position.
+        // This ensures shake works regardless of how zoomed in/out you are.
+        Vector3 targetLocalPos = new Vector3(0, 0, -currentZoom);
+
+        // Apply Zoom + Shake
+        cameraObject.transform.localPosition = Vector3.Lerp(cameraObject.transform.localPosition, targetLocalPos, Time.deltaTime * 10f) + shakeOffset;
+    }
+
+    public void TriggerCameraShake(float intensity, float duration)
+    {
+        if (shakeCoroutine != null) StopCoroutine(shakeCoroutine);
+        shakeCoroutine = StartCoroutine(ShakeRoutine(intensity, duration));
+    }
+
+    private IEnumerator ShakeRoutine(float intensity, float duration)
+    {
+        float elapsed = 0f;
+        while (elapsed < duration)
+        {
+            // Generate random offset within a sphere
+            shakeOffset = Random.insideUnitSphere * intensity;
+
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        // Reset
+        shakeOffset = Vector3.zero;
     }
 }

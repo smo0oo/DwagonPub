@@ -32,8 +32,11 @@ public class DomeController : MonoBehaviour
     private SphereCollider domeCollider;
     private Health domeHealth;
 
+    // --- AAA FIX: This is your "Temporary Variable" ---
+    // It stores the calculated max power and persists across player switches.
     private float minPower;
     private float maxPower;
+    // -------------------------------------------------
 
     private float currentRadius;
     private Collider[] burnBuffer = new Collider[50];
@@ -48,7 +51,12 @@ public class DomeController : MonoBehaviour
         if (domeCollider != null) domeCollider.isTrigger = false;
     }
 
-    void Start() { ActivateDome(); }
+    void Start()
+    {
+        ActivateDome();
+        // Calculate stats ONCE at the start of the scene.
+        RecalculateDomeStats();
+    }
 
     public void SetDomeActive(bool isActive)
     {
@@ -59,7 +67,7 @@ public class DomeController : MonoBehaviour
     private void ActivateDome()
     {
         this.enabled = true;
-        gameObject.layer = LayerMask.NameToLayer("Dome"); // Center is "Dome"
+        gameObject.layer = LayerMask.NameToLayer("Dome");
         if (domeCollider != null) domeCollider.enabled = true;
 
         if (domeHealth != null)
@@ -70,12 +78,8 @@ public class DomeController : MonoBehaviour
 
         SpawnEdgeMarkers();
 
-        HandlePartyStatsChanged(null);
-        if (domeHealth != null)
-        {
-            if (domeHealth.currentHealth <= 0) domeHealth.SetToMaxHealth();
-            UpdateDomeHealthUI();
-        }
+        // Ensure UI is synced if we reactivate
+        if (maxPower > 0) UpdateDomePower(domeHealth != null ? domeHealth.currentHealth : maxPower);
     }
 
     private void DeactivateDome()
@@ -119,57 +123,121 @@ public class DomeController : MonoBehaviour
     public void LinkUIManager(DomeUIManager manager)
     {
         uiManager = manager;
-        HandlePartyStatsChanged(null);
-        UpdateDomeHealthUI();
+        // Sync UI to the already calculated stats
+        if (maxPower > 0)
+        {
+            uiManager.UpdateSliderRange(minPower, maxPower);
+            if (domeHealth != null) uiManager.UpdateSliderValue(domeHealth.currentHealth);
+        }
+        else
+        {
+            RecalculateDomeStats();
+        }
     }
 
     void OnEnable()
     {
         if (domeHealth != null) { domeHealth.OnHealthChanged += UpdateDomeHealthUI; }
-        PartyManager.OnActivePlayerChanged += HandlePartyStatsChanged;
+
+        // AAA FIX: Subscribe ONLY to LevelUp. 
+        // Do NOT subscribe to OnActivePlayerChanged.
+        if (PartyManager.instance != null)
+        {
+            PartyManager.instance.OnLevelUp += RecalculateDomeStats;
+        }
     }
 
     void OnDisable()
     {
         if (domeHealth != null) { domeHealth.OnHealthChanged -= UpdateDomeHealthUI; }
-        PartyManager.OnActivePlayerChanged -= HandlePartyStatsChanged;
+
+        if (PartyManager.instance != null)
+        {
+            PartyManager.instance.OnLevelUp -= RecalculateDomeStats;
+        }
     }
 
-    private void HandlePartyStatsChanged(GameObject activePlayer)
+    // AAA FIX: Renamed from HandlePartyStatsChanged to indicate it's a heavy calculation
+    // designed to run rarely (Start or LevelUp), NOT on player switch.
+    public void RecalculateDomeStats()
     {
         if (!this.enabled || PartyManager.instance == null) return;
 
         minPower = PartyManager.instance.domeBasePower;
         int totalFaith = 0;
+
+        // Iterate all members (active or inactive) to get a stable "Party Faith" value
         foreach (var member in PartyManager.instance.partyMembers)
         {
-            if (member != null && member.activeInHierarchy)
+            if (member != null)
             {
-                PlayerStats stats = member.GetComponentInChildren<PlayerStats>();
+                // 'true' includes disabled objects, ensuring we capture stats even if the GO is off
+                PlayerStats stats = member.GetComponentInChildren<PlayerStats>(true);
                 if (stats != null) totalFaith += stats.finalFaith;
             }
         }
 
+        // Store the result in our class-level variable
         maxPower = minPower + (totalFaith * healthPerFaithPoint);
-        if (domeHealth != null && Mathf.Abs(domeHealth.maxHealth - (int)maxPower) > 1)
+
+        // Apply to Dome Health
+        if (domeHealth != null)
         {
-            domeHealth.UpdateMaxHealth((int)maxPower);
-            domeHealth.SetToMaxHealth();
+            // Only update/heal if the max power actually changed (e.g. Level Up)
+            if (domeHealth.maxHealth != (int)maxPower)
+            {
+                domeHealth.UpdateMaxHealth((int)maxPower);
+                domeHealth.SetToMaxHealth(); // Refill on Level Up/Start
+            }
         }
 
-        if (uiManager != null) uiManager.UpdateSliderRange(minPower, maxPower);
+        // Update UI Range
+        if (uiManager != null)
+        {
+            uiManager.UpdateSliderRange(minPower, maxPower);
+            if (domeHealth != null)
+            {
+                uiManager.UpdateSliderValue(domeHealth.currentHealth);
+                uiManager.UpdateHealthUI(domeHealth.currentHealth, domeHealth.maxHealth);
+            }
+        }
+
+        // Force Visual Update
         if (domeHealth != null) UpdateDomePower(domeHealth.currentHealth);
     }
 
     private void UpdateDomeHealthUI()
     {
-        if (uiManager != null && domeHealth != null) uiManager.UpdateHealthUI(domeHealth.currentHealth, domeHealth.maxHealth);
+        if (uiManager != null && domeHealth != null)
+        {
+            uiManager.UpdateHealthUI(domeHealth.currentHealth, domeHealth.maxHealth);
+            uiManager.UpdateSliderValue(domeHealth.currentHealth);
+        }
+
+        // AAA FIX: Ensure the physical dome shrinks when damage is taken
+        if (domeHealth != null) UpdateDomePower(domeHealth.currentHealth);
     }
 
     public void UpdateDomePower(float currentPower)
     {
         if (!this.enabled) return;
-        float powerPercent = (maxPower > minPower) ? Mathf.InverseLerp(minPower, maxPower, currentPower) : 0f;
+
+        float powerPercent = 0f;
+
+        // Robust Percentage Logic
+        if (currentPower >= maxPower && maxPower > 0)
+        {
+            powerPercent = 1.0f;
+        }
+        else if (maxPower > minPower)
+        {
+            powerPercent = Mathf.InverseLerp(minPower, maxPower, currentPower);
+        }
+        else
+        {
+            powerPercent = 0f;
+        }
+
         currentRadius = Mathf.Lerp(minRadius, maxRadius, powerPercent);
 
         if (domeVisuals != null) domeVisuals.localScale = new Vector3(currentRadius * 2, currentRadius * 2, currentRadius * 2);
@@ -200,20 +268,9 @@ public class DomeController : MonoBehaviour
         {
             float angle = i * (360f / markerCount);
             Vector3 position = Quaternion.Euler(0, angle, 0) * Vector3.forward;
-
             GameObject marker = Instantiate(edgeMarkerPrefab, transform.position + position, Quaternion.identity, this.transform);
-
-            // --- FIX: Removed the line that overwrote the layer ---
-            // marker.layer = this.gameObject.layer; <--- DELETED THIS LINE
-            // Now the marker keeps its own Layer (16/DomeMarker) and Tag
-            // ----------------------------------------------------
-
             Health markerHealth = marker.GetComponent<Health>();
-            if (markerHealth != null)
-            {
-                markerHealth.forwardDamageTo = this.domeHealth;
-            }
-
+            if (markerHealth != null) markerHealth.forwardDamageTo = this.domeHealth;
             edgeMarkers.Add(marker);
         }
     }

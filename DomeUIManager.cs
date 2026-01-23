@@ -16,12 +16,11 @@ public class DomeUIManager : MonoBehaviour
     public Image mitigationFill;
     public TextMeshProUGUI mitigationText;
 
-    // --- NEW VARIABLE ADDED HERE ---
     [Header("Keyboard Control")]
-    [Tooltip("How much to increase/decrease the dome power when using PageUp/PageDown keys.")]
     public float keyStepAmount = 1f;
 
     private DomeController domeController;
+    private bool isUpdatingProgrammatically = false; // AAA Safety Flag
 
     void Start()
     {
@@ -33,20 +32,16 @@ public class DomeUIManager : MonoBehaviour
         if (mitigationText != null) mitigationText.gameObject.SetActive(false);
     }
 
-    // --- UPDATE METHOD MODIFIED HERE ---
     void Update()
     {
-        // Only process keyboard input if the slider is active and usable.
         if (domePowerSlider != null && domePowerSlider.gameObject.activeInHierarchy)
         {
             if (Input.GetKeyDown(KeyCode.PageUp))
             {
-                // Increase the slider's value by the step amount, clamping it to the max value.
                 domePowerSlider.value = Mathf.Clamp(domePowerSlider.value + keyStepAmount, domePowerSlider.minValue, domePowerSlider.maxValue);
             }
             else if (Input.GetKeyDown(KeyCode.PageDown))
             {
-                // Decrease the slider's value by the step amount, clamping it to the min value.
                 domePowerSlider.value = Mathf.Clamp(domePowerSlider.value - keyStepAmount, domePowerSlider.minValue, domePowerSlider.maxValue);
             }
         }
@@ -57,36 +52,67 @@ public class DomeUIManager : MonoBehaviour
         domeController = controller;
         if (domeController == null) return;
 
-        if (domePowerSlider != null) domePowerSlider.gameObject.SetActive(true);
-        if (currentPowerText != null) currentPowerText.gameObject.SetActive(true);
-        if (healthBarFill != null) healthBarFill.gameObject.SetActive(true);
-        if (healthText != null) healthText.gameObject.SetActive(true);
-        if (mitigationFill != null) mitigationFill.gameObject.SetActive(true);
-        if (mitigationText != null) mitigationText.gameObject.SetActive(true);
+        SetElementsActive(true);
 
         if (domePowerSlider != null)
         {
             domePowerSlider.onValueChanged.RemoveAllListeners();
-            domePowerSlider.onValueChanged.AddListener(UpdateDome);
+            domePowerSlider.onValueChanged.AddListener(OnSliderValueChanged);
         }
+    }
+
+    private void SetElementsActive(bool active)
+    {
+        if (domePowerSlider != null) domePowerSlider.gameObject.SetActive(active);
+        if (currentPowerText != null) currentPowerText.gameObject.SetActive(active);
+        if (healthBarFill != null) healthBarFill.gameObject.SetActive(active);
+        if (healthText != null) healthText.gameObject.SetActive(active);
+        if (mitigationFill != null) mitigationFill.gameObject.SetActive(active);
+        if (mitigationText != null) mitigationText.gameObject.SetActive(active);
     }
 
     public void UpdateSliderRange(float min, float max)
     {
         if (domePowerSlider == null) return;
+
+        isUpdatingProgrammatically = true; // Lock events
+
         domePowerSlider.minValue = min;
         domePowerSlider.maxValue = max;
-        domePowerSlider.value = min;
-        UpdateDome(min);
+
+        // Ensure value is within bounds
+        if (domePowerSlider.value < min) domePowerSlider.value = min;
+        else if (domePowerSlider.value > max) domePowerSlider.value = max;
+
+        isUpdatingProgrammatically = false; // Unlock
     }
 
-    private void UpdateDome(float value)
+    public void UpdateSliderValue(float value)
     {
+        if (domePowerSlider != null)
+        {
+            isUpdatingProgrammatically = true; // Lock events
+            domePowerSlider.SetValueWithoutNotify(value);
+            UpdatePowerText(value);
+            isUpdatingProgrammatically = false; // Unlock
+        }
+    }
+
+    private void OnSliderValueChanged(float value)
+    {
+        // AAA FIX: Stop Feedback Loops
+        if (isUpdatingProgrammatically) return;
+
         if (domeController != null)
         {
             domeController.UpdateDomePower(value);
         }
-        if (currentPowerText != null)
+        UpdatePowerText(value);
+    }
+
+    private void UpdatePowerText(float value)
+    {
+        if (currentPowerText != null && domePowerSlider != null)
         {
             currentPowerText.text = $"Dome Power: {(int)value} / {(int)domePowerSlider.maxValue}";
         }
@@ -108,14 +134,7 @@ public class DomeUIManager : MonoBehaviour
     {
         if (healthBarFill != null)
         {
-            if (maxHealth > 0)
-            {
-                healthBarFill.fillAmount = (float)currentHealth / maxHealth;
-            }
-            else
-            {
-                healthBarFill.fillAmount = 0;
-            }
+            healthBarFill.fillAmount = (maxHealth > 0) ? (float)currentHealth / maxHealth : 0;
         }
         if (healthText != null)
         {

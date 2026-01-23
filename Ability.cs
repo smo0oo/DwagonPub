@@ -59,12 +59,8 @@ public class Ability : ScriptableObject
     public AIUsageType usageType = AIUsageType.StandardDamage;
 
     [Header("Casting Configuration")]
-    [Tooltip("If false, the casting bar UI will not appear for this ability.")]
     public bool showCastBar = true;
-
-    [Tooltip("If true, the player can move freely while casting this ability.")]
     public bool canMoveWhileCasting = false;
-
     public float castTime = 0f;
     public bool triggersGlobalCooldown = true;
     public float telegraphDuration = 0f;
@@ -105,42 +101,35 @@ public class Ability : ScriptableObject
     public float manaDrain = 15f;
     public float tickRate = 0.25f;
 
-    // --- AAA UPGRADE: Visual Effects & Feedback ---
     [Header("Visual Feedback (AAA)")]
-    [Tooltip("Optional: Override the default targeting reticle.")]
     public GameObject targetingReticleOverride;
 
-    // --- CASTING (WIND-UP) ---
     [Header("Casting (Wind-up) Settings")]
-    [Tooltip("VFX played during wind-up (Casting/Telegraph). Loops until execution.")]
     public GameObject castingVFX;
-    [Tooltip("Where should the Wind-up VFX appear?")]
-    public VFXAnchor castingVFXAnchor = VFXAnchor.LeftHand; // Default to hand for charging
-    [Tooltip("Offset (X,Y,Z) relative to the Casting Anchor.")]
+    public VFXAnchor castingVFXAnchor = VFXAnchor.LeftHand;
     public Vector3 castingVFXPositionOffset;
-    [Tooltip("Rotation (X,Y,Z) relative to the Casting Anchor.")]
     public Vector3 castingVFXRotationOffset;
-    [Tooltip("Should the wind-up VFX stick to the anchor (move with animation)?")]
     public bool attachCastingVFX = true;
 
-    // --- CAST (EXECUTION) ---
     [Header("Cast (Execution) Settings")]
-    [Tooltip("VFX played at the moment of execution (The Swing/Muzzle Flash).")]
     public GameObject castVFX;
-    [Tooltip("Where should the Execution VFX appear?")]
-    public VFXAnchor castVFXAnchor = VFXAnchor.ProjectileSpawnPoint; // Default to weapon tip
-    [Tooltip("Offset (X,Y,Z) relative to the Cast Anchor.")]
+    public VFXAnchor castVFXAnchor = VFXAnchor.ProjectileSpawnPoint;
     public Vector3 castVFXPositionOffset;
-    [Tooltip("Rotation (X,Y,Z) relative to the Cast Anchor.")]
     public Vector3 castVFXRotationOffset;
-    [Tooltip("Should the execution VFX stick to the anchor (move with animation)?")]
     public bool attachCastVFX = true;
-
-    [Tooltip("Delay (in seconds) after execution before the CastVFX spawns.")]
     public float castVFXDelay = 0f;
 
-    [Tooltip("VFX played at the target location/impact point.")]
+    // --- AAA UPGRADE: Impact Visuals ---
+    [Header("Hit / Impact VFX Settings")]
+    [Tooltip("VFX played at the target location or impact point.")]
     public GameObject hitVFX;
+
+    [Tooltip("Use this to fix VFX that spawn too high or too low. Positive Y moves it up.")]
+    public Vector3 hitVFXPositionOffset;
+
+    [Tooltip("Allows you to tilt the impact VFX (useful for ground decals or directional bursts).")]
+    public Vector3 hitVFXRotationOffset;
+    // -----------------------------------
 
     [Header("Audio Layering (AAA)")]
     public AudioClip windupSound;
