@@ -1,5 +1,6 @@
 using UnityEngine;
 using Cinemachine;
+using System.Collections;
 
 public class PlayerCameraController : MonoBehaviour
 {
@@ -17,27 +18,34 @@ public class PlayerCameraController : MonoBehaviour
     [Tooltip("The camera's offset from the player when fully zoomed IN.")]
     public Vector3 zoomedInOffset = new Vector3(0, 1, 0);
 
-    // --- NEW: Default Zoom Level Configuration ---
+    // --- Default Zoom Configuration ---
     [Range(0f, 1f)]
     [Tooltip("The starting zoom level (0 = Fully Out, 1 = Fully In).")]
     public float defaultZoomLevel = 0.5f;
-    // ---------------------------------------------
 
-    // This tracks the current zoom level, from 0 (out) to 1 (in).
+    // Internal State
     private float currentZoom = 0f;
-
     private CinemachineTransposer transposer;
+    private CinemachineBasicMultiChannelPerlin noisePerlin;
+    private Coroutine shakeCoroutine;
 
     void Start()
     {
         if (gameplayCamera != null)
         {
             transposer = gameplayCamera.GetCinemachineComponent<CinemachineTransposer>();
+            noisePerlin = gameplayCamera.GetCinemachineComponent<CinemachineBasicMultiChannelPerlin>();
+
+            // FIX: Ensure shake is OFF at the start
+            if (noisePerlin != null)
+            {
+                noisePerlin.m_AmplitudeGain = 0f;
+            }
 
             // Set the initial camera position based on the defaultZoomLevel
             if (transposer != null)
             {
-                currentZoom = defaultZoomLevel; // Initialize our tracker
+                currentZoom = defaultZoomLevel;
                 transposer.m_FollowOffset = Vector3.Lerp(zoomedOutOffset, zoomedInOffset, currentZoom);
             }
         }
@@ -51,11 +59,13 @@ public class PlayerCameraController : MonoBehaviour
     void OnEnable()
     {
         PartyManager.OnActivePlayerChanged += HandleActivePlayerChanged;
+        PlayerAbilityHolder.OnCameraShakeRequest += TriggerShake;
     }
 
     void OnDisable()
     {
         PartyManager.OnActivePlayerChanged -= HandleActivePlayerChanged;
+        PlayerAbilityHolder.OnCameraShakeRequest -= TriggerShake;
     }
 
     private void HandleActivePlayerChanged(GameObject newPlayer)
@@ -76,12 +86,42 @@ public class PlayerCameraController : MonoBehaviour
         if (scrollInput != 0)
         {
             currentZoom += scrollInput * zoomSpeed * Time.deltaTime;
-
             currentZoom = Mathf.Clamp01(currentZoom);
 
             Vector3 newOffset = Vector3.Lerp(zoomedOutOffset, zoomedInOffset, currentZoom);
-
             transposer.m_FollowOffset = newOffset;
         }
+    }
+
+    // --- Shake Logic ---
+
+    private void TriggerShake(float intensity, float duration)
+    {
+        // Safety: Ensure we have the noise component
+        if (noisePerlin == null)
+        {
+            if (gameplayCamera != null)
+                noisePerlin = gameplayCamera.GetCinemachineComponent<CinemachineBasicMultiChannelPerlin>();
+
+            if (noisePerlin == null) return; // Still null? Exit.
+        }
+
+        if (shakeCoroutine != null) StopCoroutine(shakeCoroutine);
+        shakeCoroutine = StartCoroutine(ProcessShake(intensity, duration));
+    }
+
+    private IEnumerator ProcessShake(float intensity, float duration)
+    {
+        // Turn Shake ON
+        noisePerlin.m_AmplitudeGain = intensity;
+
+        // Ensure Frequency is non-zero so the shake actually happens
+        if (noisePerlin.m_FrequencyGain == 0f) noisePerlin.m_FrequencyGain = 1f;
+
+        yield return new WaitForSeconds(duration);
+
+        // Turn Shake OFF
+        noisePerlin.m_AmplitudeGain = 0f;
+        shakeCoroutine = null;
     }
 }

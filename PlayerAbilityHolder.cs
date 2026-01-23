@@ -45,7 +45,7 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     public ChanneledBeamController ActiveBeam { get; private set; }
     public bool IsCasting { get; private set; } = false;
-    private Ability currentCastingAbility; 
+    private Ability currentCastingAbility;
 
     private Dictionary<Ability, float> cooldowns = new Dictionary<Ability, float>();
     private PlayerStats playerStats;
@@ -238,7 +238,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (currentCastingVFXInstance != null)
         {
             VFXGraphCleaner[] cleaners = currentCastingVFXInstance.GetComponentsInChildren<VFXGraphCleaner>();
-            if (cleaners.Length > 0) foreach(var c in cleaners) c.StopAndFade();
+            if (cleaners.Length > 0) foreach (var c in cleaners) c.StopAndFade();
             else
             {
                 PooledObject pooled = currentCastingVFXInstance.GetComponentInParent<PooledObject>();
@@ -268,7 +268,14 @@ public class PlayerAbilityHolder : MonoBehaviour
             else SpawnCastVFX(ability, aimRotation);
         }
 
-        if (ability.screenShakeIntensity > 0) OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration);
+        // --- SHAKE TRIGGER ---
+        // Only trigger if intensity > 0 to prevent unnecessary event calls
+        if (ability.screenShakeIntensity > 0)
+        {
+            OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration);
+        }
+        // ---------------------
+
         OnPlayerAbilityUsed?.Invoke(this, ability);
         if (triggerAnimation) TriggerAttackAnimation(ability);
 
@@ -456,12 +463,10 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    // --- UPDATED: Impact Visuals with Offset ---
     private void HandleGroundAOE(Ability ability, Vector3 position)
     {
         if (ability.hitVFX != null)
         {
-            // Apply the position and rotation offsets defined in the Ability asset
             Vector3 spawnPos = position + ability.hitVFXPositionOffset;
             Quaternion spawnRot = Quaternion.Euler(ability.hitVFXRotationOffset);
 
@@ -470,17 +475,17 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
 
         if (ability.impactSound != null) AudioSource.PlayClipAtPoint(ability.impactSound, position);
-        
+
         Collider[] _aoeBuffer = new Collider[100];
         int hitCount = Physics.OverlapSphereNonAlloc(position, ability.aoeRadius, _aoeBuffer, targetLayers);
-        
+
         HashSet<CharacterRoot> hitRoots = new HashSet<CharacterRoot>();
         for (int i = 0; i < hitCount; i++)
         {
             CharacterRoot hitCharacter = _aoeBuffer[i].GetComponentInParent<CharacterRoot>();
             if (hitCharacter == null || hitRoots.Contains(hitCharacter)) continue;
             hitRoots.Add(hitCharacter);
-            
+
             bool isAlly = GetComponentInParent<CharacterRoot>().gameObject.layer == hitCharacter.gameObject.layer;
             foreach (var effect in (isAlly ? ability.friendlyEffects : ability.hostileEffects)) effect.Apply(gameObject, hitCharacter.gameObject);
         }
