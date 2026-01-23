@@ -1,5 +1,5 @@
 using UnityEngine;
-using System.Text; // Required
+using System.Text;
 
 public class FloatingTextManager : MonoBehaviour
 {
@@ -27,12 +27,10 @@ public class FloatingTextManager : MonoBehaviour
         else instance = this;
     }
 
-    // --- NEW: Generic Text Method ---
     public void ShowText(string text, Vector3 position, Color color)
     {
         SpawnText(text, position, false, color);
     }
-    // --------------------------------
 
     public void ShowAIStatus(string text, Vector3 position)
     {
@@ -41,7 +39,6 @@ public class FloatingTextManager : MonoBehaviour
 
     public void ShowDamage(int amount, bool isCrit, DamageEffect.DamageType damageType, Vector3 position)
     {
-        // Zero-Garbage String Construction
         sb.Clear();
         sb.Append(amount);
 
@@ -88,6 +85,8 @@ public class FloatingTextManager : MonoBehaviour
     private void SpawnText(string text, Vector3 pos, bool isCrit, Color color)
     {
         if (floatingTextPrefab == null) return;
+
+        // 1. Get object (It might be Inactive coming from the pool)
         GameObject obj = ObjectPooler.instance.Get(floatingTextPrefab, pos, Quaternion.identity);
         if (obj == null) return;
 
@@ -98,20 +97,28 @@ public class FloatingTextManager : MonoBehaviour
             ft.SetStyle(isCrit);
             ft.SetColor(color);
         }
+
+        // 2. AAA FIX: Explicitly activate the object to trigger OnEnable/Animation
+        obj.SetActive(true);
     }
 
     private void SpawnTextBuilder(StringBuilder text, Vector3 pos, bool isCrit, Color color)
     {
         if (floatingTextPrefab == null) return;
+
+        // 1. Get object (It might be Inactive coming from the pool)
         GameObject obj = ObjectPooler.instance.Get(floatingTextPrefab, pos, Quaternion.identity);
         if (obj == null) return;
 
         FloatingText ft = obj.GetComponent<FloatingText>();
         if (ft != null)
         {
-            ft.SetText(text); // Uses the optimized overload
+            ft.SetText(text);
             ft.SetStyle(isCrit);
             ft.SetColor(color);
         }
+
+        // 2. AAA FIX: Explicitly activate the object to trigger OnEnable/Animation
+        obj.SetActive(true);
     }
 }

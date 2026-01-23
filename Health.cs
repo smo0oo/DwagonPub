@@ -1,5 +1,5 @@
 using UnityEngine;
-using UnityEngine.VFX; // Required for VisualEffectAsset
+using UnityEngine.VFX;
 using System;
 
 public class Health : MonoBehaviour
@@ -18,7 +18,6 @@ public class Health : MonoBehaviour
     public int currentHealth;
 
     [Header("Death Settings")]
-    [Tooltip("If true, the object is destroyed at 0 HP (Enemies). If false, it enters Downed state (Players).")]
     public bool destroyOnDeath = true;
 
     [Header("Invulnerability Settings")]
@@ -27,10 +26,7 @@ public class Health : MonoBehaviour
 
     // --- AAA VISUAL FX SYSTEM ---
     [Header("Visual Effects (Surface System)")]
-    [Tooltip("Defines how this object reacts to different damage types (Flesh, Metal, Bone, etc.). Assign a SurfaceDefinition asset here.")]
     public SurfaceDefinition surfaceDefinition;
-
-    [Tooltip("Offset from the character's pivot for hit effects. Set Y to ~1.5 to hit the chest.")]
     public Vector3 hitVFXOffset = new Vector3(0, 1.5f, 0);
     // ----------------------------
 
@@ -38,7 +34,6 @@ public class Health : MonoBehaviour
     public bool isDowned { get; private set; } = false;
 
     [Header("AI Settings")]
-    [Tooltip("If this character is an NPC, it will call for help if its health drops below this percentage (0-1).")]
     public float callForHelpThreshold = 0.4f;
     private int helpThresholdValue;
 
@@ -52,11 +47,9 @@ public class Health : MonoBehaviour
     private PlayerStats playerStats;
     private CharacterRoot root;
 
-    // --- Optimization Caches ---
     private int originalLayer;
     private static int ignoreRaycastLayer = -1;
 
-    // Animator Hashes
     private static readonly int IsDownedHash = Animator.StringToHash("IsDowned");
     private static readonly int DeathHash = Animator.StringToHash("Death");
     private static readonly int IdleHash = Animator.StringToHash("Idle");
@@ -102,23 +95,19 @@ public class Health : MonoBehaviour
 
     public void TakeDamage(int amount, DamageEffect.DamageType damageType, bool isCrit, GameObject caster)
     {
-        // 1. Forwarding Logic (e.g. for multi-part bosses)
         if (forwardDamageTo != null)
         {
             forwardDamageTo.TakeDamage(amount, damageType, isCrit, caster);
             return;
         }
 
-        // 2. Invulnerability Checks
         if (isInvulnerable || debugGodMode || isDead || isDowned) return;
 
         int healthBeforeDamage = currentHealth;
 
-        // 3. Mitigation Logic (Dodge / Resist)
         float finalDamage = amount;
         if (playerStats != null)
         {
-            // Dodge Check
             if (UnityEngine.Random.value < (playerStats.secondaryStats.dodgeChance / 100f))
             {
                 if (FloatingTextManager.instance != null)
@@ -126,14 +115,12 @@ public class Health : MonoBehaviour
                 return;
             }
 
-            // Resistance Check
             if (damageType == DamageEffect.DamageType.Magical)
                 finalDamage *= (1 - playerStats.secondaryStats.magicResistance / 100f);
             else
                 finalDamage *= (1 - playerStats.secondaryStats.physicalResistance / 100f);
         }
 
-        // Global Reduction (e.g. Defensive Stance)
         finalDamage *= (1f - damageReductionPercent);
         int damageToDeal = Mathf.Max(0, Mathf.FloorToInt(finalDamage));
 
@@ -142,10 +129,8 @@ public class Health : MonoBehaviour
         // --- 4. AAA VISUAL FX IMPLEMENTATION ---
         if (surfaceDefinition != null && damageToDeal > 0)
         {
-            // A. Get Data (Prefab, Graph, Sound) from Surface Profile
             surfaceDefinition.GetReaction(damageType, out GameObject prefab, out VisualEffectAsset graph, out AudioClip sound);
 
-            // B. Calculate Rotation (Effect faces the attacker)
             Quaternion rotation = Quaternion.identity;
             if (caster != null)
             {
@@ -153,29 +138,30 @@ public class Health : MonoBehaviour
                 if (dir != Vector3.zero) rotation = Quaternion.LookRotation(dir);
             }
 
-            // C. Spawn Logic
             GameObject vfxInstance = null;
 
-            // Priority A: Use Raw Graph (Optimized with Container)
             if (graph != null && surfaceDefinition.vfxContainerPrefab != null)
             {
-                // Spawn the generic container
                 vfxInstance = ObjectPooler.instance.Get(surfaceDefinition.vfxContainerPrefab, transform.position + hitVFXOffset, rotation);
 
-                // Inject the specific asset (e.g. Blood Asset) into the container
-                if (vfxInstance != null && vfxInstance.TryGetComponent<VisualEffect>(out var vfxComp))
+                if (vfxInstance != null)
                 {
-                    vfxComp.visualEffectAsset = graph;
-                    vfxComp.Play();
+                    if (vfxInstance.TryGetComponent<VisualEffect>(out var vfxComp))
+                    {
+                        vfxComp.visualEffectAsset = graph;
+                        vfxComp.Play();
+                    }
+                    // AAA FIX: Activate the container!
+                    vfxInstance.SetActive(true);
                 }
             }
-            // Priority B: Use Standard Prefab (Legacy)
             else if (prefab != null)
             {
                 vfxInstance = ObjectPooler.instance.Get(prefab, transform.position + hitVFXOffset, rotation);
+                // AAA FIX: Activate the prefab!
+                if (vfxInstance != null) vfxInstance.SetActive(true);
             }
 
-            // D. Play Sound
             if (sound != null)
             {
                 AudioSource.PlayClipAtPoint(sound, transform.position);
@@ -183,7 +169,6 @@ public class Health : MonoBehaviour
         }
         // ------------------------------------
 
-        // 5. Events & UI
         OnDamageTaken?.Invoke(new DamageInfo { Caster = caster, Target = this.gameObject, Amount = damageToDeal, IsCrit = isCrit, DamageType = damageType });
 
         if (healthBeforeDamage > helpThresholdValue && currentHealth <= helpThresholdValue)
@@ -200,7 +185,6 @@ public class Health : MonoBehaviour
         if (currentHealth < 0) currentHealth = 0;
         OnHealthChanged?.Invoke();
 
-        // 6. Death Logic
         if (currentHealth <= 0)
         {
             if (destroyOnDeath) Die();

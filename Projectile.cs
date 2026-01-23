@@ -18,7 +18,7 @@ public class Projectile : MonoBehaviour
     private int casterLayer;
 
     private float lifetimeTimer;
-    private PooledObject pooledObject; // Reference to our helper script
+    private PooledObject pooledObject;
 
     void Awake()
     {
@@ -27,16 +27,12 @@ public class Projectile : MonoBehaviour
 
     void OnEnable()
     {
-        // Get the component here instead. This runs after the pooler has added it.
         if (pooledObject == null)
         {
             pooledObject = GetComponent<PooledObject>();
         }
     }
 
-    /// <summary>
-    /// Initializes the projectile with fresh data every time it's pulled from the pool.
-    /// </summary>
     public void Initialize(Ability ability, GameObject caster, int layer)
     {
         this.sourceAbility = ability;
@@ -44,31 +40,25 @@ public class Projectile : MonoBehaviour
         this.casterLayer = layer;
         this.lifetimeTimer = lifetime;
 
-        // --- FIX: Jump-start the VFX so it looks fully formed immediately ---
         if (preWarmVFX)
         {
             ParticleSystem[] particles = GetComponentsInChildren<ParticleSystem>();
             foreach (var ps in particles)
             {
-                // Reset first to clear any old state from the pool
                 ps.Clear();
                 ps.Play();
-
-                // Fast-forward the simulation
                 ps.Simulate(preWarmSeconds, true, false);
             }
         }
-        // -------------------------------------------------------------------
     }
 
     void Update()
     {
-        // Manual lifetime countdown
         lifetimeTimer -= Time.deltaTime;
         if (lifetimeTimer <= 0f)
         {
             if (pooledObject != null) pooledObject.ReturnToPool();
-            else Destroy(gameObject); // Fallback if not pooled
+            else Destroy(gameObject);
             return;
         }
 
@@ -79,12 +69,14 @@ public class Projectile : MonoBehaviour
     {
         CharacterRoot hitCharacterRoot = other.GetComponentInParent<CharacterRoot>();
 
-        // 1. Hit Wall / Environment (No CharacterRoot found)
+        // 1. Hit Wall / Environment
         if (hitCharacterRoot == null)
         {
             if (sourceAbility != null && sourceAbility.hitVFX != null)
             {
-                ObjectPooler.instance.Get(sourceAbility.hitVFX, transform.position, Quaternion.identity);
+                // AAA FIX: Capture and Activate
+                GameObject vfx = ObjectPooler.instance.Get(sourceAbility.hitVFX, transform.position, Quaternion.identity);
+                if (vfx != null) vfx.SetActive(true);
             }
             if (pooledObject != null) pooledObject.ReturnToPool();
             else Destroy(gameObject);
@@ -99,7 +91,6 @@ public class Projectile : MonoBehaviour
 
         if (sourceAbility != null)
         {
-            // Safety check: if caster is missing, just destroy
             if (caster == null)
             {
                 if (pooledObject != null) pooledObject.ReturnToPool();
@@ -110,16 +101,17 @@ public class Projectile : MonoBehaviour
             int targetLayer = hitCharacterRoot.gameObject.layer;
             bool isAlly = casterLayer == targetLayer;
 
-            // Pass through allies if there are no friendly effects
             if (isAlly && (sourceAbility.friendlyEffects == null || sourceAbility.friendlyEffects.Count == 0))
             {
-                return; // Return implies "Keep flying, do not destroy"
+                return;
             }
 
             // Hit Logic
             if (sourceAbility.hitVFX != null)
             {
-                ObjectPooler.instance.Get(sourceAbility.hitVFX, transform.position, Quaternion.identity);
+                // AAA FIX: Capture and Activate
+                GameObject vfx = ObjectPooler.instance.Get(sourceAbility.hitVFX, transform.position, Quaternion.identity);
+                if (vfx != null) vfx.SetActive(true);
             }
 
             var effectsToApply = isAlly ? sourceAbility.friendlyEffects : sourceAbility.hostileEffects;

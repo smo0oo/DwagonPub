@@ -9,7 +9,7 @@ public class DomeAbilityHolder : MonoBehaviour
 
     private Dictionary<Ability, float> cooldowns = new Dictionary<Ability, float>();
 
-    // --- NEW: Buffers for Non-Allocating Physics and lists ---
+    // Buffers for Non-Allocating Physics
     private Collider[] _aoeBuffer = new Collider[100];
     private List<CharacterRoot> _affectedCharactersBuffer = new List<CharacterRoot>(100);
 
@@ -31,7 +31,13 @@ public class DomeAbilityHolder : MonoBehaviour
         if (!CanUseAbility(ability, target)) return;
 
         PayCostAndStartCooldown(ability, bypassCooldown);
-        if (ability.castVFX != null) ObjectPooler.instance.Get(ability.castVFX, transform.position, transform.rotation);
+
+        // AAA FIX: Activate Cast VFX
+        if (ability.castVFX != null)
+        {
+            GameObject vfx = ObjectPooler.instance.Get(ability.castVFX, transform.position, transform.rotation);
+            if (vfx != null) vfx.SetActive(true);
+        }
 
         switch (ability.abilityType)
         {
@@ -55,7 +61,13 @@ public class DomeAbilityHolder : MonoBehaviour
         if (!CanUseAbility(ability, null)) return;
 
         PayCostAndStartCooldown(ability, bypassCooldown);
-        if (ability.castVFX != null) ObjectPooler.instance.Get(ability.castVFX, transform.position, transform.rotation);
+
+        // AAA FIX: Activate Cast VFX
+        if (ability.castVFX != null)
+        {
+            GameObject vfx = ObjectPooler.instance.Get(ability.castVFX, transform.position, transform.rotation);
+            if (vfx != null) vfx.SetActive(true);
+        }
 
         switch (ability.abilityType)
         {
@@ -90,13 +102,16 @@ public class DomeAbilityHolder : MonoBehaviour
 
     private void HandleGroundAOE(Ability ability, Vector3 position)
     {
-        if (ability.hitVFX != null) ObjectPooler.instance.Get(ability.hitVFX, position, Quaternion.identity);
+        // AAA FIX: Activate Hit VFX
+        if (ability.hitVFX != null)
+        {
+            GameObject vfx = ObjectPooler.instance.Get(ability.hitVFX, position, Quaternion.identity);
+            if (vfx != null) vfx.SetActive(true);
+        }
 
-        // --- MODIFIED: Use Non-Allocating version and reusable list ---
         int hitCount = Physics.OverlapSphereNonAlloc(position, ability.aoeRadius, _aoeBuffer);
         _affectedCharactersBuffer.Clear();
 
-        // FIX: Pre-fetch layer IDs to avoid string lookups inside the loop
         int playerLayer = LayerMask.NameToLayer("Player");
         int friendlyLayer = LayerMask.NameToLayer("Friendly");
 
@@ -110,16 +125,9 @@ public class DomeAbilityHolder : MonoBehaviour
             }
             _affectedCharactersBuffer.Add(hitCharacter);
 
-            // --- FIX START: Improved Hostility Check ---
-            // Previously: bool isHostile = hitCharacter.gameObject.layer != this.gameObject.layer;
-            // This was causing self-damage because the Wagon layer != Player layer.
-
             int targetLayer = hitCharacter.gameObject.layer;
             bool isTargetFriendly = (targetLayer == playerLayer || targetLayer == friendlyLayer);
-
-            // If the target is NOT friendly, we consider it hostile.
             bool isHostile = !isTargetFriendly;
-            // --- FIX END ---
 
             var effectsToApply = isHostile ? ability.hostileEffects : ability.friendlyEffects;
 
@@ -175,6 +183,9 @@ public class DomeAbilityHolder : MonoBehaviour
         {
             projectile.Initialize(ability, this.gameObject, this.gameObject.layer);
         }
+
+        // AAA FIX: Explicitly activate the projectile
+        projectileGO.SetActive(true);
     }
 
     private void HandleSelfCast(Ability ability)
@@ -188,7 +199,6 @@ public class DomeAbilityHolder : MonoBehaviour
             return;
         }
 
-        // --- MODIFIED: Use Non-Allocating version and reusable list ---
         int hitCount = Physics.OverlapSphereNonAlloc(transform.position, ability.aoeRadius, _aoeBuffer);
         _affectedCharactersBuffer.Clear();
 
@@ -201,7 +211,6 @@ public class DomeAbilityHolder : MonoBehaviour
                 continue;
             }
 
-            // Note: HandleSelfCast specifically looks for Players to buff, which is why your passive heals worked.
             if (hitCharacter.gameObject.layer == LayerMask.NameToLayer("Player"))
             {
                 _affectedCharactersBuffer.Add(hitCharacter);
