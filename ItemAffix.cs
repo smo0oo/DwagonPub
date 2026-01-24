@@ -1,5 +1,5 @@
 using UnityEngine;
-using System.Collections.Generic; // <--- THIS WAS MISSING
+using System.Collections.Generic;
 
 public enum AffixType { Prefix, Suffix }
 
@@ -12,6 +12,10 @@ public class ItemAffix : ScriptableObject
     [Header("Restrictions")]
     // Only allow this affix on specific item types (e.g., can't have +Damage on Chest armor)
     public List<ItemType> allowedItemTypes;
+
+    [Header("Economy")]
+    [Tooltip("Multiply the item's base value. 1.5 = +50% price.")]
+    public float priceMultiplier = 1.0f;
 
     [Header("Stat Modifiers")]
     // Ranges allow for variance (e.g. +5 to +10 Strength)
