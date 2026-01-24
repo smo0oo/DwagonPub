@@ -10,8 +10,8 @@ public class TradeContextMenu : MonoBehaviour
     public Button splitButton;
     public Button destroyButton;
     public Button dropButton;
-    public Button sellButton; // New button
-    public Button buyButton;  // New button
+    public Button sellButton;
+    public Button buyButton;
 
     private TradeManager tradeManager;
     private TradeSlot sourceSlot;
@@ -19,7 +19,7 @@ public class TradeContextMenu : MonoBehaviour
     public void Initialize(TradeManager manager)
     {
         tradeManager = manager;
-        gameObject.SetActive(false); // Start hidden
+        gameObject.SetActive(false);
     }
 
     public void Open(TradeSlot slot)
@@ -28,14 +28,13 @@ public class TradeContextMenu : MonoBehaviour
         gameObject.SetActive(true);
         transform.position = Input.mousePosition;
 
-        // Make sure all buttons are off before we start
+        // Reset
         splitButton.gameObject.SetActive(false);
         destroyButton.gameObject.SetActive(false);
         dropButton.gameObject.SetActive(false);
         sellButton.gameObject.SetActive(false);
         buyButton.gameObject.SetActive(false);
 
-        // Get the item stack to check its properties
         ItemStack itemStack = slot.GetItemStack();
         if (itemStack == null || itemStack.itemData == null)
         {
@@ -43,10 +42,8 @@ public class TradeContextMenu : MonoBehaviour
             return;
         }
 
-        // Configure buttons based on whether it's a player or NPC slot
         if (slot.isPlayerSlot)
         {
-            // Show buttons relevant to the player's inventory
             dropButton.gameObject.SetActive(true);
             destroyButton.gameObject.SetActive(true);
             sellButton.gameObject.SetActive(true);
@@ -55,13 +52,18 @@ public class TradeContextMenu : MonoBehaviour
                 splitButton.gameObject.SetActive(true);
             }
         }
-        else // It's an NPC slot
+        else // NPC slot
         {
-            // Show buttons relevant to the NPC's inventory
             buyButton.gameObject.SetActive(true);
         }
 
-        // Add listeners
+        // Clean Add listeners
+        splitButton.onClick.RemoveAllListeners();
+        destroyButton.onClick.RemoveAllListeners();
+        dropButton.onClick.RemoveAllListeners();
+        sellButton.onClick.RemoveAllListeners();
+        buyButton.onClick.RemoveAllListeners();
+
         splitButton.onClick.AddListener(OnSplitClicked);
         destroyButton.onClick.AddListener(OnDestroyClicked);
         dropButton.onClick.AddListener(OnDropClicked);
@@ -69,7 +71,6 @@ public class TradeContextMenu : MonoBehaviour
         buyButton.onClick.AddListener(OnBuyClicked);
     }
 
-    // --- New Click Handlers ---
     private void OnSellClicked()
     {
         tradeManager.SellItem(sourceSlot);
@@ -82,10 +83,8 @@ public class TradeContextMenu : MonoBehaviour
         Close();
     }
 
-    // --- Existing Click Handlers ---
     private void OnSplitClicked()
     {
-        // This now calls the new method on the TradeManager
         tradeManager.OpenStackSplitter(sourceSlot);
         Close();
     }
@@ -104,12 +103,6 @@ public class TradeContextMenu : MonoBehaviour
 
     public void Close()
     {
-        // Important to remove all listeners
-        splitButton.onClick.RemoveAllListeners();
-        destroyButton.onClick.RemoveAllListeners();
-        dropButton.onClick.RemoveAllListeners();
-        sellButton.onClick.RemoveAllListeners();
-        buyButton.onClick.RemoveAllListeners();
         gameObject.SetActive(false);
     }
 }

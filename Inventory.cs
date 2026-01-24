@@ -165,6 +165,17 @@ public class Inventory : MonoBehaviour
         return false;
     }
 
+    // --- FIX: Added Missing Method ---
+    /// <summary>
+    /// Finds the index of the first slot containing the specified item data. 
+    /// Returns -1 if not found.
+    /// </summary>
+    public int FindItemIndex(ItemData itemToFind)
+    {
+        return items.FindIndex(stack => stack.itemData == itemToFind);
+    }
+    // --------------------------------
+
     public void SortItems(SortType sortType)
     {
         if (sortType == SortType.Default)

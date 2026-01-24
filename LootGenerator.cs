@@ -29,12 +29,35 @@ public class LootGenerator : MonoBehaviour
 
                         GameObject droppedItemGO = Instantiate(worldItemPrefab, transform.position, randomRotation);
 
-                        // --- MODIFIED: Changed GetComponent to GetComponentInChildren ---
+                        // Use GetComponentInChildren in case the script is on a child visual object
                         WorldItem worldItem = droppedItemGO.GetComponentInChildren<WorldItem>();
 
                         if (worldItem != null)
                         {
-                            worldItem.itemData = drop.itemData;
+                            // --- ARPG RANDOMIZATION LOGIC ---
+                            if (drop.itemData.isStackable)
+                            {
+                                // Stackable items (Potions, Currency) do not get random prefixes/suffixes.
+                                // We use the reference to the original ScriptableObject.
+                                worldItem.itemData = drop.itemData;
+                            }
+                            else
+                            {
+                                // Unique items (Weapons, Armor) go through the Factory to get randomized stats.
+                                if (LootFactory.instance != null)
+                                {
+                                    worldItem.itemData = LootFactory.instance.GenerateLoot(drop.itemData);
+                                }
+                                else
+                                {
+                                    // Fallback if LootFactory is missing from the scene: 
+                                    // Instantiate a clean copy so we don't accidentally modify the project asset.
+                                    worldItem.itemData = Instantiate(drop.itemData);
+                                    worldItem.itemData.name = drop.itemData.name;
+                                }
+                            }
+                            // --------------------------------
+
                             worldItem.quantity = quantity;
                         }
                         else
@@ -46,6 +69,7 @@ public class LootGenerator : MonoBehaviour
             }
         }
 
+        // Grant Experience to the Party
         if (experienceValue > 0 && PartyManager.instance != null)
         {
             PartyManager.instance.AddExperience(experienceValue);

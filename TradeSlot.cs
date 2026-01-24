@@ -27,13 +27,14 @@ public class TradeSlot : MonoBehaviour, IDropHandler, IBeginDragHandler, IDragHa
 
     public void UpdateSlot(ItemStack itemStack)
     {
-        currentStack = itemStack; // Keep a reference to the stack
+        currentStack = itemStack;
         if (itemStack != null && itemStack.itemData != null && itemStack.quantity > 0)
         {
             iconImage.sprite = itemStack.itemData.icon;
             iconImage.enabled = true;
             quantityText.text = itemStack.quantity > 1 ? itemStack.quantity.ToString() : "";
             quantityText.enabled = true;
+            iconImage.color = Color.white; // Reset color
         }
         else
         {
@@ -44,17 +45,35 @@ public class TradeSlot : MonoBehaviour, IDropHandler, IBeginDragHandler, IDragHa
         }
     }
 
+    // --- 2. Affordability Visuals ---
+    public void SetAffordability(bool canAfford)
+    {
+        if (currentStack == null || currentStack.itemData == null) return;
+
+        // Dim the icon if we can't afford it
+        iconImage.color = canAfford ? Color.white : new Color(1f, 1f, 1f, 0.4f); // 40% opacity for unaffordable
+    }
+
     public ItemStack GetItemStack() => currentStack;
 
     #region Event Forwarding
 
     public void OnPointerClick(PointerEventData eventData)
     {
+        if (currentStack == null || currentStack.itemData == null) return;
+
+        // Existing Right Click Logic (Context Menu)
         if (eventData.button == PointerEventData.InputButton.Right)
         {
-            if (currentStack != null && currentStack.itemData != null)
+            tradeManager.OpenContextMenu(this);
+        }
+        // --- 1. Quick-Action Shortcuts ---
+        // Shift + Left Click to instantly Buy/Sell
+        else if (eventData.button == PointerEventData.InputButton.Left)
+        {
+            if (Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift))
             {
-                tradeManager.OpenContextMenu(this);
+                tradeManager.HandleShiftClick(this);
             }
         }
     }
