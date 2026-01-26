@@ -3,7 +3,7 @@ using UnityEngine.UI;
 using UnityEngine.EventSystems;
 using TMPro;
 
-public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPointerExitHandler, IPointerClickHandler, IDropTarget
+public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPointerExitHandler, IPointerClickHandler, IDropTarget, IDragSource
 {
     [Header("UI References")]
     public Image iconImage;
@@ -17,7 +17,7 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
     public Color usableColor = Color.white;
 
     public bool IsOutOfRange { get; set; } = false;
-    public int SlotIndex { get; private set; } // For locked slot logic
+    public int SlotIndex { get; private set; }
 
     private HotbarManager hotbarManager;
     private InventoryManager inventoryManager;
@@ -27,38 +27,79 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
     private HotbarAssignment currentAssignment;
     private UIDragDropController dragDropController;
 
-    // Called by HotbarManager
-    public void Initialize(int index)
+    // Reference to the helper script (Must be attached to the Icon Image)
+    private UIIconEffect _iconEffect;
+
+    // --- IDragSource Implementation ---
+    public object GetItem()
     {
+        if (currentAssignment == null) return null;
+        if (currentAssignment.type == HotbarAssignment.AssignmentType.Ability) return currentAssignment.ability;
+        if (currentAssignment.type == HotbarAssignment.AssignmentType.Item)
+        {
+            if (hotbarManager != null && hotbarManager.playerInventory != null)
+            {
+                if (currentAssignment.inventorySlotIndex < hotbarManager.playerInventory.items.Count)
+                    return hotbarManager.playerInventory.items[currentAssignment.inventorySlotIndex];
+            }
+        }
+        return null;
+    }
+
+    public void OnDropSuccess(IDropTarget target)
+    {
+        if (target is TrashSlot) hotbarManager.ClearHotbarSlot(SlotIndex);
+    }
+    // ----------------------------------
+
+    public void Initialize(HotbarManager manager, int index)
+    {
+        hotbarManager = manager;
         SlotIndex = index;
     }
 
     void Start()
     {
-        // Get singletons for robustness
-        hotbarManager = HotbarManager.instance;
+        if (hotbarManager == null) hotbarManager = HotbarManager.instance;
         inventoryManager = InventoryManager.instance;
-        dragDropController = FindAnyObjectByType<UIDragDropController>();
+
+        dragDropController = Object.FindFirstObjectByType<UIDragDropController>();
 
         button = GetComponent<Button>();
         if (button != null) button.onClick.AddListener(() => TriggerSlot(null));
+
+        // Setup the Icon Effect Helper
+        if (iconImage != null)
+        {
+            _iconEffect = iconImage.GetComponent<UIIconEffect>();
+            // Only log error if strictly necessary for setup
+            if (_iconEffect == null)
+            {
+                Debug.LogError($"[Slot {SlotIndex}] 'UIIconEffect' script is missing from the Icon Image! Please attach it in the Prefab.", this);
+            }
+        }
     }
 
     void Update()
     {
-        if (abilityHolder == null || currentAssignment == null || currentAssignment.type != HotbarAssignment.AssignmentType.Ability || currentAssignment.ability == null)
+        // 1. UNASSIGNED
+        if (abilityHolder == null || currentAssignment == null || currentAssignment.type == HotbarAssignment.AssignmentType.Unassigned)
         {
             if (button != null) button.interactable = true;
             if (cooldownOverlay != null) cooldownOverlay.fillAmount = 0;
-            if (iconImage != null && iconImage.enabled)
-            {
-                iconImage.color = usableColor;
-            }
             return;
         }
 
+        // 2. RESOLVE ABILITY
         Ability ability = currentAssignment.ability;
 
+        if (ability == null)
+        {
+            SetVisualState(usableColor, 0f, true);
+            return;
+        }
+
+        // 3. CHECK REQUIREMENTS
         bool hasEnoughMana = playerStats != null && playerStats.currentMana >= ability.manaCost;
         bool hasCorrectWeapon = true;
         if (ability.requiresWeaponType)
@@ -68,37 +109,36 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
 
         if (!hasEnoughMana || !hasCorrectWeapon)
         {
-            iconImage.color = requirementNotMetColor;
-            if (button != null) button.interactable = false;
-            if (cooldownOverlay != null) cooldownOverlay.fillAmount = 0;
+            SetVisualState(requirementNotMetColor, 1f, false);
             return;
         }
 
+        // 4. CHECK COOLDOWNS
         bool onCooldown = abilityHolder.GetCooldownStatus(ability, out float remaining);
         bool onGlobalCooldown = ability.triggersGlobalCooldown && abilityHolder.IsOnGlobalCooldown();
         bool isLockedByOtherAbility = HotbarManager.instance != null && HotbarManager.instance.LockingAbility != null && HotbarManager.instance.LockingAbility != ability;
 
-        if (onCooldown)
+        float fill = 0f;
+        if (onCooldown) fill = remaining / ability.cooldown;
+
+        if (onCooldown || onGlobalCooldown || isLockedByOtherAbility || IsOutOfRange)
         {
-            cooldownOverlay.fillAmount = remaining / ability.cooldown;
+            SetVisualState(temporarilyUnusableColor, 1f, false);
+            if (cooldownOverlay != null) cooldownOverlay.fillAmount = fill;
         }
         else
         {
-            cooldownOverlay.fillAmount = 0;
+            SetVisualState(usableColor, 0f, true);
+            if (cooldownOverlay != null) cooldownOverlay.fillAmount = 0;
         }
+    }
 
-        bool isTemporarilyUnusable = onCooldown || onGlobalCooldown || isLockedByOtherAbility || IsOutOfRange;
-
-        if (isTemporarilyUnusable)
-        {
-            iconImage.color = temporarilyUnusableColor;
-            if (button != null) button.interactable = false;
-        }
-        else
-        {
-            iconImage.color = usableColor;
-            if (button != null) button.interactable = true;
-        }
+    // Helper to centralize visual updates
+    private void SetVisualState(Color tint, float desaturation, bool interactable)
+    {
+        if (iconImage != null) iconImage.color = tint;
+        if (_iconEffect != null) _iconEffect.SetDesaturation(desaturation);
+        if (button != null) button.interactable = interactable;
     }
 
     public void TriggerSlot(GameObject hoverTarget)
@@ -111,65 +151,66 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
 
     private void OnHotbarSlotClicked(GameObject hoverTarget)
     {
+        if (InventoryUIController.instance == null) return;
+
         PlayerAbilityHolder activeAbilityHolder = InventoryUIController.instance.ActivePlayerAbilityHolder;
         Inventory activeInventory = InventoryUIController.instance.ActivePlayerInventory;
         GameObject currentPlayer = InventoryUIController.instance.ActivePlayer;
+
         if (currentAssignment == null || activeAbilityHolder == null || currentPlayer == null) return;
         if (HotbarManager.instance.LockingAbility != null && HotbarManager.instance.LockingAbility != currentAssignment.ability) return;
+
         PlayerMovement playerMovement = currentPlayer.GetComponent<PlayerMovement>();
 
         if (currentAssignment.type == HotbarAssignment.AssignmentType.Item)
         {
-            ItemStack itemStack = activeInventory.items[currentAssignment.inventorySlotIndex];
-            if (itemStack != null && itemStack.itemData != null && itemStack.itemData.stats is ItemConsumableStats consumableStats)
+            if (activeInventory != null && currentAssignment.inventorySlotIndex < activeInventory.items.Count)
             {
-                Ability usageAbility = consumableStats.usageAbility;
-                if (usageAbility != null)
+                ItemStack itemStack = activeInventory.items[currentAssignment.inventorySlotIndex];
+                if (itemStack != null && itemStack.itemData != null && itemStack.itemData.stats is ItemConsumableStats consumableStats)
                 {
-                    activeAbilityHolder.UseAbility(usageAbility, currentPlayer);
-                    activeInventory.RemoveItem(currentAssignment.inventorySlotIndex, 1);
+                    Ability usageAbility = consumableStats.usageAbility;
+                    if (usageAbility != null)
+                    {
+                        activeAbilityHolder.UseAbility(usageAbility, currentPlayer);
+                        activeInventory.RemoveItem(currentAssignment.inventorySlotIndex, 1);
+                    }
                 }
             }
         }
         else if (currentAssignment.type == HotbarAssignment.AssignmentType.Ability)
         {
             Ability abilityToUse = currentAssignment.ability;
+            if (abilityToUse == null) return;
+
             switch (abilityToUse.abilityType)
             {
                 case AbilityType.Charge:
                     GameObject chargeTarget = hoverTarget != null ? hoverTarget : playerMovement?.TargetObject;
-                    if (chargeTarget != null && playerMovement != null)
-                    {
-                        playerMovement.InitiateCharge(chargeTarget, abilityToUse);
-                    }
+                    if (chargeTarget != null && playerMovement != null) playerMovement.InitiateCharge(chargeTarget, abilityToUse);
                     break;
                 case AbilityType.TargetedProjectile:
                 case AbilityType.TargetedMelee:
                     GameObject finalTarget = hoverTarget != null ? hoverTarget : playerMovement?.TargetObject;
-                    if (finalTarget != null && playerMovement != null)
-                    {
-                        playerMovement.StartFollowingTarget(finalTarget, abilityToUse);
-                    }
+                    if (finalTarget != null && playerMovement != null) playerMovement.StartFollowingTarget(finalTarget, abilityToUse);
                     break;
-
                 case AbilityType.DirectionalMelee:
-                    // This type does not need a target and fires immediately.
                     activeAbilityHolder.UseAbility(abilityToUse, currentPlayer);
                     break;
-
                 case AbilityType.GroundAOE:
                 case AbilityType.GroundPlacement:
                 case AbilityType.Leap:
                 case AbilityType.Teleport:
-                    if (TargetingController.instance != null && TargetingController.instance.IsTargeting)
+                    if (TargetingController.instance != null)
                     {
-                        TargetingController.instance.ConfirmTargetingWithKey();
-                    }
-                    else
-                    {
-                        if (playerMovement != null) playerMovement.IsGroundTargeting = true;
-                        if (abilityToUse.locksPlayerActivity) HotbarManager.instance.LockingAbility = abilityToUse;
-                        TargetingController.instance.StartTargeting(abilityToUse, activeAbilityHolder);
+                        if (TargetingController.instance.IsTargeting && TargetingController.instance.GetCurrentTargetingAbility() == abilityToUse)
+                            TargetingController.instance.ConfirmTargetingWithKey();
+                        else
+                        {
+                            if (playerMovement != null) playerMovement.IsGroundTargeting = true;
+                            if (abilityToUse.locksPlayerActivity) HotbarManager.instance.LockingAbility = abilityToUse;
+                            TargetingController.instance.StartTargeting(abilityToUse, activeAbilityHolder);
+                        }
                     }
                     break;
                 case AbilityType.ChanneledBeam:
@@ -177,14 +218,8 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
                     break;
                 case AbilityType.Self:
                 case AbilityType.ForwardProjectile:
-                    if (abilityToUse.abilityType == AbilityType.ForwardProjectile)
-                    {
-                        activeAbilityHolder.UseAbility(abilityToUse, (GameObject)null);
-                    }
-                    else
-                    {
-                        activeAbilityHolder.UseAbility(abilityToUse, currentPlayer);
-                    }
+                    if (abilityToUse.abilityType == AbilityType.ForwardProjectile) activeAbilityHolder.UseAbility(abilityToUse, (GameObject)null);
+                    else activeAbilityHolder.UseAbility(abilityToUse, currentPlayer);
                     break;
             }
         }
@@ -193,36 +228,218 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
     public void SetKeybindText(string text) { if (keybindText != null) { keybindText.text = text; } }
     public void LinkToPlayer(PlayerAbilityHolder newHolder, PlayerStats newStats) { this.abilityHolder = newHolder; this.playerStats = newStats; }
     public void Assign(HotbarAssignment assignment) => currentAssignment = assignment;
-    public void UpdateSlot(ItemStack itemStack) { if (cooldownOverlay != null) cooldownOverlay.fillAmount = 0; if (itemStack != null && itemStack.itemData != null && itemStack.quantity > 0) { iconImage.sprite = itemStack.itemData.icon; iconImage.enabled = true; iconImage.color = usableColor; quantityText.text = itemStack.quantity > 1 ? itemStack.quantity.ToString() : ""; quantityText.enabled = true; } else { iconImage.sprite = null; iconImage.enabled = false; quantityText.text = ""; quantityText.enabled = false; } }
-    public void UpdateSlot(Ability ability) { quantityText.text = ""; quantityText.enabled = false; if (ability != null) { iconImage.sprite = ability.icon; iconImage.enabled = true; } else { iconImage.sprite = null; iconImage.enabled = false; } }
+
+    // --- UPDATED VISUAL LOGIC ---
+    public void UpdateSlot(HotbarAssignment assignment)
+    {
+        currentAssignment = assignment;
+
+        if (_iconEffect != null) _iconEffect.SetDesaturation(0f);
+
+        // 1. Unassigned / Empty
+        if (assignment == null || assignment.type == HotbarAssignment.AssignmentType.Unassigned)
+        {
+            if (iconImage != null)
+            {
+                iconImage.sprite = null;
+                iconImage.color = Color.clear; // Hide visually
+                iconImage.enabled = true;      // Keep Raycasts active
+
+                // Clear Texture in Shader
+                if (_iconEffect != null) _iconEffect.SetTexture(null);
+            }
+            if (quantityText != null) { quantityText.text = ""; quantityText.enabled = false; }
+            return;
+        }
+
+        // 2. Item Assignment
+        if (assignment.type == HotbarAssignment.AssignmentType.Item)
+        {
+            ItemStack stack = null;
+            if (hotbarManager != null && hotbarManager.playerInventory != null)
+            {
+                if (assignment.inventorySlotIndex < hotbarManager.playerInventory.items.Count)
+                    stack = hotbarManager.playerInventory.items[assignment.inventorySlotIndex];
+            }
+
+            if (stack != null && stack.itemData != null)
+            {
+                if (iconImage != null)
+                {
+                    iconImage.sprite = stack.itemData.icon;
+                    iconImage.color = usableColor;
+                    iconImage.enabled = true;
+
+                    // Force Shader Update
+                    if (_iconEffect != null && stack.itemData.icon != null)
+                        _iconEffect.SetTexture(stack.itemData.icon.texture);
+                }
+                if (quantityText != null)
+                {
+                    quantityText.text = stack.quantity > 1 ? stack.quantity.ToString() : "";
+                    quantityText.enabled = stack.quantity > 1;
+                }
+            }
+            else
+            {
+                // Invalid Item
+                if (iconImage != null)
+                {
+                    iconImage.sprite = null;
+                    iconImage.color = Color.clear;
+                    iconImage.enabled = true;
+                    if (_iconEffect != null) _iconEffect.SetTexture(null);
+                }
+                if (quantityText != null) { quantityText.text = ""; quantityText.enabled = false; }
+            }
+        }
+        // 3. Ability Assignment
+        else if (assignment.type == HotbarAssignment.AssignmentType.Ability)
+        {
+            if (assignment.ability != null)
+            {
+                if (iconImage != null)
+                {
+                    iconImage.sprite = assignment.ability.icon;
+                    iconImage.color = usableColor;
+                    iconImage.enabled = true;
+
+                    // Force Shader Update
+                    if (_iconEffect != null && assignment.ability.icon != null)
+                        _iconEffect.SetTexture(assignment.ability.icon.texture);
+                }
+                if (quantityText != null) { quantityText.text = ""; quantityText.enabled = false; }
+            }
+            else
+            {
+                // Invalid Ability
+                if (iconImage != null)
+                {
+                    iconImage.sprite = null;
+                    iconImage.color = Color.clear;
+                    iconImage.enabled = true;
+                    if (_iconEffect != null) _iconEffect.SetTexture(null);
+                }
+            }
+        }
+    }
+
+    // --- LEGACY OVERLOADS ---
+    public void UpdateSlot(ItemStack itemStack)
+    {
+        if (_iconEffect != null) _iconEffect.SetDesaturation(0f);
+        if (cooldownOverlay != null) cooldownOverlay.fillAmount = 0;
+
+        if (itemStack != null && itemStack.itemData != null && itemStack.quantity > 0)
+        {
+            iconImage.sprite = itemStack.itemData.icon;
+            iconImage.color = usableColor;
+            iconImage.enabled = true;
+
+            if (_iconEffect != null && itemStack.itemData.icon != null)
+                _iconEffect.SetTexture(itemStack.itemData.icon.texture);
+
+            quantityText.text = itemStack.quantity > 1 ? itemStack.quantity.ToString() : "";
+            quantityText.enabled = true;
+        }
+        else
+        {
+            iconImage.sprite = null; iconImage.color = Color.clear; iconImage.enabled = true;
+            quantityText.text = ""; quantityText.enabled = false;
+            if (_iconEffect != null) _iconEffect.SetTexture(null);
+        }
+    }
+
+    public void UpdateSlot(Ability ability)
+    {
+        if (_iconEffect != null) _iconEffect.SetDesaturation(0f);
+        quantityText.text = ""; quantityText.enabled = false;
+        if (ability != null)
+        {
+            iconImage.sprite = ability.icon;
+            iconImage.color = usableColor;
+            iconImage.enabled = true;
+
+            if (_iconEffect != null && ability.icon != null)
+                _iconEffect.SetTexture(ability.icon.texture);
+        }
+        else
+        {
+            iconImage.sprite = null; iconImage.color = Color.clear; iconImage.enabled = true;
+            if (_iconEffect != null) _iconEffect.SetTexture(null);
+        }
+    }
 
     public bool CanReceiveDrop(object item)
     {
-        // Prevents dropping on the locked default attack slot
         if (SlotIndex == 0) return false;
-
-        if (item is ItemStack itemStack)
-        {
-            return itemStack.itemData.itemType == ItemType.Consumable;
-        }
+        if (item is ItemStack itemStack) return itemStack.itemData.itemType == ItemType.Consumable;
         return item is Ability;
     }
 
-    public void OnDrop(PointerEventData eventData) { if (dragDropController == null || dragDropController.currentSource == null) return; object draggedItem = dragDropController.currentSource.GetItem(); if (CanReceiveDrop(draggedItem)) { OnDrop(draggedItem); dragDropController.NotifyDropSuccessful(this); } }
-    public void OnDrop(object item) { int hotbarIndex = transform.GetSiblingIndex(); if (item is ItemStack) { var source = dragDropController.currentSource; if (source is InventorySlot sourceSlot) { hotbarManager.SetHotbarSlotWithItem(hotbarIndex, sourceSlot.slotIndex); } } else if (item is Ability ability) { hotbarManager.SetHotbarSlotWithAbility(hotbarIndex, ability); } }
+    public void OnDrop(PointerEventData eventData)
+    {
+        if (dragDropController != null && dragDropController.currentSource != null)
+        {
+            object draggedItem = dragDropController.currentSource.GetItem();
+            if (CanReceiveDrop(draggedItem))
+            {
+                OnDrop(draggedItem);
+                dragDropController.NotifyDropSuccessful(this);
+            }
+        }
+    }
+
+    public void OnDrop(object item)
+    {
+        int hotbarIndex = transform.GetSiblingIndex();
+        if (item is ItemStack)
+        {
+            if (dragDropController.currentSource is InventorySlot sourceSlot)
+            {
+                hotbarManager.SetHotbarSlotWithItem(hotbarIndex, sourceSlot.slotIndex);
+            }
+        }
+        else if (item is Ability ability)
+        {
+            hotbarManager.SetHotbarSlotWithAbility(hotbarIndex, ability);
+        }
+    }
 
     public void OnPointerClick(PointerEventData eventData)
     {
         if (eventData.button == PointerEventData.InputButton.Right)
         {
-            // Prevents clearing the locked default attack slot
             if (SlotIndex != 0 && currentAssignment != null && currentAssignment.type != HotbarAssignment.AssignmentType.Unassigned)
             {
-                HotbarManager.instance.ClearHotbarSlot(transform.GetSiblingIndex());
+                hotbarManager.ClearHotbarSlot(transform.GetSiblingIndex());
             }
         }
     }
 
-    public void OnPointerEnter(PointerEventData eventData) { if (inventoryManager == null || currentAssignment == null) return; if (currentAssignment.type == HotbarAssignment.AssignmentType.Item) { if (currentAssignment.inventorySlotIndex >= 0) { Inventory activeInventory = InventoryUIController.instance.ActivePlayerInventory; if (activeInventory != null) { ItemStack item = activeInventory.items[currentAssignment.inventorySlotIndex]; inventoryManager.ShowTooltipForExternalItem(item, playerStats); } } } else if (currentAssignment.type == HotbarAssignment.AssignmentType.Ability) { inventoryManager.ShowTooltipForAbility(currentAssignment.ability); } }
-    public void OnPointerExit(PointerEventData eventData) { if (inventoryManager != null) { inventoryManager.HideTooltip(); } }
+    public void OnPointerEnter(PointerEventData eventData)
+    {
+        if (inventoryManager == null || currentAssignment == null) return;
+
+        if (currentAssignment.type == HotbarAssignment.AssignmentType.Item)
+        {
+            if (hotbarManager != null && hotbarManager.playerInventory != null && currentAssignment.inventorySlotIndex >= 0)
+            {
+                if (currentAssignment.inventorySlotIndex < hotbarManager.playerInventory.items.Count)
+                {
+                    ItemStack item = hotbarManager.playerInventory.items[currentAssignment.inventorySlotIndex];
+                    inventoryManager.ShowTooltipForExternalItem(item, playerStats);
+                }
+            }
+        }
+        else if (currentAssignment.type == HotbarAssignment.AssignmentType.Ability)
+        {
+            inventoryManager.ShowTooltipForAbility(currentAssignment.ability);
+        }
+    }
+
+    public void OnPointerExit(PointerEventData eventData)
+    {
+        if (inventoryManager != null) inventoryManager.HideTooltip();
+    }
 }
