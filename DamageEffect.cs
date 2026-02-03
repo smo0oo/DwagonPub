@@ -4,6 +4,10 @@ using System.Collections.Generic;
 [System.Serializable]
 public class DamageEffect : IAbilityEffect
 {
+    [Header("Activation")]
+    [Range(0f, 100f)] public float chance = 100f;
+
+    [Header("Damage Settings")]
     [Tooltip("The base damage of the Ability itself (e.g. 16 for your Heavy Hit).")]
     public int baseDamage = 5;
 
@@ -27,6 +31,12 @@ public class DamageEffect : IAbilityEffect
 
     public void Apply(GameObject caster, GameObject target)
     {
+        // 1. Chance Check
+        if (chance < 100f && Random.Range(0f, 100f) > chance)
+        {
+            return;
+        }
+
         Health targetHealth = target.GetComponentInChildren<Health>();
         if (targetHealth == null) return;
 
@@ -40,8 +50,8 @@ public class DamageEffect : IAbilityEffect
         {
             if (damageType == DamageType.Physical)
             {
-                // 1. Calculate Weapon Damage
-                float weaponDamage = 0f; // Default to 0 if unarmed/creature
+                // Calculate Weapon Damage
+                float weaponDamage = 0f;
                 PlayerEquipment equipment = caster.GetComponentInParent<PlayerEquipment>();
 
                 if (equipment != null)
@@ -59,17 +69,15 @@ public class DamageEffect : IAbilityEffect
                         weaponDamage = Random.Range(weaponStats.DamageLow, weaponStats.DamageHigh + 1);
                 }
 
-                // --- FIX: ADD Weapon Damage, don't overwrite Ability Base ---
                 finalDamage += weaponDamage;
-                // -----------------------------------------------------------
 
-                // 2. Global Bonuses
+                // Global Bonuses
                 if (useGlobalStatBonus)
                 {
                     finalDamage += casterStats.secondaryStats.damageMultiplier;
                 }
 
-                // 3. Stat Scaling (Strength/Agility etc)
+                // Stat Scaling
                 foreach (var scaling in scalingFactors)
                 {
                     switch (scaling.stat)
@@ -81,16 +89,15 @@ public class DamageEffect : IAbilityEffect
                     }
                 }
 
-                // 4. Critical Hit
+                // Critical Hit
                 if (Random.value < (casterStats.secondaryStats.critChance / 100f))
                 {
-                    finalDamage *= 2; // Standard Crit Multiplier
+                    finalDamage *= 2;
                     isCrit = true;
                 }
             }
             else // Magical Damage
             {
-                // Magic usually scales by %, but we still add base stats
                 finalDamage *= (1 + casterStats.secondaryStats.magicAttackDamage / 100f);
 
                 foreach (var scaling in scalingFactors)
@@ -115,7 +122,7 @@ public class DamageEffect : IAbilityEffect
         int finalDamageInt = Mathf.FloorToInt(finalDamage);
         targetHealth.TakeDamage(finalDamageInt, damageType, isCrit, caster);
 
-        // --- Splash Logic ---
+        // Splash Logic
         if (isSplash)
         {
             HandleSplash(target, caster, finalDamageInt, damageType, casterRoot);
@@ -130,13 +137,11 @@ public class DamageEffect : IAbilityEffect
         for (int i = 0; i < hitCount; i++)
         {
             var hit = _splashBuffer[i];
-            // Don't hit self or main target again
             if (hit.transform.root == mainTarget.transform.root || hit.transform.root == caster.transform.root) continue;
 
             CharacterRoot splashTargetRoot = hit.GetComponentInParent<CharacterRoot>();
             if (splashTargetRoot == null) continue;
 
-            // Faction Check
             bool isHostile = (casterRoot == null) || (splashTargetRoot.gameObject.layer != casterRoot.gameObject.layer);
 
             if (isHostile)
@@ -152,11 +157,18 @@ public class DamageEffect : IAbilityEffect
 
     public string GetEffectDescription()
     {
-        string description = $"Deals {baseDamage} {damageType} damage.";
+        string prefix = "";
+        if (chance < 100f)
+        {
+            prefix = $"{chance}% Chance to ";
+        }
+
+        string description = $"{prefix}deal {baseDamage} {damageType} damage";
         if (isSplash)
         {
-            description += $" Also deals {splashDamageMultiplier * 100}% damage to nearby enemies.";
+            description += $" (AoE: {splashDamageMultiplier * 100}% damage in {splashRadius}m)";
         }
-        return description;
+
+        return description + ".";
     }
 }

@@ -51,7 +51,6 @@ public class StatsUIManager : MonoBehaviour
 
     void Update()
     {
-        // ADDED GUARD CLAUSE FOR MAIN MENU
         if (GameManager.instance != null && GameManager.instance.currentSceneType == SceneType.MainMenu)
         {
             return;
@@ -123,18 +122,20 @@ public class StatsUIManager : MonoBehaviour
             return;
         }
 
+        // --- Primary Stats ---
+        // Note: You can add StatTooltipTrigger to these in Unity Inspector if you want generic tooltips for them.
         if (strengthText != null) strengthText.text = $"Strength: {currentPlayerStats.finalStrength}";
         if (agilityText != null) agilityText.text = $"Agility: {currentPlayerStats.finalAgility}";
         if (intelligenceText != null) intelligenceText.text = $"Intelligence: {currentPlayerStats.finalIntelligence}";
         if (faithText != null) faithText.text = $"Faith: {currentPlayerStats.finalFaith}";
 
+        // --- Resources ---
         if (healthText != null)
         {
             if (currentPlayerHealth != null)
             {
                 healthText.text = $"Health: {currentPlayerHealth.currentHealth} / {currentPlayerHealth.maxHealth}";
-                StatTooltipTrigger trigger = healthText.GetComponent<StatTooltipTrigger>();
-                if (trigger != null) trigger.tooltipText = currentPlayerStats.secondaryStats.healthTooltip;
+                SetTooltip(healthText, "Health", currentPlayerStats.secondaryStats.healthTooltip);
             }
             else
             {
@@ -144,63 +145,65 @@ public class StatsUIManager : MonoBehaviour
         if (manaText != null)
         {
             manaText.text = $"Mana: {Mathf.FloorToInt(currentPlayerStats.currentMana)} / {currentPlayerStats.maxMana}";
-            StatTooltipTrigger trigger = manaText.GetComponent<StatTooltipTrigger>();
-            if (trigger != null) trigger.tooltipText = currentPlayerStats.secondaryStats.manaTooltip;
+            SetTooltip(manaText, "Mana", currentPlayerStats.secondaryStats.manaTooltip);
         }
 
+        // --- Secondary Stats ---
         if (critChanceText != null)
         {
             critChanceText.text = $"Critical Chance: {currentPlayerStats.secondaryStats.critChance.ToString("F1")}%";
-            StatTooltipTrigger trigger = critChanceText.GetComponent<StatTooltipTrigger>();
-            if (trigger != null) trigger.tooltipText = currentPlayerStats.secondaryStats.critChanceTooltip;
+            SetTooltip(critChanceText, "Critical Strike Chance", currentPlayerStats.secondaryStats.critChanceTooltip);
         }
         if (spellCritChanceText != null)
         {
             spellCritChanceText.text = $"Spell Critical Chance: {currentPlayerStats.secondaryStats.spellCritChance.ToString("F1")}%";
-            StatTooltipTrigger trigger = spellCritChanceText.GetComponent<StatTooltipTrigger>();
-            if (trigger != null) trigger.tooltipText = currentPlayerStats.secondaryStats.spellCritChanceTooltip;
+            SetTooltip(spellCritChanceText, "Spell Critical Chance", currentPlayerStats.secondaryStats.spellCritChanceTooltip);
         }
         if (attackSpeedText != null)
         {
             attackSpeedText.text = $"Attack Speed: x{currentPlayerStats.secondaryStats.attackSpeed.ToString("F2")}";
-            StatTooltipTrigger trigger = attackSpeedText.GetComponent<StatTooltipTrigger>();
-            if (trigger != null) trigger.tooltipText = currentPlayerStats.secondaryStats.attackSpeedTooltip;
+            SetTooltip(attackSpeedText, "Attack Speed", currentPlayerStats.secondaryStats.attackSpeedTooltip);
         }
         if (cooldownReductionText != null)
         {
             cooldownReductionText.text = $"Cooldown Reduction: {(1 - currentPlayerStats.secondaryStats.cooldownReduction) * 100f:F1}%";
-            StatTooltipTrigger trigger = cooldownReductionText.GetComponent<StatTooltipTrigger>();
-            if (trigger != null) trigger.tooltipText = currentPlayerStats.secondaryStats.cooldownReductionTooltip;
+            SetTooltip(cooldownReductionText, "Cooldown Reduction", currentPlayerStats.secondaryStats.cooldownReductionTooltip);
         }
         if (dodgeChanceText != null)
         {
             dodgeChanceText.text = $"Dodge Chance: {currentPlayerStats.secondaryStats.dodgeChance.ToString("F1")}%";
-            StatTooltipTrigger trigger = dodgeChanceText.GetComponent<StatTooltipTrigger>();
-            if (trigger != null) trigger.tooltipText = currentPlayerStats.secondaryStats.dodgeChanceTooltip;
+            SetTooltip(dodgeChanceText, "Dodge Chance", currentPlayerStats.secondaryStats.dodgeChanceTooltip);
         }
         if (parryChanceText != null)
         {
             parryChanceText.text = $"Parry Chance: {currentPlayerStats.secondaryStats.parryChance.ToString("F1")}%";
-            StatTooltipTrigger trigger = parryChanceText.GetComponent<StatTooltipTrigger>();
-            if (trigger != null) trigger.tooltipText = currentPlayerStats.secondaryStats.parryChanceTooltip;
+            SetTooltip(parryChanceText, "Parry Chance", currentPlayerStats.secondaryStats.parryChanceTooltip);
         }
         if (blockChanceText != null)
         {
             blockChanceText.text = $"Block Chance: {currentPlayerStats.secondaryStats.blockChance.ToString("F1")}%";
-            StatTooltipTrigger trigger = blockChanceText.GetComponent<StatTooltipTrigger>();
-            if (trigger != null) trigger.tooltipText = currentPlayerStats.secondaryStats.blockChanceTooltip;
+            SetTooltip(blockChanceText, "Block Chance", currentPlayerStats.secondaryStats.blockChanceTooltip);
         }
         if (magicResistText != null)
         {
             magicResistText.text = $"Magic Resist: {currentPlayerStats.secondaryStats.magicResistance.ToString("F1")}%";
-            StatTooltipTrigger trigger = magicResistText.GetComponent<StatTooltipTrigger>();
-            if (trigger != null) trigger.tooltipText = currentPlayerStats.secondaryStats.magicResistTooltip;
+            SetTooltip(magicResistText, "Magic Resistance", currentPlayerStats.secondaryStats.magicResistTooltip);
         }
         if (healingBonusText != null)
         {
             healingBonusText.text = $"Healing Bonus: {currentPlayerStats.secondaryStats.healingBonus.ToString("F1")}%";
-            StatTooltipTrigger trigger = healingBonusText.GetComponent<StatTooltipTrigger>();
-            if (trigger != null) trigger.tooltipText = currentPlayerStats.secondaryStats.healingBonusTooltip;
+            SetTooltip(healingBonusText, "Healing Bonus", currentPlayerStats.secondaryStats.healingBonusTooltip);
+        }
+    }
+
+    // --- Helper to set Title & Text ---
+    private void SetTooltip(TextMeshProUGUI uiElement, string title, string content)
+    {
+        StatTooltipTrigger trigger = uiElement.GetComponent<StatTooltipTrigger>();
+        if (trigger != null)
+        {
+            trigger.title = title;
+            trigger.tooltipText = content;
         }
     }
 

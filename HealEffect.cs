@@ -4,6 +4,10 @@ using System.Collections.Generic;
 [System.Serializable]
 public class HealEffect : IAbilityEffect
 {
+    [Header("Activation")]
+    [Range(0f, 100f)] public float chance = 100f;
+
+    [Header("Heal Settings")]
     public int healAmount = 25;
 
     [Header("Stat Scaling")]
@@ -12,6 +16,12 @@ public class HealEffect : IAbilityEffect
 
     public void Apply(GameObject caster, GameObject target)
     {
+        // 1. Chance Check
+        if (chance < 100f && Random.Range(0f, 100f) > chance)
+        {
+            return;
+        }
+
         Health targetHealth = target.GetComponentInChildren<Health>();
         if (targetHealth == null) return;
 
@@ -48,6 +58,11 @@ public class HealEffect : IAbilityEffect
 
     public string GetEffectDescription()
     {
-        return $"Heals for {healAmount} health.";
+        string prefix = "";
+        if (chance < 100f)
+        {
+            prefix = $"{chance}% Chance to ";
+        }
+        return $"{prefix}restore {healAmount} health.";
     }
 }

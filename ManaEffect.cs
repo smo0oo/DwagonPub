@@ -3,21 +3,31 @@ using UnityEngine;
 [System.Serializable]
 public class ManaEffect : IAbilityEffect
 {
+    [Header("Activation")]
+    [Range(0f, 100f)] public float chance = 100f;
+
+    [Header("Mana Settings")]
     public int manaAmount = 25;
 
-    // --- MODIFIED METHOD ---
     public void Apply(GameObject caster, GameObject target)
     {
+        // 1. Chance Check
+        if (chance < 100f && Random.Range(0f, 100f) > chance)
+        {
+            return;
+        }
+
         CharacterRoot targetRoot = target.GetComponentInParent<CharacterRoot>();
         PlayerStats targetStats = (targetRoot != null) ? targetRoot.PlayerStats : null;
 
         if (targetStats == null)
         {
-            Debug.LogWarning($"ManaEffect could not find a PlayerStats component on {target.name}.");
+            // Fail silently in production or log warning
+            // Debug.LogWarning($"ManaEffect could not find a PlayerStats component on {target.name}.");
             return;
         }
 
-        // Use the robust CharacterRoot pattern to find the caster's stats.
+        // Find caster stats for scaling (if applicable)
         CharacterRoot casterRoot = caster.GetComponentInParent<CharacterRoot>();
         PlayerStats casterStats = (casterRoot != null) ? casterRoot.PlayerStats : null;
 
@@ -25,6 +35,7 @@ public class ManaEffect : IAbilityEffect
 
         if (casterStats != null)
         {
+            // Example: Scaling mana restore with Healing Bonus or Intelligence could go here
             finalManaAmount *= (1 + casterStats.secondaryStats.healingBonus / 100f);
         }
 
@@ -39,6 +50,11 @@ public class ManaEffect : IAbilityEffect
 
     public string GetEffectDescription()
     {
-        return $"Restores {manaAmount} mana.";
+        string prefix = "";
+        if (chance < 100f)
+        {
+            prefix = $"{chance}% Chance to ";
+        }
+        return $"{prefix}restore {manaAmount} mana.";
     }
 }

@@ -1,16 +1,24 @@
 using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
-using System;
 
 [System.Serializable]
 public class SequenceEffect : IAbilityEffect
 {
+    [Header("Activation")]
+    [Range(0f, 100f)] public float chance = 100f;
+
     [SerializeReference]
     public List<SequenceAction> actions = new List<SequenceAction>();
 
     public void Apply(GameObject caster, GameObject target)
     {
+        // 1. Chance Check
+        if (chance < 100f && Random.Range(0f, 100f) > chance)
+        {
+            return;
+        }
+
         // Find the correct MonoBehaviour to start the coroutine on.
         var playerHolder = caster.GetComponentInChildren<PlayerAbilityHolder>();
         if (playerHolder != null)
@@ -36,6 +44,9 @@ public class SequenceEffect : IAbilityEffect
 
     private IEnumerator ExecuteSequence(MonoBehaviour owner, GameObject caster, GameObject target)
     {
+        // Safety check if caster was destroyed during the delay
+        if (caster == null) yield break;
+
         var enemyAI = caster.GetComponent<EnemyAI>();
 
         try
@@ -67,6 +78,11 @@ public class SequenceEffect : IAbilityEffect
 
     public string GetEffectDescription()
     {
-        return "Triggers a sequence of actions.";
+        string prefix = "";
+        if (chance < 100f)
+        {
+            prefix = $"{chance}% Chance to ";
+        }
+        return $"{prefix}trigger a sequence of actions.";
     }
 }

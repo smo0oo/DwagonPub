@@ -4,7 +4,6 @@ using System.Text;
 [CreateAssetMenu(fileName = "New Weapon Class Stats", menuName = "Inventory/Stats/Weapon Base")]
 public class ItemWeaponStats : ItemStats
 {
-    // --- RENAMED for clarity ---
     [Header("Weapon Stats")]
     [Tooltip("The base time in seconds between default attacks with this weapon.")]
     public float baseAttackTime = 2.0f;
@@ -29,17 +28,23 @@ public class ItemWeaponStats : ItemStats
     public override string GetStatsDescription()
     {
         StringBuilder sb = new StringBuilder();
-        sb.AppendLine($"Damage: {DamageLow} - {DamageHigh}");
-        sb.AppendLine($"Speed: {baseAttackTime}");
-        sb.AppendLine($"Type: {handed} {weaponCategory}");
 
-        if (strengthBonus > 0) sb.AppendLine($"Strength: +{strengthBonus}");
-        if (agilityBonus > 0) sb.AppendLine($"Agility: +{agilityBonus}");
-        if (intelligenceBonus > 0) sb.AppendLine($"Intelligence: +{intelligenceBonus}");
-        if (faithBonus > 0) sb.AppendLine($"Faith: +{faithBonus}");
+        // Base Info
+        sb.AppendLine($"Damage: <color=#FFFFFF>{DamageLow} - {DamageHigh}</color>");
+        sb.AppendLine($"Speed: <color=#FFFFFF>{baseAttackTime}</color>");
+        sb.AppendLine($"Type: <color=#DDDDDD>{handed} {weaponCategory}</color>");
 
-        if (critRatingBonus > 0) sb.AppendLine($"Critical Strike Rating: +{critRatingBonus}");
-        if (hasteRatingBonus > 0) sb.AppendLine($"Haste Rating: +{hasteRatingBonus}");
+        sb.AppendLine(); // Spacer
+
+        // Primary Stats - Green for positive
+        if (strengthBonus > 0) sb.AppendLine($"Strength: <color=#00FF00>+{strengthBonus}</color>");
+        if (agilityBonus > 0) sb.AppendLine($"Agility: <color=#00FF00>+{agilityBonus}</color>");
+        if (intelligenceBonus > 0) sb.AppendLine($"Intelligence: <color=#00FF00>+{intelligenceBonus}</color>");
+        if (faithBonus > 0) sb.AppendLine($"Faith: <color=#00FF00>+{faithBonus}</color>");
+
+        // Secondary Stats - Cyan/Yellow
+        if (critRatingBonus > 0) sb.AppendLine($"Crit Rating: <color=#00FFFF>+{critRatingBonus}</color>");
+        if (hasteRatingBonus > 0) sb.AppendLine($"Haste Rating: <color=#FFFF00>+{hasteRatingBonus}</color>");
 
         return sb.ToString().Trim();
     }
