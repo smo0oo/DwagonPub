@@ -5,8 +5,13 @@ using System.Collections;
 
 public class EnemyHealthUI : MonoBehaviour
 {
+    [Header("Settings")]
+    public bool showHealthBar = true; // NEW TOGGLE
+
     [Header("Health UI References")]
     public Image healthBarFill;
+    // Optional: Add a reference to the background if you have one separate from the fill
+    public GameObject healthBarBackground;
 
     [Header("Casting UI References")]
     public GameObject castBarPanel;
@@ -52,17 +57,25 @@ public class EnemyHealthUI : MonoBehaviour
         if (cameraTransform != null)
         {
             // --- OPTIMIZATION: Direct Rotation Copy ---
-            // Much faster than LookAt() with Vector math.
-            // This aligns the UI plane perfectly with the camera plane.
             _transform.rotation = cameraTransform.rotation;
         }
     }
 
     private void UpdateHealthBar()
     {
+        // 1. Handle Visibility based on the Toggle
         if (healthBarFill != null)
         {
-            healthBarFill.fillAmount = (float)targetHealth.currentHealth / targetHealth.maxHealth;
+            healthBarFill.gameObject.SetActive(showHealthBar);
+
+            // If you added a background reference, toggle it too:
+            if (healthBarBackground != null) healthBarBackground.SetActive(showHealthBar);
+
+            // 2. Only update the fill amount if we are actually showing it
+            if (showHealthBar)
+            {
+                healthBarFill.fillAmount = (float)targetHealth.currentHealth / targetHealth.maxHealth;
+            }
         }
     }
 
@@ -70,8 +83,6 @@ public class EnemyHealthUI : MonoBehaviour
     {
         if (statusText != null)
         {
-            // Note: String interpolation still creates some garbage, 
-            // but since EnemyAI filters redundant calls, this is acceptable.
             statusText.text = $"{state} :: {action}";
         }
     }

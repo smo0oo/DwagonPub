@@ -204,6 +204,10 @@ public class PlayerAbilityHolder : MonoBehaviour
                 currentCastingVFXInstance.transform.SetParent(anchor, false);
                 currentCastingVFXInstance.transform.localPosition = ability.castingVFXPositionOffset;
                 currentCastingVFXInstance.transform.localRotation = Quaternion.Euler(ability.castingVFXRotationOffset);
+
+                // Reset scale for casting VFX as well, just in case
+                currentCastingVFXInstance.transform.localScale = ability.castingVFX.transform.localScale;
+
                 currentCastingVFXInstance.SetActive(true);
 
                 if (!ability.attachCastingVFX) currentCastingVFXInstance.transform.SetParent(null);
@@ -269,7 +273,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
 
         // --- SHAKE TRIGGER ---
-        // Only trigger if intensity > 0 to prevent unnecessary event calls
         if (ability.screenShakeIntensity > 0)
         {
             OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration);
@@ -304,6 +307,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
+    // --- FIX APPLIED HERE ---
     private void SpawnCastVFX(Ability ability, Quaternion? overrideRotation = null)
     {
         Transform anchor = GetAnchorTransform(ability.castVFXAnchor);
@@ -313,6 +317,11 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (vfxInstance != null)
         {
             vfxInstance.transform.SetParent(anchor, false);
+
+            // FIX: Reset localScale to the prefab's original scale.
+            // This prevents "dirty" scale values (from animations) persisting when pooled.
+            vfxInstance.transform.localScale = ability.castVFX.transform.localScale;
+
             vfxInstance.transform.localPosition = ability.castVFXPositionOffset;
             vfxInstance.transform.localRotation = Quaternion.Euler(ability.castVFXRotationOffset);
             vfxInstance.SetActive(true);
@@ -320,6 +329,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             if (!ability.attachCastVFX) vfxInstance.transform.SetParent(null);
         }
     }
+    // ------------------------
 
     private Transform GetAnchorTransform(VFXAnchor anchor)
     {
@@ -471,7 +481,12 @@ public class PlayerAbilityHolder : MonoBehaviour
             Quaternion spawnRot = Quaternion.Euler(ability.hitVFXRotationOffset);
 
             GameObject vfx = ObjectPooler.instance.Get(ability.hitVFX, spawnPos, spawnRot);
-            if (vfx != null) vfx.SetActive(true);
+            if (vfx != null)
+            {
+                // Reset scale for hit VFX as well
+                vfx.transform.localScale = ability.hitVFX.transform.localScale;
+                vfx.SetActive(true);
+            }
         }
 
         if (ability.impactSound != null) AudioSource.PlayClipAtPoint(ability.impactSound, position);

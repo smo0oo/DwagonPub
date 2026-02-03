@@ -58,8 +58,8 @@ public class LevelUpNotificationUI : MonoBehaviour
 
         // 2. Set Text
         int newLevel = PartyManager.instance.partyLevel;
-        if (levelText != null) levelText.text = $"PARTY LEVEL {newLevel}!";
-        if (subText != null) subText.text = $"Everyone gained +{PartyManager.instance.pointsPerLevel} Stat Points!";
+        if (levelText != null) levelText.text = $"Level {newLevel}!";
+        //if (subText != null) subText.text = $"Everyone gained +{PartyManager.instance.pointsPerLevel} Stat Points!";
 
         // 3. Play Sound
         if (uiAudioSource != null && levelUpSound != null)

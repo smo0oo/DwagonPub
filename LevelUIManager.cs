@@ -57,7 +57,6 @@ public class LevelUIManager : MonoBehaviour
 
     void Update()
     {
-        // ADDED GUARD CLAUSE FOR MAIN MENU
         if (GameManager.instance != null && GameManager.instance.currentSceneType == SceneType.MainMenu)
         {
             return;
@@ -65,12 +64,26 @@ public class LevelUIManager : MonoBehaviour
 
         if (Input.GetKeyDown(KeyCode.C))
         {
-            if (levelUIPanel != null)
+            ToggleLevelPanel(); // Call the shared method
+        }
+    }
+
+    // --- NEW PUBLIC METHOD ---
+    public void ToggleLevelPanel()
+    {
+        if (levelUIPanel != null)
+        {
+            bool isOpening = !levelUIPanel.activeSelf;
+            levelUIPanel.SetActive(isOpening);
+
+            // Force an update when opening to ensure buttons appear if points exist
+            if (isOpening)
             {
-                levelUIPanel.SetActive(!levelUIPanel.activeSelf);
+                UpdateUI();
             }
         }
     }
+    // -------------------------
 
     public void DisplayLevelInfo(PlayerStats newPlayerStats)
     {

@@ -27,6 +27,55 @@ public class SkillTreeUIManager : MonoBehaviour
         inventoryManager = InventoryManager.instance;
     }
 
+    // --- NEW: Toggle Method for UI Buttons ---
+    public void ToggleSkillTree()
+    {
+        if (skillTreePanel == null) return;
+
+        if (skillTreePanel.activeSelf)
+        {
+            // If open, close it
+            HideSkillTree();
+            skillTreePanel.SetActive(false);
+            if (TooltipManager.instance != null) TooltipManager.instance.HideTooltip();
+        }
+        else
+        {
+            // If closed, open it (and close others to keep UI clean)
+            if (InventoryUIController.instance != null)
+            {
+                InventoryUIController.instance.CloseAllPanels();
+            }
+
+            // Find the active stats to display
+            PlayerStats statsToDisplay = null;
+
+            // 1. Try InventoryUIController (UI Master)
+            if (InventoryUIController.instance != null)
+            {
+                statsToDisplay = InventoryUIController.instance.ActivePlayerStats;
+            }
+
+            // 2. Fallback to PartyManager (Game State Master)
+            if (statsToDisplay == null && PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
+            {
+                statsToDisplay = PartyManager.instance.ActivePlayer.GetComponentInChildren<PlayerStats>();
+            }
+
+            // 3. Display
+            if (statsToDisplay != null)
+            {
+                skillTreePanel.SetActive(true);
+                DisplaySkillTree(statsToDisplay);
+            }
+            else
+            {
+                Debug.LogWarning("SkillTreeUIManager: Cannot toggle open. No Active Player Stats found.");
+            }
+        }
+    }
+    // -----------------------------------------
+
     public void DisplaySkillTree(PlayerStats stats)
     {
         if (currentPlayerStats != null)
@@ -43,7 +92,6 @@ public class SkillTreeUIManager : MonoBehaviour
         BuildTree();
     }
 
-    // --- FIX: This method no longer controls the panel's active state. ---
     public void HideSkillTree()
     {
         if (currentPlayerStats != null)
@@ -51,7 +99,7 @@ public class SkillTreeUIManager : MonoBehaviour
             currentPlayerStats.OnSkillPointsChanged -= RefreshAllNodeDisplays;
             currentPlayerStats.OnAbilitiesChanged -= RefreshAllNodeDisplays;
         }
-        // The line "skillTreePanel.SetActive(false);" has been removed from this method.
+        // Panel deactivation is handled by the caller (ToggleSkillTree or InventoryUIController)
     }
 
     private void BuildTree()

@@ -2,9 +2,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.EventSystems;
 using System.Collections.Generic;
-using Unity.VisualScripting;
 using TMPro;
-using System;
 using System.Linq;
 
 public class InventoryManager : MonoBehaviour
@@ -31,7 +29,6 @@ public class InventoryManager : MonoBehaviour
     public EquipmentManager equipmentManager;
 
     [Header("Item Database (For Save/Load)")]
-    [Tooltip("Drag all valid ItemData assets here so the Save System can find them by ID.")]
     public List<ItemData> itemDatabase = new List<ItemData>();
 
     private Inventory currentlyDisplayedInventory;
@@ -47,7 +44,9 @@ public class InventoryManager : MonoBehaviour
 
     void Start()
     {
-        InitializeUI();
+        // Don't generate slots here. We wait until DisplayInventory is called.
+        // InitializeUI(); 
+
         HideTooltip();
         if (playerCurrencyText != null) playerCurrencyText.text = "";
 
@@ -56,33 +55,109 @@ public class InventoryManager : MonoBehaviour
         if (stackSplitter != null) { stackSplitter.gameObject.SetActive(false); }
     }
 
-    // --- CENTRALIZED LOOT HANDLER ---
-    /// <summary>
-    /// Checks the item type. 
-    /// 1. If Resource -> Wagon.
-    /// 2. If Dual Mode Active -> Loot Bag.
-    /// 3. If Standard -> Active Player Inventory.
-    /// Returns TRUE if the item was successfully taken.
-    /// </summary>
+    // --- UPDATED DISPLAY LOGIC ---
+    public void DisplayInventory(Inventory inventoryToDisplay, GameObject playerObject)
+    {
+        if (currentlyDisplayedInventory != null)
+        {
+            currentlyDisplayedInventory.OnInventoryChanged -= RefreshUI;
+        }
+
+        currentlyDisplayedInventory = inventoryToDisplay;
+        currentPlayerObject = playerObject;
+
+        if (currentlyDisplayedInventory != null)
+        {
+            // 1. Resize UI to match the target inventory size
+            AdjustSlotCount(currentlyDisplayedInventory.inventorySize);
+
+            // 2. Subscribe to events
+            currentlyDisplayedInventory.OnInventoryChanged += RefreshUI;
+        }
+
+        if (sortDropdown != null) sortDropdown.value = 0;
+        RefreshUI();
+    }
+
+    // New helper to dynamically add/remove slots
+    private void AdjustSlotCount(int targetSize)
+    {
+        // Add needed slots
+        while (uiSlots.Count < targetSize)
+        {
+            GameObject slotGO = Instantiate(inventorySlotPrefab, inventorySlotsParent);
+            InventorySlot newSlot = slotGO.GetComponent<InventorySlot>();
+            // Initialize with temporary index, will be fixed in RefreshUI
+            newSlot.Initialize(this, uiSlots.Count, currentlyDisplayedInventory);
+            uiSlots.Add(newSlot);
+        }
+
+        // Enable/Disable based on count
+        for (int i = 0; i < uiSlots.Count; i++)
+        {
+            uiSlots[i].gameObject.SetActive(i < targetSize);
+        }
+    }
+    // -----------------------------
+
+    private void RefreshUI()
+    {
+        if (currentlyDisplayedInventory == null)
+        {
+            foreach (var slot in uiSlots) slot.UpdateSlot(null);
+            if (playerCurrencyText != null) playerCurrencyText.text = "";
+        }
+        else
+        {
+            // Ensure we have enough slots (just in case size changed dynamically)
+            if (uiSlots.Count < currentlyDisplayedInventory.inventorySize)
+            {
+                AdjustSlotCount(currentlyDisplayedInventory.inventorySize);
+            }
+
+            for (int i = 0; i < uiSlots.Count; i++)
+            {
+                if (i < currentlyDisplayedInventory.inventorySize) // Check bounds against SIZE, not items count
+                {
+                    uiSlots[i].gameObject.SetActive(true);
+                    uiSlots[i].Initialize(this, i, currentlyDisplayedInventory); // Re-link slot to inventory
+
+                    // Check if there is an item at this index
+                    if (i < currentlyDisplayedInventory.items.Count)
+                    {
+                        uiSlots[i].UpdateSlot(currentlyDisplayedInventory.items[i]);
+                    }
+                    else
+                    {
+                        uiSlots[i].UpdateSlot(null);
+                    }
+                }
+                else
+                {
+                    uiSlots[i].gameObject.SetActive(false);
+                }
+            }
+
+            if (playerCurrencyText != null && PartyManager.instance != null)
+            {
+                playerCurrencyText.text = $"Gold: {PartyManager.instance.currencyGold}";
+            }
+        }
+    }
+
+    // --- LOOT HANDLER (Unchanged) ---
     public bool HandleLoot(ItemData item, int quantity)
     {
-        // 1. Check for Resource Item (Wagon Logic)
         if (item is ResourceItemData resourceItem)
         {
             if (WagonResourceManager.instance != null)
             {
-                WagonResourceManager.instance.AddResource(
-                    resourceItem.resourceType,
-                    resourceItem.restoreAmount * quantity
-                );
-
+                WagonResourceManager.instance.AddResource(resourceItem.resourceType, resourceItem.restoreAmount * quantity);
                 ShowFloatingText($"+{resourceItem.restoreAmount * quantity} {resourceItem.resourceType}", Color.cyan);
                 return true;
             }
         }
 
-        // 2. DUAL MODE CHECK (Interception)
-        // If we are in a dungeon run, items go to the shared bag, NOT the player inventory.
         if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
         {
             DualModeManager.instance.AddItemToLootBag(item, quantity);
@@ -90,7 +165,6 @@ public class InventoryManager : MonoBehaviour
             return true;
         }
 
-        // 3. Standard Inventory Logic
         if (currentPlayerObject == null && PartyManager.instance != null)
         {
             currentPlayerObject = PartyManager.instance.ActivePlayer;
@@ -101,16 +175,7 @@ public class InventoryManager : MonoBehaviour
         Inventory targetInventory = currentPlayerObject.GetComponentInChildren<Inventory>();
         if (targetInventory == null) return false;
 
-        bool added = targetInventory.AddItem(item, quantity);
-
-        // Optional feedback for normal items (if Inventory doesn't handle it internally)
-        if (added)
-        {
-            // You can uncomment this if your Inventory.AddItem doesn't already show text
-            // ShowFloatingText($"+{quantity} {item.itemName}", Color.white);
-        }
-
-        return added;
+        return targetInventory.AddItem(item, quantity);
     }
 
     private void ShowFloatingText(string text, Color color)
@@ -120,12 +185,9 @@ public class InventoryManager : MonoBehaviour
             FloatingTextManager.instance.ShowEvent(text, PartyManager.instance.ActivePlayer.transform.position + Vector3.up * 2f);
         }
     }
-    // -------------------------------------
 
-    // --- Item Lookup for Save System ---
     public ItemData GetItemByID(string targetID)
     {
-        // 1. Check Manual List
         if (itemDatabase != null)
         {
             foreach (var item in itemDatabase)
@@ -133,24 +195,16 @@ public class InventoryManager : MonoBehaviour
                 if (item != null && item.id == targetID) return item;
             }
         }
-
-        // 2. Fallback: Resources/Items
         ItemData resItem = Resources.Load<ItemData>($"Items/{targetID}");
         if (resItem != null) return resItem;
-
-        // 3. Fallback: Resources root
-        resItem = Resources.Load<ItemData>(targetID);
-
-        return resItem;
+        return Resources.Load<ItemData>(targetID);
     }
-    // -----------------------------------
 
     public void ShowTooltip(InventorySlot slot) { if (slot.parentInventory == null) return; CharacterRoot root = slot.parentInventory.GetComponentInParent<CharacterRoot>(); if (root == null) return; PlayerStats viewerStats = root.PlayerStats; if (viewerStats == null) return; ItemStack itemStack = slot.parentInventory.items[slot.slotIndex]; bool requirementsMet = CheckRequirements(itemStack, viewerStats); if (TooltipManager.instance != null) { TooltipManager.instance.ShowItemTooltip(itemStack, requirementsMet, viewerStats); } }
-    public void UseItem(InventorySlot slot) { if (currentlyDisplayedInventory == null || currentPlayerObject == null) return; ItemStack item = GetItemStackInSlot(slot.slotIndex); if (item == null || item.itemData == null) return; if (item.itemData.stats is ItemAbilityScrollStats scrollStats) { if (scrollStats.abilityToTeach == null) { Debug.LogError("Ability Scroll has no ability assigned to teach.", item.itemData); return; } if (DomeController.instance == null) { Debug.LogWarning("Cannot use Dome ability scroll: Dome instance not found."); return; } DomeAI domeAI = DomeController.instance.GetComponent<DomeAI>(); if (domeAI != null && !domeAI.defaultAbilities.Contains(scrollStats.abilityToTeach)) { domeAI.defaultAbilities.Add(scrollStats.abilityToTeach); Debug.Log($"Dome has learned a new ability: {scrollStats.abilityToTeach.name}"); currentlyDisplayedInventory.RemoveItem(slot.slotIndex, 1); } else { Debug.Log("Dome already knows this ability."); } } else if (item.itemData.stats is ItemConsumableStats consumableStats) { PlayerAbilityHolder abilityHolder = currentPlayerObject.GetComponentInChildren<PlayerAbilityHolder>(); if (abilityHolder != null && consumableStats.usageAbility != null) { abilityHolder.UseAbility(consumableStats.usageAbility, currentPlayerObject); currentlyDisplayedInventory.RemoveItem(slot.slotIndex, 1); } } }
-    private void RefreshUI() { if (currentlyDisplayedInventory == null) { for (int i = 0; i < uiSlots.Count; i++) uiSlots[i].UpdateSlot(null); if (playerCurrencyText != null) playerCurrencyText.text = ""; } else { for (int i = 0; i < uiSlots.Count; i++) { if (i < currentlyDisplayedInventory.items.Count) { uiSlots[i].Initialize(this, i, currentlyDisplayedInventory); uiSlots[i].UpdateSlot(currentlyDisplayedInventory.items[i]); } else { uiSlots[i].UpdateSlot(null); } } if (playerCurrencyText != null && PartyManager.instance != null) { playerCurrencyText.text = $"Gold: {PartyManager.instance.currencyGold}"; } } }
+    public void UseItem(InventorySlot slot) { if (currentlyDisplayedInventory == null || currentPlayerObject == null) return; ItemStack item = GetItemStackInSlot(slot.slotIndex); if (item == null || item.itemData == null) return; if (item.itemData.stats is ItemAbilityScrollStats scrollStats) { if (scrollStats.abilityToTeach == null) { return; } if (DomeController.instance == null) { return; } DomeAI domeAI = DomeController.instance.GetComponent<DomeAI>(); if (domeAI != null && !domeAI.defaultAbilities.Contains(scrollStats.abilityToTeach)) { domeAI.defaultAbilities.Add(scrollStats.abilityToTeach); currentlyDisplayedInventory.RemoveItem(slot.slotIndex, 1); } } else if (item.itemData.stats is ItemConsumableStats consumableStats) { PlayerAbilityHolder abilityHolder = currentPlayerObject.GetComponentInChildren<PlayerAbilityHolder>(); if (abilityHolder != null && consumableStats.usageAbility != null) { abilityHolder.UseAbility(consumableStats.usageAbility, currentPlayerObject); currentlyDisplayedInventory.RemoveItem(slot.slotIndex, 1); } } }
+
     private void OnSortValueChanged(int index) { if (currentlyDisplayedInventory != null) { currentlyDisplayedInventory.SortItems((Inventory.SortType)index); } }
-    private void InitializeUI() { foreach (Transform child in inventorySlotsParent) { Destroy(child.gameObject); } uiSlots.Clear(); for (int i = 0; i < 24; i++) { GameObject slotGO = Instantiate(inventorySlotPrefab, inventorySlotsParent); InventorySlot newSlot = slotGO.GetComponent<InventorySlot>(); newSlot.Initialize(this, i, null); newSlot.UpdateSlot(null); uiSlots.Add(newSlot); } }
-    public void DisplayInventory(Inventory inventoryToDisplay, GameObject playerObject) { if (currentlyDisplayedInventory != null) { currentlyDisplayedInventory.OnInventoryChanged -= RefreshUI; } currentlyDisplayedInventory = inventoryToDisplay; currentPlayerObject = playerObject; if (currentlyDisplayedInventory != null) { currentlyDisplayedInventory.OnInventoryChanged += RefreshUI; } if (sortDropdown != null) sortDropdown.value = 0; RefreshUI(); }
+
     public void HandleDropOnSlot(int toSlotIndex, ItemStack droppedItemStack) { var source = FindAnyObjectByType<UIDragDropController>().currentSource; if (source == null || currentlyDisplayedInventory == null) return; if (source is EquipmentSlot sourceEquipSlot) { if (equipmentManager != null) { equipmentManager.HandleUnequip(sourceEquipSlot.slotType); } } }
     private bool CheckRequirements(ItemStack itemStack, PlayerStats viewerStats) { if (viewerStats == null || itemStack == null || itemStack.itemData == null) return true; ItemData item = itemStack.itemData; if (PartyManager.instance.partyLevel < item.levelRequirement) return false; if (item.allowedClasses.Count > 0) { return item.allowedClasses.Contains(viewerStats.characterClass); } else { if (item.stats is ItemWeaponStats weaponStats) { return viewerStats.characterClass.allowedWeaponCategories.Contains(weaponStats.weaponCategory); } else if (item.stats is ItemArmourStats armourStats) { return viewerStats.characterClass.allowedArmourCategories.Contains(armourStats.armourCategory); } else { return true; } } }
     public void ShowTooltipForExternalItem(ItemStack itemStack, PlayerStats viewerStats) { if (TooltipManager.instance != null) { bool requirementsMet = CheckRequirements(itemStack, viewerStats); TooltipManager.instance.ShowItemTooltip(itemStack, requirementsMet, viewerStats); } }
