@@ -5,9 +5,14 @@ using UnityEngine.EventSystems;
 using System;
 using System.Linq;
 using Unity.VisualScripting;
+using System.Diagnostics; // Required for Stopwatch
 
 public class PlayerMovement : MonoBehaviour, IMovementHandler
 {
+    // --- Performance Monitoring ---
+    public float LastExecutionTimeMs { get; private set; }
+    private Stopwatch _perfWatch = new Stopwatch();
+
     public enum MovementMode { PointAndClick, WASD }
 
     [Header("Movement")]
@@ -125,8 +130,11 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         CurrentHeadLookPosition = transform.position + transform.forward * 5f;
     }
 
+    // --- UPDATED: Performance Tracking ---
     void Update()
     {
+        _perfWatch.Restart(); // Start Timer
+
         if (myHealth != null && myHealth.isDowned)
         {
             if (navMeshAgent != null && navMeshAgent.enabled && !navMeshAgent.isStopped)
@@ -134,11 +142,15 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
                 navMeshAgent.isStopped = true;
                 navMeshAgent.ResetPath();
             }
+            _perfWatch.Stop();
+            LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
             return;
         }
 
         if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != this.gameObject)
         {
+            _perfWatch.Stop();
+            LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
             return;
         }
 
@@ -146,13 +158,26 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         if (Input.GetKeyDown(KeyCode.X)) ToggleMovementMode();
         if (Input.GetKeyDown(KeyCode.H) && partyAIManager != null) partyAIManager.IssueCommandFollow();
 
-        if (isDodging || IsSpecialMovementActive) return;
-        if (abilityHolder != null && abilityHolder.IsAnimationLocked) return;
+        if (isDodging || IsSpecialMovementActive)
+        {
+            _perfWatch.Stop();
+            LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
+            return;
+        }
+
+        if (abilityHolder != null && abilityHolder.IsAnimationLocked)
+        {
+            _perfWatch.Stop();
+            LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
+            return;
+        }
 
         if (abilityHolder != null && abilityHolder.ActiveBeam != null)
         {
             if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
             RotateTowardsMouse(true);
+            _perfWatch.Stop();
+            LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
             return;
         }
 
@@ -162,15 +187,25 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         }
 
         if (isFacingLocked && (TargetObject == null || IsTargetDead(TargetObject))) isFacingLocked = false;
-        if (UIInteractionState.IsUIBlockingInput || EventSystem.current.IsPointerOverGameObject() || IsUIDragInProgress()) return;
+        if (UIInteractionState.IsUIBlockingInput || EventSystem.current.IsPointerOverGameObject() || IsUIDragInProgress())
+        {
+            _perfWatch.Stop();
+            LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
+            return;
+        }
 
         if (Input.GetKeyDown(KeyCode.Space) && Time.time >= nextDodgeTime)
         {
             StartCoroutine(DodgeRollCoroutine());
+            _perfWatch.Stop();
+            LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
             return;
         }
 
         HandleMovementInput();
+
+        _perfWatch.Stop(); // Stop Timer
+        LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
     }
 
     void LateUpdate()
@@ -215,9 +250,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         bool isCommand = Input.GetKey(KeyCode.LeftControl);
 
-        // --- FIX: Pass 'true' to signal this is a movement request ---
         if (abilityHolder != null) abilityHolder.CancelCast(true);
-        // -------------------------------------------------------------
 
         Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
         RaycastHit[] allHits = Physics.RaycastAll(ray, 100f);
@@ -282,9 +315,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         if (clickLockoutFrames > 0) return;
         if (Input.GetKey(KeyCode.LeftControl)) return;
 
-        // --- FIX: Pass 'true' to signal this is a movement request ---
         if (abilityHolder != null) abilityHolder.CancelCast(true);
-        // -------------------------------------------------------------
 
         Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
         if (Physics.Raycast(ray, out RaycastHit hit, 100f, interactionLayers))
@@ -345,7 +376,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         isDodging = true;
         nextDodgeTime = Time.time + dodgeDuration + dodgeCooldown;
 
-        // Dodge should ALWAYS cancel cast, regardless of movement allowance
         abilityHolder.CancelCast(false);
 
         StopMovement();
@@ -378,10 +408,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
             IsMovingToAttack = false;
             isFacingLocked = false;
-
-            // --- FIX: Pass 'true' to signal movement ---
             if (abilityHolder != null) abilityHolder.CancelCast(true);
-            // -------------------------------------------
         }
 
         Vector3 cameraForward = mainCamera.transform.forward;

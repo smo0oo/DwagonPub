@@ -204,10 +204,7 @@ public class PlayerAbilityHolder : MonoBehaviour
                 currentCastingVFXInstance.transform.SetParent(anchor, false);
                 currentCastingVFXInstance.transform.localPosition = ability.castingVFXPositionOffset;
                 currentCastingVFXInstance.transform.localRotation = Quaternion.Euler(ability.castingVFXRotationOffset);
-
-                // Reset scale for casting VFX as well, just in case
                 currentCastingVFXInstance.transform.localScale = ability.castingVFX.transform.localScale;
-
                 currentCastingVFXInstance.SetActive(true);
 
                 if (!ability.attachCastingVFX) currentCastingVFXInstance.transform.SetParent(null);
@@ -272,12 +269,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             else SpawnCastVFX(ability, aimRotation);
         }
 
-        // --- SHAKE TRIGGER ---
-        if (ability.screenShakeIntensity > 0)
-        {
-            OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration);
-        }
-        // ---------------------
+        if (ability.screenShakeIntensity > 0) OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration);
 
         OnPlayerAbilityUsed?.Invoke(this, ability);
         if (triggerAnimation) TriggerAttackAnimation(ability);
@@ -307,7 +299,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    // --- FIX APPLIED HERE ---
     private void SpawnCastVFX(Ability ability, Quaternion? overrideRotation = null)
     {
         Transform anchor = GetAnchorTransform(ability.castVFXAnchor);
@@ -317,11 +308,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (vfxInstance != null)
         {
             vfxInstance.transform.SetParent(anchor, false);
-
-            // FIX: Reset localScale to the prefab's original scale.
-            // This prevents "dirty" scale values (from animations) persisting when pooled.
             vfxInstance.transform.localScale = ability.castVFX.transform.localScale;
-
             vfxInstance.transform.localPosition = ability.castVFXPositionOffset;
             vfxInstance.transform.localRotation = Quaternion.Euler(ability.castVFXRotationOffset);
             vfxInstance.SetActive(true);
@@ -329,7 +316,6 @@ public class PlayerAbilityHolder : MonoBehaviour
             if (!ability.attachCastVFX) vfxInstance.transform.SetParent(null);
         }
     }
-    // ------------------------
 
     private Transform GetAnchorTransform(VFXAnchor anchor)
     {
@@ -479,11 +465,9 @@ public class PlayerAbilityHolder : MonoBehaviour
         {
             Vector3 spawnPos = position + ability.hitVFXPositionOffset;
             Quaternion spawnRot = Quaternion.Euler(ability.hitVFXRotationOffset);
-
             GameObject vfx = ObjectPooler.instance.Get(ability.hitVFX, spawnPos, spawnRot);
             if (vfx != null)
             {
-                // Reset scale for hit VFX as well
                 vfx.transform.localScale = ability.hitVFX.transform.localScale;
                 vfx.SetActive(true);
             }
@@ -529,18 +513,29 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
+    // --- UPDATED METHOD FOR BLIZZARD ABILITY ---
     private void HandleGroundPlacement(Ability ability, Vector3 position)
     {
         if (ability.placementPrefab != null)
         {
-            GameObject trapObject = Instantiate(ability.placementPrefab, position, Quaternion.identity);
-            if (trapObject.TryGetComponent<PlaceableTrap>(out var trap))
+            GameObject placedObject = Instantiate(ability.placementPrefab, position, Quaternion.identity);
+            GameObject caster = this.gameObject;
+            CharacterRoot casterRoot = GetComponentInParent<CharacterRoot>();
+            if (casterRoot != null) caster = casterRoot.gameObject;
+
+            // 1. Check for Blizzard/Rain Controller
+            if (placedObject.TryGetComponent<AreaBombardmentController>(out var bombardment))
             {
-                CharacterRoot casterRoot = this.GetComponentInParent<CharacterRoot>();
-                if (casterRoot != null) trap.owner = casterRoot.gameObject;
+                bombardment.Initialize(caster, ability);
+            }
+            // 2. Check for Traps
+            else if (placedObject.TryGetComponent<PlaceableTrap>(out var trap))
+            {
+                trap.owner = caster;
             }
         }
     }
+    // -------------------------------------------
 
     public bool GetCooldownStatus(Ability ability, out float remaining) { remaining = 0f; if (cooldowns.TryGetValue(ability, out float endTime)) { if (Time.time < endTime) { remaining = endTime - Time.time; return true; } } return false; }
     public bool CanUseAbility(Ability ability, GameObject target) { if (ability == null || IsCasting) return false; if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false; if (ability.requiresWeaponType && !IsCorrectWeaponEquipped(ability.requiredWeaponCategories)) return false; if ((ability.abilityType == AbilityType.TargetedMelee || ability.abilityType == AbilityType.TargetedProjectile || ability.abilityType == AbilityType.Charge) && target == null) return false; if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false; if (playerStats != null && playerStats.currentMana < ability.manaCost) return false; return true; }

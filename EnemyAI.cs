@@ -4,6 +4,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System;
+using System.Diagnostics; // Required for Stopwatch
 
 [RequireComponent(typeof(NavMeshAgent), typeof(Health), typeof(EnemyAbilityHolder))]
 [RequireComponent(typeof(AITargeting), typeof(AIAbilitySelector))]
@@ -18,8 +19,11 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public Animator Animator { get; private set; }
     public CharacterMovementHandler MovementHandler { get; private set; }
 
+    // --- Performance Monitoring (AAA) ---
+    public float LastExecutionTimeMs { get; private set; }
+    private Stopwatch _perfWatch = new Stopwatch();
+
     // --- State Data ---
-    // FIX: Added [HideInInspector] to prevent UnassignedReferenceException since this is runtime-only
     [HideInInspector]
     public Transform currentTarget;
 
@@ -35,8 +39,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     // --- Cooldown Tracker for Retreating ---
     public float LastRetreatTime { get; set; } = -999f;
-    public float RetreatCooldown { get; set; } = 10f; // Don't try to flee again for 10s
-    // -------------------------------------------
+    public float RetreatCooldown { get; set; } = 10f;
 
     // --- Configuration ---
     [Header("Enemy Stats & Behavior")]
@@ -82,7 +85,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private string lastAction = "";
     private IEnemyState currentState;
 
-    // --- Animation Hashes (2D Movement) ---
+    // --- Animation Hashes ---
     private int velocityXHash;
     private int velocityZHash;
     private int attackTriggerHash;
@@ -105,10 +108,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         AbilitySelector = GetComponent<AIAbilitySelector>();
         MovementHandler = GetComponent<CharacterMovementHandler>();
 
-        // --- 2D Blend Tree Hashes ---
         velocityXHash = Animator.StringToHash("VelocityX");
         velocityZHash = Animator.StringToHash("VelocityZ");
-
         attackTriggerHash = Animator.StringToHash("AttackTrigger");
         attackIndexHash = Animator.StringToHash("AttackIndex");
         idleIndexHash = Animator.StringToHash("IdleIndex");
@@ -183,9 +184,18 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
+    // --- UPDATED: Performance Tracking Loop ---
     void Update()
     {
-        if (isDead) return;
+        // Start Stopwatch
+        _perfWatch.Restart();
+
+        if (isDead)
+        {
+            _perfWatch.Stop();
+            LastExecutionTimeMs = 0f;
+            return;
+        }
 
         HandleRotation();
 
@@ -203,12 +213,15 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         if (isAnimationLocked || Time.time < recoveryTimer)
         {
             StopMovement();
-            // Zero out motion when locked
             if (Animator != null)
             {
                 Animator.SetFloat(velocityXHash, 0f);
                 Animator.SetFloat(velocityZHash, 0f);
             }
+
+            // Stop Stopwatch & Record
+            _perfWatch.Stop();
+            LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
             return;
         }
 
@@ -223,11 +236,19 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
                 lookDir.y = 0;
                 if (lookDir != Vector3.zero) transform.rotation = Quaternion.LookRotation(lookDir);
             }
+
+            // Stop Stopwatch & Record
+            _perfWatch.Stop();
+            LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
             return;
         }
-    }
 
-    // --- 2D Animation Logic ---
+        // Stop Stopwatch & Record
+        _perfWatch.Stop();
+        LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
+    }
+    // ------------------------------------------
+
     private void UpdateAnimator()
     {
         if (Animator == null) return;
@@ -238,22 +259,15 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             return;
         }
 
-        // Get World Velocity
         Vector3 worldVelocity = NavAgent.velocity;
-
-        // Handle "Sliding" when near destination (Agent slows down but velocity stays high briefly)
         if (NavAgent.remainingDistance < 0.1f && !NavAgent.isStopped) worldVelocity = Vector3.zero;
 
-        // Convert to Local Space (Relative to facing)
-        // Z = Forward/Back, X = Right/Left
         Vector3 localVelocity = transform.InverseTransformDirection(worldVelocity);
         float speed = NavAgent.speed > 0 ? NavAgent.speed : 3.5f;
 
-        // Normalize (-1 to 1)
         float vX = localVelocity.x / speed;
         float vZ = localVelocity.z / speed;
 
-        // Update Animator
         Animator.SetFloat(velocityXHash, vX, 0.1f, Time.deltaTime);
         Animator.SetFloat(velocityZHash, vZ, 0.1f, Time.deltaTime);
 
@@ -300,7 +314,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         Vector3 bestPoint = transform.position;
         bool found = false;
 
-        // Kiting Logic: Look for a spot behind us
         for (int i = 0; i < 8; i++)
         {
             float angle = (i / 7f - 0.5f) * 120f;
@@ -374,7 +387,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         Vector3 targetLookPos = Vector3.zero;
         bool shouldRotate = false;
 
-        // Sequence Priority Logic
         if (IsInActionSequence)
         {
             if (currentTarget != null)
@@ -392,7 +404,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
                 }
             }
         }
-        // Standard Logic
         else if (currentTarget != null)
         {
             targetLookPos = currentTarget.position;
@@ -473,11 +484,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
                 if (hpPercent <= trigger.healthPercentage && !triggeredHealthPhases.Contains(trigger))
                 {
                     triggeredHealthPhases.Add(trigger);
-
-                    // FIX: Use explicit null check instead of '?.' to avoid Unity object lifetime issues + ensure fallback works correctly
                     GameObject targetObj = (currentTarget != null) ? currentTarget.gameObject : gameObject;
                     AbilityHolder.UseAbility(trigger.abilityToUse, targetObj);
-
                     break;
                 }
             }
