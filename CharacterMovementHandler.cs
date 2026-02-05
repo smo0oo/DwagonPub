@@ -10,6 +10,10 @@ public class CharacterMovementHandler : MonoBehaviour, IMovementHandler
 
     public bool handleStandardMovement = true;
 
+    [Header("Collision Checks")]
+    [Tooltip("Layers that will block the Leap ability (e.g. Walls, Default).")]
+    public LayerMask obstacleLayers;
+
     public bool IsSpecialMovementActive { get; private set; } = false;
 
     private NavMeshAgent navAgent;
@@ -142,6 +146,41 @@ public class CharacterMovementHandler : MonoBehaviour, IMovementHandler
     public void ExecuteLeap(Vector3 destination, System.Action onLandAction)
     {
         if (IsSpecialMovementActive) return;
+
+        // --- NEW: Collision Prevention ---
+        Vector3 startPos = transform.position;
+        // Lift origin slightly so we don't hit the floor immediately, but keep it relevant to body height
+        Vector3 rayOrigin = startPos + Vector3.up * 1.0f;
+        Vector3 targetPos = destination + Vector3.up * 1.0f;
+
+        Vector3 direction = (targetPos - rayOrigin).normalized;
+        float distance = Vector3.Distance(rayOrigin, targetPos);
+
+        // Check for walls/obstacles
+        if (Physics.Raycast(rayOrigin, direction, out RaycastHit hit, distance, obstacleLayers))
+        {
+            // We hit a wall. Stop the leap shortly before the wall.
+            Vector3 hitPoint = hit.point;
+
+            // Back off 0.5 units from the wall to prevent clipping
+            Vector3 backOff = direction * 0.5f;
+            hitPoint -= backOff;
+
+            // Set Y back to original destination Y (or hit point Y if it's terrain)
+            hitPoint.y = destination.y;
+
+            // Verify this new point is actually on the NavMesh so we don't get stuck in a wall
+            if (NavMesh.SamplePosition(hitPoint, out NavMeshHit navHit, 2.0f, NavMesh.AllAreas))
+            {
+                destination = navHit.position;
+            }
+            else
+            {
+                destination = hitPoint;
+            }
+        }
+        // ---------------------------------
+
         StartCoroutine(LeapRoutine(destination, onLandAction));
     }
 

@@ -28,6 +28,9 @@ public class AreaBombardmentController : MonoBehaviour
 
     [Header("Visuals & Audio")]
     public GameObject areaIndicatorVFX;
+    [Tooltip("Optional: Overrides the impact VFX defined in the Ability for these projectiles.")]
+    public GameObject projectileImpactVFX; // --- NEW: Impact Override ---
+
     [Tooltip("Sound to play on loop while the storm is active.")]
     public AudioClip ambienceLoop;
     public float ambienceFadeDuration = 1.0f;
@@ -38,16 +41,31 @@ public class AreaBombardmentController : MonoBehaviour
     private int casterLayer;
     private AudioSource audioSource;
     private float stopTime;
+    private bool isRuntimeClone = false; // --- NEW: Track cloning ---
 
     public void Initialize(GameObject caster, Ability ability)
     {
         this.caster = caster;
-        this.sourceAbility = ability;
         this.casterLayer = caster.GetComponentInParent<CharacterRoot>()?.gameObject.layer ?? caster.layer;
 
+        // --- NEW: Handle VFX Override ---
+        // If an override is set, we clone the ability so we can swap the hitVFX
+        // without affecting the original asset or needing to change the Projectile script.
+        if (projectileImpactVFX != null && ability != null)
+        {
+            this.sourceAbility = Instantiate(ability);
+            this.sourceAbility.name = ability.name + " (VFX Override)";
+            this.sourceAbility.hitVFX = projectileImpactVFX;
+            isRuntimeClone = true;
+        }
+        else
+        {
+            this.sourceAbility = ability;
+        }
+
         // Override radius if the ability defines a specific AOE
-        if (useAbilityRadius && ability.aoeRadius > 0)
-            this.radius = ability.aoeRadius;
+        if (useAbilityRadius && this.sourceAbility != null && this.sourceAbility.aoeRadius > 0)
+            this.radius = this.sourceAbility.aoeRadius;
 
         // Setup Audio
         audioSource = GetComponent<AudioSource>();
@@ -72,8 +90,18 @@ public class AreaBombardmentController : MonoBehaviour
         stopTime = Time.time + duration;
         StartCoroutine(BombardmentRoutine());
 
-        // Auto Cleanup: Destroy this controller object after duration + buffer for fading
-        Destroy(gameObject, duration + 2.0f);
+        // Auto Cleanup: Destroy this controller object after duration + buffer
+        // INCREASED BUFFER: from 2.0f to 5.0f to ensure projectiles land before we destroy the runtime ability data
+        Destroy(gameObject, duration + 5.0f);
+    }
+
+    // --- NEW: Cleanup Runtime Data ---
+    void OnDestroy()
+    {
+        if (isRuntimeClone && sourceAbility != null)
+        {
+            Destroy(sourceAbility);
+        }
     }
 
     private IEnumerator BombardmentRoutine()

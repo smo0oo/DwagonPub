@@ -219,7 +219,25 @@ public class PlayerAbilityHolder : MonoBehaviour
             if (ability.telegraphDuration > 0) yield return new WaitForSeconds(ability.telegraphDuration);
             if (castTime > 0) yield return new WaitForSeconds(castTime);
 
-            if (target == null && playerMovement != null) position = playerMovement.CurrentLookTarget;
+            // --- AAA FIX: Position Locking Logic ---
+            // If the user provided a target GameObject, position is derived from that.
+            // If NO target (ground cast), we decide whether to update to the CURRENT mouse position or keep the ORIGINAL click position.
+            if (target == null && playerMovement != null)
+            {
+                // These types are "Fire and Forget" at a specific spot. Do NOT update to mouse position.
+                bool isFixedGroundTarget = ability.abilityType == AbilityType.GroundPlacement ||
+                                           ability.abilityType == AbilityType.GroundAOE ||
+                                           ability.abilityType == AbilityType.Leap ||
+                                           ability.abilityType == AbilityType.Teleport;
+
+                // Only update position for directional/aimed abilities (like ForwardProjectile)
+                if (!isFixedGroundTarget)
+                {
+                    position = playerMovement.CurrentLookTarget;
+                }
+            }
+            // ---------------------------------------
+
             ExecuteAbility(ability, target, position, bypassCooldown, (ability.abilityType != AbilityType.ChanneledBeam));
         }
         finally
