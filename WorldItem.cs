@@ -12,6 +12,50 @@ public class WorldItem : MonoBehaviour, IInteractable
     public string inventoryVariableName = "Inventory";
 
     private bool isBeingPickedUp = false;
+    private bool hasStarted = false;
+
+    // --- TIMING FIX: Use Start() for first initialization ---
+    private void Start()
+    {
+        hasStarted = true;
+        RegisterWithManager();
+    }
+
+    private void OnEnable()
+    {
+        // Only register in OnEnable if we have ALREADY run Start() once.
+        // This prevents the "Creation Race Condition" but still supports Object Pooling.
+        if (hasStarted)
+        {
+            RegisterWithManager();
+        }
+    }
+
+    private void RegisterWithManager()
+    {
+        if (LootLabelManager.instance != null)
+        {
+            // If the manager already has us, this forces a refresh of the name
+            LootLabelManager.instance.RegisterOrUpdateItem(this);
+        }
+    }
+    // --------------------------------------------------------
+
+    private void OnDestroy()
+    {
+        if (LootLabelManager.instance != null)
+        {
+            LootLabelManager.instance.UnregisterItem(this);
+        }
+    }
+
+    private void OnDisable()
+    {
+        if (LootLabelManager.instance != null)
+        {
+            LootLabelManager.instance.UnregisterItem(this);
+        }
+    }
 
     public void Interact(GameObject interactor)
     {
@@ -20,23 +64,14 @@ public class WorldItem : MonoBehaviour, IInteractable
 
         if (InventoryManager.instance != null)
         {
-            // --- FIX: Route EVERYTHING through the Manager ---
-            // This allows InventoryManager to decide if it goes to:
-            // 1. The Wagon (Resources)
-            // 2. The Loot Bag (Dual Mode)
-            // 3. The Player Inventory (Standard)
             bool success = InventoryManager.instance.HandleLoot(itemData, quantity);
-
             if (success)
             {
                 Destroy(gameObject);
                 return;
             }
-            // -------------------------------------------------
         }
 
-        // Fallback: If InventoryManager is missing or returned false (e.g. full), 
-        // try adding directly to the interactor as a last resort.
         AddToSpecificInventory(interactor);
     }
 
