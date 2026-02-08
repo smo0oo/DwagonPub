@@ -14,8 +14,9 @@ public class PartyMemberAbilitySelector : MonoBehaviour
     private PlayerAbilityHolder abilityHolder;
     private PartyMemberAI selfAI;
     private PartyMemberTargeting selfTargeting;
+    private PlayerMovement playerMovement; // [Added] Reference to get default attack
 
-    // --- NEW: Buffers for Non-Allocating Physics and queries ---
+    // --- Buffers for Non-Allocating Physics and queries ---
     private Collider[] _aoeBuffer = new Collider[50];
     private List<Ability> _usableAbilitiesBuffer = new List<Ability>();
 
@@ -27,6 +28,7 @@ public class PartyMemberAbilitySelector : MonoBehaviour
             playerStats = root.PlayerStats;
             abilityHolder = root.PlayerAbilityHolder;
             selfAI = root.GetComponent<PartyMemberAI>();
+            playerMovement = root.PlayerMovement; // [Added] Cache PlayerMovement
         }
         selfTargeting = GetComponent<PartyMemberTargeting>();
     }
@@ -35,31 +37,53 @@ public class PartyMemberAbilitySelector : MonoBehaviour
     {
         if (playerStats == null || abilityHolder == null || selfAI == null || selfTargeting == null) return null;
 
+        // [Fixed] Removed the early return for empty knownAbilities. 
+        // We must continue to check for the default attack even if the list is null/empty.
         var allKnownAbilities = playerStats.knownAbilities;
-        if (allKnownAbilities == null || allKnownAbilities.Count == 0) return null;
 
-        // --- MODIFIED: Use buffer list instead of LINQ ---
         _usableAbilitiesBuffer.Clear();
-        foreach (var a in allKnownAbilities)
+
+        // 1. Add Learned Abilities
+        if (allKnownAbilities != null)
         {
-            if (abilityHolder.CanUseAbility(a, target))
+            foreach (var a in allKnownAbilities)
             {
-                _usableAbilitiesBuffer.Add(a);
+                if (abilityHolder.CanUseAbility(a, target))
+                {
+                    _usableAbilitiesBuffer.Add(a);
+                }
             }
         }
 
+        // 2. [Added] Add Default Ability (Punch/Weapon Attack) if available
+        if (playerMovement != null && playerMovement.defaultAttackAbility != null)
+        {
+            // Ensure we don't add it twice if it's already in the known list
+            if (!_usableAbilitiesBuffer.Contains(playerMovement.defaultAttackAbility))
+            {
+                if (abilityHolder.CanUseAbility(playerMovement.defaultAttackAbility, target))
+                {
+                    _usableAbilitiesBuffer.Add(playerMovement.defaultAttackAbility);
+                }
+            }
+        }
+
+        // If we still have no abilities (not even a default punch), we can't do anything.
         if (_usableAbilitiesBuffer.Count == 0) return null;
 
         // --- TACTICAL HIERARCHY ---
 
         if (playerStats.characterClass.aiRole == PlayerClass.AILogicRole.Support)
         {
-            // --- MODIFIED: Replaced LINQ with 'foreach' loop for zero garbage ---
             int woundedAllies = 0;
             foreach (var ai in PartyAIManager.instance.AllPartyAIs)
             {
                 if (ai == null) continue;
-                Health allyHealth = ai.GetComponent<CharacterRoot>()?.Health;
+                CharacterRoot allyRoot = ai.GetComponent<CharacterRoot>();
+                // Only count active allies
+                if (allyRoot == null || !allyRoot.gameObject.activeInHierarchy) continue;
+
+                Health allyHealth = allyRoot.Health;
                 if (allyHealth == null) continue;
 
                 if ((float)allyHealth.currentHealth / allyHealth.maxHealth < selfTargeting.healThreshold)
@@ -88,7 +112,6 @@ public class PartyMemberAbilitySelector : MonoBehaviour
                 if (finisher != null) return finisher;
             }
 
-            // --- MODIFIED: Use Non-Allocating version ---
             int nearbyEnemies = Physics.OverlapSphereNonAlloc(target.transform.position, 5f, _aoeBuffer, selfTargeting.enemyLayer);
             if (nearbyEnemies >= aoeDamageEnemyThreshold)
             {
@@ -97,10 +120,10 @@ public class PartyMemberAbilitySelector : MonoBehaviour
             }
         }
 
-        // --- MODIFIED: Replaced LINQ with 'foreach' loop for zero garbage ---
         Ability bestStandardDamage = null;
         foreach (var a in _usableAbilitiesBuffer)
         {
+            // Default attacks usually fall under StandardDamage
             if (a.usageType == AIUsageType.StandardDamage)
             {
                 if (bestStandardDamage == null || a.priority > bestStandardDamage.priority)
@@ -112,7 +135,6 @@ public class PartyMemberAbilitySelector : MonoBehaviour
         return bestStandardDamage;
     }
 
-    // --- MODIFIED: Replaced LINQ with 'foreach' loop for zero garbage ---
     private Ability FindAbilityByType(List<Ability> abilitiesToSearch, AIUsageType type, GameObject target)
     {
         Ability bestAbility = null;

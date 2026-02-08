@@ -4,6 +4,7 @@ using UnityEngine;
 /// A central hub component placed on the root of a character prefab.
 /// It finds and caches references to all core components, providing a single,
 /// efficient point of access for other scripts.
+/// the search 'upstream'  on any character should always stop at the first 'character root' component
 /// </summary>
 public class CharacterRoot : MonoBehaviour
 {

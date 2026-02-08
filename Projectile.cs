@@ -4,40 +4,32 @@ using System.Collections.Generic;
 [RequireComponent(typeof(Collider))]
 public class Projectile : MonoBehaviour
 {
+    [Header("Debug")]
+    public bool debugMode = true; // Uncheck this later to stop spamming console
+
     [Header("Settings")]
     public float speed = 20f;
     public float lifetime = 5f;
 
-    [Tooltip("Layers that trigger the projectile's impact. Set this to include Terrain, Enemies, etc.")]
-    public LayerMask collisionLayers = -1; // Default to Everything
+    [Tooltip("Layers that trigger the projectile's impact.")]
+    public LayerMask collisionLayers = -1;
 
-    [Tooltip("Layers to apply damage/effects to when exploding (if AOE). Defaults to Everything, but filtered by CharacterRoot.")]
+    [Tooltip("Layers to apply damage/effects to when exploding.")]
     public LayerMask damageLayers = -1;
 
     [Header("Visuals")]
-    [Tooltip("If true, simulates particle systems forward by 'preWarmSeconds' on spawn. Useful for fireballs that need to look 'full' instantly.")]
     public bool preWarmVFX = true;
     public float preWarmSeconds = 0.2f;
 
-    // Data is now private
     private Ability sourceAbility;
     private GameObject caster;
     private int casterLayer;
-
     private float lifetimeTimer;
     private PooledObject pooledObject;
 
-    void Awake()
-    {
-        // GetComponent<PooledObject>() removed from Awake to avoid race conditions
-    }
-
     void OnEnable()
     {
-        if (pooledObject == null)
-        {
-            pooledObject = GetComponent<PooledObject>();
-        }
+        if (pooledObject == null) pooledObject = GetComponent<PooledObject>();
     }
 
     public void Initialize(Ability ability, GameObject caster, int layer)
@@ -50,74 +42,79 @@ public class Projectile : MonoBehaviour
         if (preWarmVFX)
         {
             ParticleSystem[] particles = GetComponentsInChildren<ParticleSystem>();
-            foreach (var ps in particles)
-            {
-                ps.Clear();
-                ps.Play();
-                ps.Simulate(preWarmSeconds, true, false);
-            }
+            foreach (var ps in particles) { ps.Clear(); ps.Play(); ps.Simulate(preWarmSeconds, true, false); }
         }
     }
 
     void Update()
     {
         lifetimeTimer -= Time.deltaTime;
-        if (lifetimeTimer <= 0f)
-        {
-            Terminate();
-            return;
-        }
-
+        if (lifetimeTimer <= 0f) { Terminate(); return; }
         transform.Translate(Vector3.forward * speed * Time.deltaTime);
     }
 
     private void OnTriggerEnter(Collider other)
     {
-        // 1. Layer Mask Check (What stops the projectile?)
+        if (debugMode) Debug.Log($"[Projectile] TOUCHED: '{other.name}' | Layer: {other.gameObject.layer} | IsTrigger: {other.isTrigger} | Root: {other.transform.root.name}");
+
+        // [CHECK 1] Activation Trigger / Aggro Range
+        if (other.gameObject.layer == 21)
+        {
+            if (debugMode) Debug.Log($"[Projectile] IGNORED: '{other.name}' is on Layer 21 (ActivationTrigger). Flying through...");
+            return;
+        }
+
+        // [CHECK 2] Collision Layer Mask
         if (((1 << other.gameObject.layer) & collisionLayers) == 0)
         {
+            if (debugMode) Debug.Log($"[Projectile] IGNORED: '{other.name}' (Layer {other.gameObject.layer}) is not in the Collision Mask.");
             return;
         }
 
         CharacterRoot hitCharacterRoot = other.GetComponentInParent<CharacterRoot>();
 
-        // 2. Hit Caster (Always Ignore Self)
+        // [CHECK 3] Self-Hit check
         if (caster != null)
         {
             CharacterRoot casterRoot = caster.GetComponentInParent<CharacterRoot>();
-            if (casterRoot != null && hitCharacterRoot == casterRoot) return;
-        }
-
-        // 3. Ally Pass-Through Check
-        // If we hit a character, check if it's an ally and if we have effects for them.
-        // If not (e.g. shooting a fireball through a friend), ignore the collision.
-        if (hitCharacterRoot != null && sourceAbility != null)
-        {
-            int targetLayer = hitCharacterRoot.gameObject.layer;
-            bool isAlly = casterLayer == targetLayer;
-
-            if (isAlly && (sourceAbility.friendlyEffects == null || sourceAbility.friendlyEffects.Count == 0))
+            if (casterRoot != null && hitCharacterRoot == casterRoot)
             {
+                // Don't log self-hits, they happen constantly on spawn
                 return;
             }
         }
 
-        // 4. AOE Explosion Logic
-        // If ability has a radius, hitting ANYTHING (Ground, Wall, Enemy) triggers the explosion.
+        // [CHECK 4] Ally Pass-Through
+        if (hitCharacterRoot != null && sourceAbility != null)
+        {
+            if (casterLayer == hitCharacterRoot.gameObject.layer && (sourceAbility.friendlyEffects == null || sourceAbility.friendlyEffects.Count == 0))
+            {
+                if (debugMode) Debug.Log($"[Projectile] IGNORED: '{other.name}' is an Ally and ability has no friendly effects.");
+                return;
+            }
+        }
+
+        // --- IMPACT ---
+
+        // AOE Logic
         if (sourceAbility != null && sourceAbility.aoeRadius > 0)
         {
+            if (debugMode) Debug.Log($"[Projectile] EXPLODING on '{other.name}' (AOE Radius: {sourceAbility.aoeRadius})");
             Explode();
             Terminate();
             return;
         }
 
-        // 5. Single Target Logic (No AOE)
+        // Single Target Logic
         SpawnImpactVFX();
-
-        // If we hit a character directly, apply effects only to them
         if (hitCharacterRoot != null)
         {
+            if (debugMode) Debug.Log($"[Projectile] DIRECT HIT on '{hitCharacterRoot.name}'. Applying Effects...");
             ApplyEffectsToTarget(hitCharacterRoot);
+        }
+        else
+        {
+            if (debugMode) Debug.Log($"[Projectile] HIT '{other.name}' (Non-Character). Destroying.");
         }
 
         Terminate();
@@ -125,26 +122,24 @@ public class Projectile : MonoBehaviour
 
     private void Explode()
     {
-        // 1. VFX & Sound
         SpawnImpactVFX();
-
         if (sourceAbility != null && sourceAbility.impactSound != null)
-        {
             AudioSource.PlayClipAtPoint(sourceAbility.impactSound, transform.position);
-        }
 
-        // 2. Find Targets
-        // Use transform.position as the center of the explosion
         Collider[] hits = Physics.OverlapSphere(transform.position, sourceAbility.aoeRadius, damageLayers);
         HashSet<CharacterRoot> affectedTargets = new HashSet<CharacterRoot>();
 
+        if (debugMode) Debug.Log($"[Projectile] AOE Scan found {hits.Length} colliders.");
+
         foreach (var hit in hits)
         {
-            CharacterRoot target = hit.GetComponentInParent<CharacterRoot>();
+            // Skip Aggro Triggers
+            if (hit.gameObject.layer == 21) continue;
 
-            // Skip non-characters or targets we've already hit (to avoid double damage on multiple colliders)
+            CharacterRoot target = hit.GetComponentInParent<CharacterRoot>();
             if (target == null || affectedTargets.Contains(target)) continue;
 
+            if (debugMode) Debug.Log($"[Projectile] AOE HIT: {target.name}");
             affectedTargets.Add(target);
             ApplyEffectsToTarget(target);
         }
@@ -153,30 +148,30 @@ public class Projectile : MonoBehaviour
     private void ApplyEffectsToTarget(CharacterRoot target)
     {
         if (caster == null || sourceAbility == null) return;
-
-        int targetLayer = target.gameObject.layer;
-        bool isAlly = casterLayer == targetLayer;
-
+        bool isAlly = casterLayer == target.gameObject.layer;
         var effects = isAlly ? sourceAbility.friendlyEffects : sourceAbility.hostileEffects;
-        if (effects == null) return;
+
+        if (effects == null || effects.Count == 0)
+        {
+            if (debugMode) Debug.Log($"[Projectile] WARNING: No effects found to apply to {target.name} (IsAlly: {isAlly})");
+            return;
+        }
 
         foreach (var effect in effects)
         {
-            if (effect != null) effect.Apply(caster, target.gameObject);
+            if (effect != null)
+            {
+                // if (debugMode) Debug.Log($"[Projectile] Applying Effect: {effect.GetType().Name}");
+                effect.Apply(caster, target.gameObject);
+            }
         }
     }
 
     private void SpawnImpactVFX()
     {
         if (sourceAbility == null || sourceAbility.hitVFX == null) return;
-
-        Vector3 spawnPos = transform.position;
-        Quaternion spawnRot = Quaternion.identity;
-
-        // Apply Offsets relative to projectile orientation
-        spawnRot = transform.rotation * Quaternion.Euler(sourceAbility.hitVFXRotationOffset);
-        spawnPos = transform.position + (transform.rotation * sourceAbility.hitVFXPositionOffset);
-
+        Vector3 spawnPos = transform.position + (transform.rotation * sourceAbility.hitVFXPositionOffset);
+        Quaternion spawnRot = transform.rotation * Quaternion.Euler(sourceAbility.hitVFXRotationOffset);
         GameObject vfx = ObjectPooler.instance.Get(sourceAbility.hitVFX, spawnPos, spawnRot);
         if (vfx != null) vfx.SetActive(true);
     }
