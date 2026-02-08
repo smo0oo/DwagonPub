@@ -5,31 +5,44 @@ using UnityEngine;
 [Serializable]
 public class SaveData
 {
-    // World
+    // --- SETTINGS ---
+    [Header("Video Settings")]
+    public int resolutionWidth = 1920;  // Default 1920
+    public int resolutionHeight = 1080; // Default 1080
+    public int refreshRate = 60;        // Default 60Hz
+    public int fullscreenMode = 1;      // 0=Exclusive, 1=Borderless, 2=Windowed
+    public int graphicsQualityIndex = 2; // Default High
+
+    [Header("Audio Settings")]
+    public float masterVolume = 1.0f;
+    public float musicVolume = 0.8f;
+    public float sfxVolume = 1.0f;
+    // ----------------
+
+    // --- GAMEPLAY DATA ---
+    [Header("World Data")]
     public float timeOfDay;
     public string currentLocationNodeID;
 
-    // --- NEW: Location Type State ---
     // Stored as int to ensure serialization works easily across versions
     public int lastLocationType;
-    // --------------------------------
 
-    // Wagon Resources
+    [Header("Wagon Resources")]
     public float wagonFuel;
     public float wagonRations;
     public float wagonIntegrity;
 
-    // Dual Mode State
+    [Header("Dual Mode State")]
     public DualModeSaveData dualModeData = new DualModeSaveData();
 
-    // Party
+    [Header("Party Data")]
     public int partyLevel;
     public int currentXP;
     public int xpToNextLevel;
     public int currencyGold;
 
     // Characters
-    public List<CharacterSaveData> characterData = new();
+    public List<CharacterSaveData> characterData = new List<CharacterSaveData>();
 }
 
 [Serializable]
@@ -56,10 +69,10 @@ public class CharacterSaveData
     public int bonusAgility;
     public int bonusIntelligence;
     public int bonusFaith;
-    public List<string> unlockedAbilityBaseIDs = new();
-    public List<int> unlockedAbilityRanks = new();
-    public List<ItemStackSaveData> inventoryItems = new();
-    public Dictionary<EquipmentType, ItemStackSaveData> equippedItems = new();
+    public List<string> unlockedAbilityBaseIDs = new List<string>();
+    public List<int> unlockedAbilityRanks = new List<int>();
+    public List<ItemStackSaveData> inventoryItems = new List<ItemStackSaveData>();
+    public Dictionary<EquipmentType, ItemStackSaveData> equippedItems = new Dictionary<EquipmentType, ItemStackSaveData>();
     public int currentHealth;
 }
 

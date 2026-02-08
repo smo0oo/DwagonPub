@@ -2,27 +2,81 @@ using UnityEngine;
 using UnityEngine.UI;
 using System.IO;
 
-/// <summary>
-/// Manages the buttons on the Main Menu scene.
-/// </summary>
-public class MainMenuUI : MonoBehaviour
+public class MainMenuController : MonoBehaviour
 {
     [Header("UI Buttons")]
     public Button newGameButton;
     public Button loadGameButton;
+    public Button optionsButton;
     public Button quitButton;
 
+    [Header("Debug / Dev Buttons")]
+    [Tooltip("Button to instantly load the town scene for testing.")]
+    public Button debugTownButton;
+
+    [Header("Scene Config")]
     [Tooltip("The name of the scene to load when the 'Town' button is clicked.")]
     public string debugTownSceneName = "Town_Large_A";
 
     void Start()
     {
-        // Add listeners to the buttons to call the correct methods
+        // Standard Button Listeners
         if (newGameButton != null) newGameButton.onClick.AddListener(OnNewGame);
         if (loadGameButton != null) loadGameButton.onClick.AddListener(OnLoadGame);
         if (quitButton != null) quitButton.onClick.AddListener(OnQuitGame);
 
-        // Disable the "Load Game" button if no save file exists
+        // Options Listener
+        if (optionsButton != null) optionsButton.onClick.AddListener(OnOptionsClicked);
+
+        // Town Loader Listener
+        if (debugTownButton != null) debugTownButton.onClick.AddListener(LoadTownScene);
+
+        CheckSaveFile();
+    }
+
+    public void OnOptionsClicked()
+    {
+        // 1. Try Singleton first (Fastest)
+        if (OptionsMenuUI.instance != null)
+        {
+            OptionsMenuUI.instance.OpenMenu();
+            return;
+        }
+
+        // 2. Fallback search (Safety)
+        // --- FIX: Updated for Unity 2023+ to resolve CS0618 warning ---
+        // We use FindFirstObjectByType with FindObjectsInactive.Include 
+        // to find the menu even if the GameObject is currently disabled.
+        OptionsMenuUI foundOptions = FindFirstObjectByType<OptionsMenuUI>(FindObjectsInactive.Include);
+
+        if (foundOptions != null)
+        {
+            foundOptions.OpenMenu();
+        }
+        else
+        {
+            Debug.LogError("MainMenuController: Could not find 'OptionsMenuUI'. Ensure your Core/UI scene is loaded.");
+        }
+    }
+
+    public void LoadTownScene()
+    {
+        if (GameManager.instance != null)
+        {
+            // Reset dungeon flags to prevent UI issues in town
+            GameManager.instance.SetJustExitedDungeon(false);
+
+            // Load the town directly
+            GameManager.instance.LoadLevel(debugTownSceneName);
+        }
+        else
+        {
+            Debug.LogWarning("GameManager instance not found! Cannot load town.");
+        }
+    }
+
+    private void CheckSaveFile()
+    {
         if (loadGameButton != null)
         {
             string path = Path.Combine(Application.persistentDataPath, "savegame.json");
@@ -32,7 +86,6 @@ public class MainMenuUI : MonoBehaviour
 
     public void OnNewGame()
     {
-        // Tell the GameManager to start a new game
         if (GameManager.instance != null)
         {
             GameManager.instance.StartNewGame();
@@ -41,29 +94,14 @@ public class MainMenuUI : MonoBehaviour
 
     public void OnLoadGame()
     {
-        // Tell the SaveManager to load the game data
         if (SaveManager.instance != null)
         {
             SaveManager.instance.LoadGame();
         }
     }
 
-    public void LoadTownScene()
-    {
-        if (GameManager.instance != null)
-        {
-            // Optional: Set specific flags if needed before loading
-            // e.g. Ensure we aren't flagged as 'just exited dungeon' to prevent weird UI popups
-            GameManager.instance.SetJustExitedDungeon(false);
-
-            // Load the town directly
-            GameManager.instance.LoadLevel(debugTownSceneName);
-        }
-    }
-
     public void OnQuitGame()
     {
-        // Quit the application
         Application.Quit();
 #if UNITY_EDITOR
         UnityEditor.EditorApplication.isPlaying = false;

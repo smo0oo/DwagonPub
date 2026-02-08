@@ -5,7 +5,11 @@ public class Bootstrapper : MonoBehaviour
 {
     // Define your scene names here for easy editing
     public string coreSceneName = "CoreScene";
-    public string firstSceneName = "IntroScene"; // Changed from MainMenu to IntroScene
+    public string firstSceneName = "IntroScene";
+
+    [Header("Build Configuration")]
+    [Tooltip("Assign your BuildReferenceHolder asset here to force-include VFX/Shaders.")]
+    public BuildReferenceHolder buildRefs; // <--- CRUCIAL STEP ENACTED
 
     IEnumerator Start()
     {
