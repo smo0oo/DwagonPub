@@ -208,16 +208,23 @@ public class EnemyAbilityHolder : MonoBehaviour
 
         int hitCount = Physics.OverlapBoxNonAlloc(center, halfExtents, hitBuffer, transform.rotation, aoeTargetLayers);
         HashSet<GameObject> hitTargets = new HashSet<GameObject>();
+        CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
 
         for (int i = 0; i < hitCount; i++)
         {
             Collider hit = hitBuffer[i];
 
-            // [FIX] Ignore Layer 21 (ActivationTrigger), allow other triggers.
+            // 1. Ignore Activation Triggers
             if (hit.gameObject.layer == 21) continue;
-            if (hit.transform.root == transform.root) continue;
 
+            // 2. Identify Target Root
             CharacterRoot targetRoot = hit.GetComponentInParent<CharacterRoot>();
+
+            // 3. [FIX] Compare CharacterRoots, not Transform.Root
+            // Stop self-hit
+            if (myRoot != null && targetRoot != null && myRoot == targetRoot) continue;
+
+            // 4. Resolve Target Object
             GameObject uniqueTargetObj = (targetRoot != null) ? targetRoot.gameObject : hit.gameObject;
 
             if (hitTargets.Contains(uniqueTargetObj)) continue;
@@ -226,7 +233,6 @@ public class EnemyAbilityHolder : MonoBehaviour
             Health targetHealth = uniqueTargetObj.GetComponentInChildren<Health>();
             if (targetHealth != null)
             {
-                CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
                 if (myRoot != null && myRoot.gameObject.layer != uniqueTargetObj.layer)
                 {
                     foreach (var effect in ability.hostileEffects) effect.Apply(myRoot.gameObject, uniqueTargetObj);
@@ -244,18 +250,27 @@ public class EnemyAbilityHolder : MonoBehaviour
         }
         int hitCount = Physics.OverlapSphereNonAlloc(position, ability.aoeRadius, hitBuffer, aoeTargetLayers);
         List<CharacterRoot> affectedCharacters = new List<CharacterRoot>();
+        CharacterRoot casterRoot = this.GetComponentInParent<CharacterRoot>();
+
         for (int i = 0; i < hitCount; i++)
         {
             Collider hit = hitBuffer[i];
 
-            // [FIX] Ignore Layer 21 (ActivationTrigger)
+            // 1. Ignore Activation Triggers
             if (hit.gameObject.layer == 21) continue;
 
+            // 2. Distance Check
             if (Vector3.Distance(position, hit.transform.position) > ability.aoeRadius + 1.0f) continue;
+
+            // 3. Identify Target Root
             CharacterRoot hitCharacter = hit.GetComponentInParent<CharacterRoot>();
+
+            // 4. [FIX] Avoid hitting self or duplicates
             if (hitCharacter == null || affectedCharacters.Contains(hitCharacter)) continue;
+            if (casterRoot != null && hitCharacter == casterRoot) continue;
+
             affectedCharacters.Add(hitCharacter);
-            CharacterRoot casterRoot = this.GetComponentInParent<CharacterRoot>();
+
             if (casterRoot == null) return;
             if (casterRoot.gameObject.layer != hitCharacter.gameObject.layer)
             {
@@ -268,7 +283,7 @@ public class EnemyAbilityHolder : MonoBehaviour
         }
     }
 
-    // [Standard Helper Methods Omitted for Brevity - unchanged from previous version]
+    // [Standard Helpers unchanged]
     private void PayCostAndStartCooldown(Ability ability, bool bypassCooldown) { if (!bypassCooldown) { cooldowns[ability] = Time.time + ability.cooldown; if (ability.triggersGlobalCooldown) globalCooldownTimer = Time.time + globalCooldownDuration; } }
     public bool CanUseAbility(Ability ability, GameObject target) { if (ability == null || IsCasting) return false; if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false; if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false; return true; }
     private void HandleChanneledBeam(Ability ability, GameObject target) { GameObject prefab = ability.enemyProjectilePrefab ?? ability.playerProjectilePrefab; if (prefab != null) { GameObject beam = Instantiate(prefab, transform.position, transform.rotation); if (beam.TryGetComponent<ChanneledBeamController>(out var b)) { b.Initialize(ability, gameObject, target); ActiveBeam = b; } } }

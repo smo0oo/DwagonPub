@@ -106,24 +106,43 @@ public class DamageEffect : IAbilityEffect
         int hitCount = Physics.OverlapSphereNonAlloc(mainTarget.transform.position, splashRadius, _splashBuffer);
         int splashDamage = Mathf.FloorToInt(mainDamage * splashDamageMultiplier);
 
+        // Cache the Main Target's Root to ensure we don't hit them twice
+        CharacterRoot mainTargetRoot = mainTarget.GetComponentInParent<CharacterRoot>();
+
         for (int i = 0; i < hitCount; i++)
         {
             var hit = _splashBuffer[i];
 
-            // [FIX] Only ignore Layer 21 (ActivationTrigger). 
-            // We allow other Triggers in case the player's hitbox is a Trigger.
+            // 1. Ignore Aggro/Activation Triggers
             if (hit.gameObject.layer == 21) continue;
 
-            if (hit.transform.root == mainTarget.transform.root || hit.transform.root == caster.transform.root) continue;
+            // 2. Identify the root of what we hit
+            CharacterRoot hitRoot = hit.GetComponentInParent<CharacterRoot>();
 
-            CharacterRoot splashTargetRoot = hit.GetComponentInParent<CharacterRoot>();
-            if (splashTargetRoot == null) continue;
+            // 3. [FIX] Compare CharacterRoot references, NOT transform.root
+            // Check against Main Target
+            if (hitRoot != null && mainTargetRoot != null && hitRoot == mainTargetRoot) continue;
 
-            bool isHostile = (casterRoot == null) || (splashTargetRoot.gameObject.layer != casterRoot.gameObject.layer);
+            // Check against Caster (Self-Damage prevention)
+            if (hitRoot != null && casterRoot != null && hitRoot == casterRoot) continue;
+
+            // If we hit a non-character object (like a barrel), hitRoot is null.
+            // We usually want to splash damage props, so we allow null hitRoot unless it's the caster's child prop.
+            if (hitRoot == null && hit.transform.IsChildOf(caster.transform)) continue;
+
+            // 4. Resolve Target for Damage
+            GameObject targetObj = (hitRoot != null) ? hitRoot.gameObject : hit.gameObject;
+
+            // Check hostility
+            bool isHostile = (casterRoot == null) || (targetObj.layer != casterRoot.gameObject.layer);
+
             if (isHostile)
             {
-                Health splashTargetHealth = splashTargetRoot.GetComponentInChildren<Health>();
-                if (splashTargetHealth != null) splashTargetHealth.TakeDamage(splashDamage, type, false, caster);
+                Health splashTargetHealth = targetObj.GetComponentInChildren<Health>();
+                if (splashTargetHealth != null)
+                {
+                    splashTargetHealth.TakeDamage(splashDamage, type, false, caster);
+                }
             }
         }
     }

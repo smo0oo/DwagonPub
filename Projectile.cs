@@ -5,7 +5,7 @@ using System.Collections.Generic;
 public class Projectile : MonoBehaviour
 {
     [Header("Debug")]
-    public bool debugMode = true; // Uncheck this later to stop spamming console
+    public bool debugMode = true;
 
     [Header("Settings")]
     public float speed = 20f;
@@ -55,68 +55,48 @@ public class Projectile : MonoBehaviour
 
     private void OnTriggerEnter(Collider other)
     {
-        if (debugMode) Debug.Log($"[Projectile] TOUCHED: '{other.name}' | Layer: {other.gameObject.layer} | IsTrigger: {other.isTrigger} | Root: {other.transform.root.name}");
+        // 1. Explicitly ignore ActivationTrigger (Layer 21)
+        if (other.gameObject.layer == 21) return;
 
-        // [CHECK 1] Activation Trigger / Aggro Range
-        if (other.gameObject.layer == 21)
-        {
-            if (debugMode) Debug.Log($"[Projectile] IGNORED: '{other.name}' is on Layer 21 (ActivationTrigger). Flying through...");
-            return;
-        }
-
-        // [CHECK 2] Collision Layer Mask
-        if (((1 << other.gameObject.layer) & collisionLayers) == 0)
-        {
-            if (debugMode) Debug.Log($"[Projectile] IGNORED: '{other.name}' (Layer {other.gameObject.layer}) is not in the Collision Mask.");
-            return;
-        }
+        // 2. Layer Mask Check
+        if (((1 << other.gameObject.layer) & collisionLayers) == 0) return;
 
         CharacterRoot hitCharacterRoot = other.GetComponentInParent<CharacterRoot>();
 
-        // [CHECK 3] Self-Hit check
+        if (debugMode)
+        {
+            string rootName = hitCharacterRoot != null ? hitCharacterRoot.name : "None";
+            Debug.Log($"[Projectile] TOUCHED: '{other.name}' | CharacterRoot: {rootName} | Layer: {other.gameObject.layer}");
+        }
+
+        // 3. Ignore Caster
         if (caster != null)
         {
             CharacterRoot casterRoot = caster.GetComponentInParent<CharacterRoot>();
-            if (casterRoot != null && hitCharacterRoot == casterRoot)
-            {
-                // Don't log self-hits, they happen constantly on spawn
-                return;
-            }
+            if (casterRoot != null && hitCharacterRoot == casterRoot) return;
         }
 
-        // [CHECK 4] Ally Pass-Through
+        // 4. Ally Pass-Through
         if (hitCharacterRoot != null && sourceAbility != null)
         {
             if (casterLayer == hitCharacterRoot.gameObject.layer && (sourceAbility.friendlyEffects == null || sourceAbility.friendlyEffects.Count == 0))
             {
-                if (debugMode) Debug.Log($"[Projectile] IGNORED: '{other.name}' is an Ally and ability has no friendly effects.");
+                if (debugMode) Debug.Log($"[Projectile] IGNORED: Ally '{hitCharacterRoot.name}' (No Friendly Effects).");
                 return;
             }
         }
 
-        // --- IMPACT ---
-
-        // AOE Logic
+        // 5. Explosion
         if (sourceAbility != null && sourceAbility.aoeRadius > 0)
         {
-            if (debugMode) Debug.Log($"[Projectile] EXPLODING on '{other.name}' (AOE Radius: {sourceAbility.aoeRadius})");
             Explode();
             Terminate();
             return;
         }
 
-        // Single Target Logic
+        // 6. Single Target
         SpawnImpactVFX();
-        if (hitCharacterRoot != null)
-        {
-            if (debugMode) Debug.Log($"[Projectile] DIRECT HIT on '{hitCharacterRoot.name}'. Applying Effects...");
-            ApplyEffectsToTarget(hitCharacterRoot);
-        }
-        else
-        {
-            if (debugMode) Debug.Log($"[Projectile] HIT '{other.name}' (Non-Character). Destroying.");
-        }
-
+        if (hitCharacterRoot != null) ApplyEffectsToTarget(hitCharacterRoot);
         Terminate();
     }
 
@@ -129,17 +109,13 @@ public class Projectile : MonoBehaviour
         Collider[] hits = Physics.OverlapSphere(transform.position, sourceAbility.aoeRadius, damageLayers);
         HashSet<CharacterRoot> affectedTargets = new HashSet<CharacterRoot>();
 
-        if (debugMode) Debug.Log($"[Projectile] AOE Scan found {hits.Length} colliders.");
-
         foreach (var hit in hits)
         {
-            // Skip Aggro Triggers
             if (hit.gameObject.layer == 21) continue;
 
             CharacterRoot target = hit.GetComponentInParent<CharacterRoot>();
             if (target == null || affectedTargets.Contains(target)) continue;
 
-            if (debugMode) Debug.Log($"[Projectile] AOE HIT: {target.name}");
             affectedTargets.Add(target);
             ApplyEffectsToTarget(target);
         }
@@ -150,21 +126,8 @@ public class Projectile : MonoBehaviour
         if (caster == null || sourceAbility == null) return;
         bool isAlly = casterLayer == target.gameObject.layer;
         var effects = isAlly ? sourceAbility.friendlyEffects : sourceAbility.hostileEffects;
-
-        if (effects == null || effects.Count == 0)
-        {
-            if (debugMode) Debug.Log($"[Projectile] WARNING: No effects found to apply to {target.name} (IsAlly: {isAlly})");
-            return;
-        }
-
-        foreach (var effect in effects)
-        {
-            if (effect != null)
-            {
-                // if (debugMode) Debug.Log($"[Projectile] Applying Effect: {effect.GetType().Name}");
-                effect.Apply(caster, target.gameObject);
-            }
-        }
+        if (effects == null) return;
+        foreach (var effect in effects) if (effect != null) effect.Apply(caster, target.gameObject);
     }
 
     private void SpawnImpactVFX()
