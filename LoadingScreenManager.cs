@@ -54,7 +54,15 @@ public class LoadingScreenManager : MonoBehaviour
             loadingScreenPanel.SetActive(true);
         }
 
-        // 2. Load Content
+        // [FIX] Start Fade Immediately (Parallel to loading)
+        // This ensures snappy response to user input
+        Tween fadeTween = null;
+        if (canvasGroup != null)
+        {
+            fadeTween = canvasGroup.DOFade(1f, duration);
+        }
+
+        // 2. Load Content (Background)
         if (data != null)
         {
             if (data.backgroundResourcesPaths.Count > 0)
@@ -63,6 +71,8 @@ public class LoadingScreenManager : MonoBehaviour
 
                 // Load from Resources/LoadingScreens/
                 currentLoadRequest = Resources.LoadAsync<Sprite>($"LoadingScreens/{randomPath}");
+
+                // Allow the load to process while the fade happens
                 yield return currentLoadRequest;
 
                 if (currentLoadRequest.asset != null && backgroundImage != null)
@@ -88,12 +98,14 @@ public class LoadingScreenManager : MonoBehaviour
             }
         }
 
-        // 3. Fade In
-        if (canvasGroup != null)
+        // 3. Wait for Fade to Complete
+        // If resource load was faster than fade, wait for the rest of the duration.
+        // If load was slower, we proceed immediately (fade is already done).
+        if (fadeTween != null && fadeTween.IsActive())
         {
-            yield return canvasGroup.DOFade(1f, duration).WaitForCompletion();
+            yield return fadeTween.WaitForCompletion();
         }
-        else
+        else if (canvasGroup == null)
         {
             yield return new WaitForSeconds(duration);
         }

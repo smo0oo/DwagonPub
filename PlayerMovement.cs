@@ -5,7 +5,8 @@ using UnityEngine.EventSystems;
 using System;
 using System.Linq;
 using Unity.VisualScripting;
-using System.Diagnostics; // Required for Stopwatch
+using System.Diagnostics;
+using System.Collections.Generic; // Added for List<RaycastResult>
 
 public class PlayerMovement : MonoBehaviour, IMovementHandler
 {
@@ -130,10 +131,9 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         CurrentHeadLookPosition = transform.position + transform.forward * 5f;
     }
 
-    // --- UPDATED: Performance Tracking ---
     void Update()
     {
-        _perfWatch.Restart(); // Start Timer
+        _perfWatch.Restart();
 
         if (myHealth != null && myHealth.isDowned)
         {
@@ -187,7 +187,10 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         }
 
         if (isFacingLocked && (TargetObject == null || IsTargetDead(TargetObject))) isFacingLocked = false;
-        if (UIInteractionState.IsUIBlockingInput || EventSystem.current.IsPointerOverGameObject() || IsUIDragInProgress())
+
+        // [FIX] Changed IsPointerOverGameObject check to use a custom filter
+        // This allows inputs to pass through specific UI elements like LootLabels
+        if (UIInteractionState.IsUIBlockingInput || IsPointerOverBlockingUI() || IsUIDragInProgress())
         {
             _perfWatch.Stop();
             LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
@@ -204,9 +207,41 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         HandleMovementInput();
 
-        _perfWatch.Stop(); // Stop Timer
+        _perfWatch.Stop();
         LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
     }
+
+    // --- NEW HELPER: Filter out Loot Labels ---
+    private bool IsPointerOverBlockingUI()
+    {
+        // 1. Quick check: Is mouse over ANY GameObject?
+        if (!EventSystem.current.IsPointerOverGameObject()) return false;
+
+        // 2. It IS over something. Now we check WHAT it is.
+        PointerEventData pointerData = new PointerEventData(EventSystem.current)
+        {
+            position = Input.mousePosition
+        };
+
+        List<RaycastResult> results = new List<RaycastResult>();
+        EventSystem.current.RaycastAll(pointerData, results);
+
+        foreach (var result in results)
+        {
+            // If we hit a LootLabel, we ignore it (it's transparent to movement logic)
+            // You can add other world-space UI tags here if needed.
+            if (result.gameObject.GetComponentInParent<LootLabel>() != null)
+            {
+                continue;
+            }
+
+            // If we hit anything else (Inventory, Pause Menu, etc.), it BLOCKS input.
+            return true;
+        }
+
+        return false;
+    }
+    // ------------------------------------------
 
     void LateUpdate()
     {

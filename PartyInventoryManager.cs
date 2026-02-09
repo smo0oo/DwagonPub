@@ -1,17 +1,18 @@
 using UnityEngine;
 using System.Collections.Generic;
-using Unity.VisualScripting;
 
 public class PartyInventoryManager : MonoBehaviour
 {
     [Header("References")]
-    [Tooltip("The PartyManager singleton from your scene.")]
+    [Tooltip("The PartyManager singleton.")]
     public PartyManager partyManager;
-    [Tooltip("A list of all the CharacterSheetUI components (the sub-panels for each player).")]
+
+    [Tooltip("Assign your CharacterSheetUI panels here (e.g. Player 1 Sheet, Player 2 Sheet...).")]
     public List<CharacterSheetUI> characterSheets;
 
     void OnEnable()
     {
+        if (partyManager == null) partyManager = PartyManager.instance;
         RefreshAllCharacterSheets();
     }
 
@@ -19,22 +20,17 @@ public class PartyInventoryManager : MonoBehaviour
     {
         if (partyManager == null)
         {
-            Debug.LogError("PartyInventoryManager: PartyManager reference is not set!");
+            Debug.LogError("[PartyInventoryManager] PartyManager reference is missing!");
             return;
         }
 
-        // --- FIX: Get the list of player GameObjects directly from the C# list ---
         List<GameObject> allPlayers = partyManager.partyMembers;
 
-        if (allPlayers == null)
-        {
-            Debug.LogError("Could not retrieve player list from PartyManager!");
-            return;
-        }
+        if (allPlayers == null) return;
 
         for (int i = 0; i < characterSheets.Count; i++)
         {
-            if (i < allPlayers.Count)
+            if (i < allPlayers.Count && allPlayers[i] != null)
             {
                 characterSheets[i].gameObject.SetActive(true);
                 characterSheets[i].DisplayCharacter(allPlayers[i]);

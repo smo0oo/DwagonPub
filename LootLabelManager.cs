@@ -21,12 +21,16 @@ public class LootLabelManager : MonoBehaviour
     [Tooltip("Distance from camera at which labels vanish.")]
     public float maxViewDistance = 500f;
 
-    [Header("Rarity Colors")]
+    [Header("Rarity Colors (Base LDR)")]
     public Color commonColor = Color.white;
     public Color uncommonColor = Color.green;
     public Color rareColor = new Color(0.2f, 0.4f, 1f);
     public Color epicColor = new Color(0.6f, 0f, 0.8f);
     public Color legendaryColor = new Color(1f, 0.5f, 0f);
+
+    [Header("HDR Settings")]
+    [Tooltip("Multiplier applied to the Rarity Color to create an HDR effect (Glow).")]
+    public float hdrIntensity = 5.0f; // [ADDED] Set to 5 as requested
 
     // Internal Lists
     private List<WorldItem> activeItems = new List<WorldItem>();
@@ -48,14 +52,10 @@ public class LootLabelManager : MonoBehaviour
         mainCam = Camera.main;
     }
 
-    /// <summary>
-    /// Registers a new item OR updates the text of an existing one.
-    /// </summary>
     public void RegisterOrUpdateItem(WorldItem item)
     {
         if (activeItems.Contains(item))
         {
-            // Already registered? Just update the text/color to match current data
             int index = activeItems.IndexOf(item);
             if (index >= 0 && index < activeLabels.Count)
             {
@@ -69,13 +69,11 @@ public class LootLabelManager : MonoBehaviour
         }
         else
         {
-            // New item
             activeItems.Add(item);
             CreateLabel(item);
         }
     }
 
-    // Kept for backward compatibility, but redirects to the new logic
     public void RegisterItem(WorldItem item) => RegisterOrUpdateItem(item);
 
     public void UnregisterItem(WorldItem item)
@@ -83,9 +81,7 @@ public class LootLabelManager : MonoBehaviour
         if (activeItems.Contains(item))
         {
             int index = activeItems.IndexOf(item);
-
             activeItems.RemoveAt(index);
-
             if (index < activeLabels.Count)
             {
                 LootLabel label = activeLabels[index];
@@ -110,19 +106,25 @@ public class LootLabelManager : MonoBehaviour
         }
     }
 
-    private Color GetRarityColor(ItemData data)
+    // [UPDATED] Now applies the HDR Intensity Boost of 5
+    public Color GetRarityColor(ItemData data)
     {
-        if (data == null || data.stats == null) return commonColor;
+        Color baseColor = commonColor;
 
-        switch (data.stats.rarity)
+        if (data != null && data.stats != null)
         {
-            case ItemStats.Rarity.Common: return commonColor;
-            case ItemStats.Rarity.Uncommon: return uncommonColor;
-            case ItemStats.Rarity.Rare: return rareColor;
-            case ItemStats.Rarity.Epic: return epicColor;
-            case ItemStats.Rarity.Legendary: return legendaryColor;
-            default: return commonColor;
+            switch (data.stats.rarity)
+            {
+                case ItemStats.Rarity.Common: baseColor = commonColor; break;
+                case ItemStats.Rarity.Uncommon: baseColor = uncommonColor; break;
+                case ItemStats.Rarity.Rare: baseColor = rareColor; break;
+                case ItemStats.Rarity.Epic: baseColor = epicColor; break;
+                case ItemStats.Rarity.Legendary: baseColor = legendaryColor; break;
+            }
         }
+
+        // Apply HDR Boost (Multiply RGB only, preserve Alpha)
+        return new Color(baseColor.r * hdrIntensity, baseColor.g * hdrIntensity, baseColor.b * hdrIntensity, baseColor.a);
     }
 
     void LateUpdate()
@@ -142,8 +144,6 @@ public class LootLabelManager : MonoBehaviour
 
             Vector3 worldPos = activeItems[i].transform.position;
             float dist = Vector3.Distance(mainCam.transform.position, worldPos);
-
-            // Viewport Check (0-1 space)
             Vector3 viewportPos = mainCam.WorldToViewportPoint(worldPos);
 
             bool isInFront = viewportPos.z > 0;
@@ -155,7 +155,6 @@ public class LootLabelManager : MonoBehaviour
             {
                 activeLabels[i].SetVisible(true);
                 Vector3 screenPos = mainCam.ViewportToScreenPoint(viewportPos);
-
                 screenData.Add(new LabelPositionData
                 {
                     label = activeLabels[i],
@@ -170,7 +169,6 @@ public class LootLabelManager : MonoBehaviour
             }
         }
 
-        // Grid Sort Logic
         screenData.Sort((a, b) => a.idealPos.y.CompareTo(b.idealPos.y));
 
         for (int i = 0; i < screenData.Count; i++)

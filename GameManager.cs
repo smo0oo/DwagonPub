@@ -248,7 +248,6 @@ public class GameManager : MonoBehaviour
         if (ai != null) ai.enabled = shouldAIBeActive;
     }
 
-    // --- REVERTED SEQUENCE LOGIC (Immediate Execution) ---
     public void SetSequenceMode(bool isSequenceActive)
     {
         IsSequenceModeActive = isSequenceActive;
@@ -393,6 +392,9 @@ public class GameManager : MonoBehaviour
         isTransitioning = true;
         IsSequenceModeActive = false;
 
+        // [FIX] Disable controls IMMEDIATELY to prevent input bleed while fading out
+        SetPlayerMovementComponentsActive(false);
+
         if (currentSceneType == SceneType.WorldMap) CaptureWagonState();
         if (currentLevelScene != sceneName)
         {
@@ -475,7 +477,6 @@ public class GameManager : MonoBehaviour
         playerPartyObject.transform.position = spawnPoint.transform.position;
         playerPartyObject.transform.rotation = spawnPoint.transform.rotation;
 
-        // --- FIX: Remove the SceneType check. Always look for points. ---
         TownCharacterSpawnPoint[] townSpawns = FindObjectsByType<TownCharacterSpawnPoint>(FindObjectsSortMode.None);
 
         for (int i = 0; i < partyManager.partyMembers.Count; i++)
@@ -503,7 +504,7 @@ public class GameManager : MonoBehaviour
             if (agent != null) agent.enabled = false;
 
             bool positioned = false;
-            // --- FIX: Remove 'currentSceneType == SceneType.Town' from the condition ---
+
             if (i != 0 && (state == PlayerSceneState.SpawnAtMarker || (townSpawns != null && townSpawns.Length > 0)))
             {
                 TownCharacterSpawnPoint mySpawn = townSpawns.FirstOrDefault(t => t.partyMemberIndex == i);
@@ -567,6 +568,10 @@ public class GameManager : MonoBehaviour
     {
         isTransitioning = true;
         IsSequenceModeActive = false;
+
+        // [FIX] Disable controls IMMEDIATELY
+        SetPlayerMovementComponentsActive(false);
+
         NodeType typeBeforeExit = lastLocationType;
         string sceneBeforeExit = currentLevelScene;
         lastLocationType = NodeType.Scene;
@@ -648,6 +653,10 @@ public class GameManager : MonoBehaviour
         if (isTransitioning) yield break;
         isTransitioning = true;
         IsSequenceModeActive = false;
+
+        // Disable controls immediately for load too
+        SetPlayerMovementComponentsActive(false);
+
         yield return LoadingScreenManager.instance.ShowLoadingScreen(fadeDuration);
         string path = Path.Combine(Application.persistentDataPath, "savegame.json");
         if (!File.Exists(path))
