@@ -2,19 +2,28 @@ using UnityEngine;
 using System.Collections.Generic;
 using UnityEngine.Splines;
 
-// --- UPDATED: Added DualModeLocation ---
+// --- Node Types ---
 public enum NodeType { Scene, Event, Waypoint, DualModeLocation }
-// ---------------------------------------
 
 [System.Serializable]
 public class RoadConnection
 {
     public LocationNode destinationNode;
+
+    [Header("Travel Requirements")]
+    [Tooltip("Tags required to travel this road (e.g. 'Rocky', 'Snow'). Leave empty for standard roads.")]
+    public List<string> requiredTags;
+    [Tooltip("Color of the road line (Applied to the material color).")]
+    public Color roadColor = Color.white;
+
+    [Header("Travel Settings")]
     public int travelTimeHours;
     public SplineContainer roadSpline;
     public string destinationSpawnPointID;
     public bool reverseSpline = false;
     [Range(-180f, 180f)] public float manualYRotation = 0f;
+
+    [Header("Combat & Events")]
     public string combatSceneName = "DomeBattle";
     [Range(0, 10)] public int ambushChance = 2;
     public LootTable forageLootTable;
@@ -26,18 +35,13 @@ public class LocationNode : MonoBehaviour
     [Header("Location Info")]
     public string locationName;
     public NodeType nodeType = NodeType.Scene;
+    [TextArea] public string description;
 
-    // --- UPDATED: Added Dungeon Scene Entry ---
     [Header("Dual Mode Settings")]
-    [Tooltip("The name of the Dungeon Scene to load when starting an operation here.")]
     public string dualModeDungeonScene;
-    // ------------------------------------------
 
     [Header("Paper Map Mapping")]
-    [Tooltip("If true, the icon position is calculated from the node's World Position relative to the World Map Bounds.")]
     public bool useAutoPosition = true;
-
-    [Tooltip("If Auto Position is FALSE, use these coordinates (0-100 scale).")]
     public Vector2 manualMapCoords;
 
     [Header("Visual Feedback")]
@@ -64,14 +68,61 @@ public class LocationNode : MonoBehaviour
         }
     }
 
+    // --- LOGIC: Can we travel? ---
+    public bool CanTravelTo(LocationNode target, out string missingTags)
+    {
+        missingTags = "";
+        foreach (var conn in connections)
+        {
+            if (conn.destinationNode == target)
+            {
+                if (conn.requiredTags == null || conn.requiredTags.Count == 0) return true;
+
+                if (WagonManager.instance != null)
+                {
+                    bool allowed = WagonManager.instance.HasTraversalTags(conn.requiredTags);
+                    if (!allowed) missingTags = string.Join(", ", conn.requiredTags);
+                    return allowed;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public RoadConnection GetConnectionTo(LocationNode target)
+    {
+        foreach (var conn in connections)
+        {
+            if (conn.destinationNode == target) return conn;
+        }
+        return null;
+    }
+
+    // --- VISUALS: Render Logic ---
     public void SetRoadsVisibility(bool isVisible)
     {
         foreach (var connection in connections)
         {
             if (connection.roadSpline != null)
             {
-                MeshRenderer roadRenderer = connection.roadSpline.GetComponent<MeshRenderer>();
-                if (roadRenderer != null) roadRenderer.enabled = isVisible;
+                // FIX: Search in Children because Spline generators often put meshes on child objects
+                MeshRenderer roadRenderer = connection.roadSpline.GetComponentInChildren<MeshRenderer>();
+
+                if (roadRenderer != null)
+                {
+                    roadRenderer.enabled = isVisible;
+
+                    // Apply Color Warning
+                    if (isVisible)
+                    {
+                        // Note: Ensure your road material uses a shader with a main color property (e.g. _BaseColor or _Color)
+                        if (roadRenderer.material.HasProperty("_BaseColor")) // URP/HDRP
+                            roadRenderer.material.SetColor("_BaseColor", connection.roadColor);
+                        else if (roadRenderer.material.HasProperty("_Color")) // Standard
+                            roadRenderer.material.color = connection.roadColor;
+                    }
+                }
             }
         }
     }
@@ -82,7 +133,7 @@ public class LocationNode : MonoBehaviour
         {
             if (connection.roadSpline != null)
             {
-                MeshRenderer roadRenderer = connection.roadSpline.GetComponent<MeshRenderer>();
+                MeshRenderer roadRenderer = connection.roadSpline.GetComponentInChildren<MeshRenderer>();
                 if (roadRenderer != null)
                 {
                     if (connection.roadSpline == activeSpline) roadRenderer.enabled = true;

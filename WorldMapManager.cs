@@ -251,8 +251,6 @@ public class WorldMapManager : MonoBehaviour
 
     private IEnumerator ExecuteResumedJourney(float firstLegStartProgress)
     {
-        // Identify where we are in the path.
-        // currentPlannedPath[0] is typically the Origin.
         int startIndex = currentPlannedPath.IndexOf(currentLocation);
         if (startIndex == -1) startIndex = 0;
 
@@ -261,24 +259,21 @@ public class WorldMapManager : MonoBehaviour
             LocationNode legEnd = currentPlannedPath[i + 1];
             float progress = (i == startIndex) ? firstLegStartProgress : 0f;
 
-            // If we are basically already at the end of the first leg, force completion and skip to next
             if (i == startIndex && progress > 0.99f)
             {
                 Debug.Log($"[ExecuteResumedJourney] Already at end of leg to {legEnd.locationName}. Skipping travel.");
                 SetCurrentLocation(legEnd, true);
 
-                // If this was the last leg, stop.
                 if (legEnd == currentPlannedPath.Last())
                 {
                     ShowArrivalPanel();
                     yield break;
                 }
-                continue; // Move to next leg loop
+                continue;
             }
 
             yield return StartCoroutine(TravelToNode(legEnd, progress));
 
-            // Check if travel was successful
             if (currentLocation != legEnd)
             {
                 Debug.Log("Journey interrupted or halted!");
@@ -338,7 +333,8 @@ public class WorldMapManager : MonoBehaviour
         if (roadsideInfoText != null) roadsideInfoText.text = "The wagon is stopped. What is your command?";
     }
 
-    void OnLocationClicked(LocationNode destinationNode)
+    // --- MAIN UPDATE: Logic for Checking Traversal ---
+    public void OnLocationClicked(LocationNode destinationNode)
     {
         if (currentLocation == null) return;
         if (destinationNode == currentLocation) return;
@@ -349,6 +345,27 @@ public class WorldMapManager : MonoBehaviour
         {
             currentPlannedPath = tripData.path;
             SetLongTermDestination(destinationNode);
+
+            // --- TRAVERSAL CHECK START ---
+            bool pathBlocked = false;
+            string blockingReason = "";
+
+            // Scan the entire path for any segment that is blocked
+            for (int i = 0; i < currentPlannedPath.Count - 1; i++)
+            {
+                LocationNode from = currentPlannedPath[i];
+                LocationNode to = currentPlannedPath[i + 1];
+
+                string missingTags;
+                // Requires LocationNode.CanTravelTo() to support 'out string' signature
+                if (!from.CanTravelTo(to, out missingTags))
+                {
+                    pathBlocked = true;
+                    blockingReason = $"Requires: {missingTags}\n(Near {to.locationName})";
+                    break;
+                }
+            }
+            // --- TRAVERSAL CHECK END ---
 
             float arrivalTime = (timeOfDay + tripData.totalHours) % 24;
             string warning = "";
@@ -362,16 +379,32 @@ public class WorldMapManager : MonoBehaviour
                 }
             }
 
-            float currentFuel = (resourceManager != null) ? resourceManager.currentFuel : 0;
-            float currentRations = (resourceManager != null) ? resourceManager.currentRations : 0;
-            string fuelColor = (currentFuel >= tripData.estimatedFuelCost) ? "black" : "red";
-            string foodColor = (currentRations >= tripData.estimatedRationsCost) ? "black" : "red";
+            // --- UI UPDATE LOGIC ---
+            if (pathBlocked)
+            {
+                // RED UI for Blocked Path
+                confirmationText.text = $"<color=red>CANNOT TRAVEL</color>\n" +
+                                        $"<color=red>{blockingReason}</color>\n\n" +
+                                        $"Visit the Workshop to upgrade your wagon.";
 
-            confirmationText.text = $"Travel to {destinationNode.locationName}?\n" +
-                                    $"Total Time: {tripData.totalHours} hrs\n" +
-                                    $"Fuel: <color={fuelColor}>{tripData.estimatedFuelCost:F0}</color> | " +
-                                    $"Food: <color={foodColor}>{tripData.estimatedRationsCost:F0}</color>" +
-                                    $"{warning}";
+                confirmTravelButton.interactable = false; // Disable travel
+            }
+            else
+            {
+                // Standard UI for Valid Path
+                float currentFuel = (resourceManager != null) ? resourceManager.currentFuel : 0;
+                float currentRations = (resourceManager != null) ? resourceManager.currentRations : 0;
+                string fuelColor = (currentFuel >= tripData.estimatedFuelCost) ? "black" : "red";
+                string foodColor = (currentRations >= tripData.estimatedRationsCost) ? "black" : "red";
+
+                confirmationText.text = $"Travel to {destinationNode.locationName}?\n" +
+                                        $"Total Time: {tripData.totalHours} hrs\n" +
+                                        $"Fuel: <color={fuelColor}>{tripData.estimatedFuelCost:F0}</color> | " +
+                                        $"Food: <color={foodColor}>{tripData.estimatedRationsCost:F0}</color>" +
+                                        $"{warning}";
+
+                confirmTravelButton.interactable = true; // Enable travel
+            }
 
             travelConfirmationPanel.SetActive(true);
             isUiBusy = true;
@@ -508,7 +541,7 @@ public class WorldMapManager : MonoBehaviour
         if (haltButton != null) haltButton.gameObject.SetActive(false);
         if (currentActiveConnection != null && currentActiveConnection.roadSpline != null)
         {
-            var renderer = currentActiveConnection.roadSpline.GetComponent<MeshRenderer>();
+            var renderer = currentActiveConnection.roadSpline.GetComponentInChildren<MeshRenderer>();
             if (renderer != null) renderer.enabled = false;
         }
 
@@ -539,6 +572,7 @@ public class WorldMapManager : MonoBehaviour
             {
                 wagonController.transform.position = currentLocation.transform.position;
                 wagonController.transform.rotation = currentLocation.transform.rotation;
+                wagonController.SetCurrentNode(node); // Sync controller
             }
             UpdateGPSHighlight();
         }
@@ -584,6 +618,9 @@ public class WorldMapManager : MonoBehaviour
             lastHoveredNode = currentHoveredNode;
         }
 
+        // Mouse Click handling is delegated to WagonController or handled here as fallback
+        // We leave this here for hovering logic, but the actual 'Click' triggers OnLocationClicked via the controller usually.
+        // If you want direct clicks to work too:
         if (Input.GetMouseButtonDown(0) && currentHoveredNode != null)
         {
             OnLocationClicked(currentHoveredNode);

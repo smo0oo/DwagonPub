@@ -11,7 +11,6 @@ public class WagonManager : MonoBehaviour
     public List<WagonUpgradeData> defaultUpgrades;
 
     // The parts currently physically on the wagon (Affects stats & visuals)
-    // Key: Slot Type (e.g. Wheel) -> Value: The Data Asset
     private Dictionary<WagonUpgradeType, WagonUpgradeData> installedUpgrades = new Dictionary<WagonUpgradeType, WagonUpgradeData>();
 
     // The registry of ALL parts the player has ever unlocked/bought
@@ -45,31 +44,50 @@ public class WagonManager : MonoBehaviour
             foreach (var upg in defaultUpgrades)
             {
                 if (upg == null) continue;
-                // Default items are free, owned, and immediately installed
                 AddOwnedPart(upg.id);
                 InstallUpgrade(upg, false);
             }
             RecalculateStats();
-            // Notify listeners (like WagonVisualizer) just in case they are already listening
             OnWagonUpgradesChanged?.Invoke();
         }
     }
 
+    // --- NEW: Tag Logic ---
     /// <summary>
-    /// Installs a part onto the wagon. Overwrites any existing part in that slot.
-    /// Also ensures the part is marked as Owned.
+    /// Checks if the installed upgrades provide ALL the required tags.
     /// </summary>
+    public bool HasTraversalTags(List<string> requiredTags)
+    {
+        if (requiredTags == null || requiredTags.Count == 0) return true;
+
+        // 1. Gather all tags from currently INSTALLED parts
+        HashSet<string> myTags = new HashSet<string>();
+        foreach (var part in installedUpgrades.Values)
+        {
+            if (part != null && part.traversalTags != null)
+            {
+                foreach (string tag in part.traversalTags) myTags.Add(tag);
+            }
+        }
+
+        // 2. Check if we meet every requirement
+        foreach (string req in requiredTags)
+        {
+            if (!myTags.Contains(req)) return false; // Missing a required tag
+        }
+
+        return true;
+    }
+    // -------------------------
+
     public void InstallUpgrade(WagonUpgradeData data, bool notify = true)
     {
         if (data == null) return;
 
-        // 1. Safeguard: Ensure we own it (in case code calls this directly)
         AddOwnedPart(data.id);
 
-        // 2. Overwrite the Active Slot
         if (installedUpgrades.ContainsKey(data.type))
         {
-            // Replaces the old part (e.g., Old Chest removed, New Chest added)
             installedUpgrades[data.type] = data;
         }
         else
@@ -77,15 +95,10 @@ public class WagonManager : MonoBehaviour
             installedUpgrades.Add(data.type, data);
         }
 
-        // 3. Update Game State
         RecalculateStats();
-
         if (notify) OnWagonUpgradesChanged?.Invoke();
     }
 
-    /// <summary>
-    /// Grants ownership of a part without equipping it (e.g., Quest Reward, Loot).
-    /// </summary>
     public void AddOwnedPart(string id)
     {
         if (!string.IsNullOrEmpty(id) && !ownedUpgradeIDs.Contains(id))
@@ -94,9 +107,6 @@ public class WagonManager : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Returns true if the player has ever bought/acquired this part.
-    /// </summary>
     public bool IsPartOwned(string id)
     {
         return ownedUpgradeIDs.Contains(id);
@@ -110,11 +120,7 @@ public class WagonManager : MonoBehaviour
 
     private void RecalculateStats()
     {
-        TotalSpeedBonus = 0;
-        TotalEfficiencyBonus = 0;
-        TotalStorageBonus = 0;
-        TotalDefenseBonus = 0;
-        TotalComfortBonus = 0;
+        TotalSpeedBonus = 0; TotalEfficiencyBonus = 0; TotalStorageBonus = 0; TotalDefenseBonus = 0; TotalComfortBonus = 0;
 
         foreach (var upg in installedUpgrades.Values)
         {
@@ -126,13 +132,11 @@ public class WagonManager : MonoBehaviour
             TotalComfortBonus += upg.comfortBonus;
         }
 
-        // Hook: Update WagonController if it exists in the current scene
         WagonController controller = FindAnyObjectByType<WagonController>();
-        // if (controller != null) controller.UpdateStats(TotalSpeedBonus); 
+        // if (controller != null) controller.UpdateStats(TotalSpeedBonus); // Uncomment if implementing stats
     }
 
-    // --- SAVE/LOAD SYSTEM INTEGRATION ---
-
+    // --- SAVE/LOAD ---
     [System.Serializable]
     public class WagonSaveData
     {
@@ -153,11 +157,9 @@ public class WagonManager : MonoBehaviour
     {
         if (data == null) return;
 
-        // 1. Restore Ownership
         ownedUpgradeIDs.Clear();
         foreach (string id in data.ownedIDs) ownedUpgradeIDs.Add(id);
 
-        // 2. Restore Installed Parts
         installedUpgrades.Clear();
         foreach (string id in data.installedIDs)
         {
