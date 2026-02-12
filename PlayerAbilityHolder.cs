@@ -105,7 +105,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             }
         }
 
-        if (targetLayers.value == 0) targetLayers = LayerMask.GetMask("Default", "Player", "Enemy");
+        if (targetLayers.value == 0) targetLayers = LayerMask.GetMask("Default", "Player", "Enemy", "Destructible");
         if (projectileSpawnPoint == null) projectileSpawnPoint = transform;
     }
 
@@ -219,24 +219,18 @@ public class PlayerAbilityHolder : MonoBehaviour
             if (ability.telegraphDuration > 0) yield return new WaitForSeconds(ability.telegraphDuration);
             if (castTime > 0) yield return new WaitForSeconds(castTime);
 
-            // --- AAA FIX: Position Locking Logic ---
-            // If the user provided a target GameObject, position is derived from that.
-            // If NO target (ground cast), we decide whether to update to the CURRENT mouse position or keep the ORIGINAL click position.
             if (target == null && playerMovement != null)
             {
-                // These types are "Fire and Forget" at a specific spot. Do NOT update to mouse position.
                 bool isFixedGroundTarget = ability.abilityType == AbilityType.GroundPlacement ||
                                            ability.abilityType == AbilityType.GroundAOE ||
                                            ability.abilityType == AbilityType.Leap ||
                                            ability.abilityType == AbilityType.Teleport;
 
-                // Only update position for directional/aimed abilities (like ForwardProjectile)
                 if (!isFixedGroundTarget)
                 {
                     position = playerMovement.CurrentLookTarget;
                 }
             }
-            // ---------------------------------------
 
             ExecuteAbility(ability, target, position, bypassCooldown, (ability.abilityType != AbilityType.ChanneledBeam));
         }
@@ -494,17 +488,57 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (ability.impactSound != null) AudioSource.PlayClipAtPoint(ability.impactSound, position);
 
         Collider[] _aoeBuffer = new Collider[100];
+
+        // Ensure your PlayerAbilityHolder 'Target Layers' includes 'Destructible' in the Inspector!
         int hitCount = Physics.OverlapSphereNonAlloc(position, ability.aoeRadius, _aoeBuffer, targetLayers);
 
-        HashSet<CharacterRoot> hitRoots = new HashSet<CharacterRoot>();
+        HashSet<GameObject> hitTargets = new HashSet<GameObject>();
+
         for (int i = 0; i < hitCount; i++)
         {
-            CharacterRoot hitCharacter = _aoeBuffer[i].GetComponentInParent<CharacterRoot>();
-            if (hitCharacter == null || hitRoots.Contains(hitCharacter)) continue;
-            hitRoots.Add(hitCharacter);
+            Collider col = _aoeBuffer[i];
+            GameObject finalTarget = null;
+            CharacterRoot hitCharacter = col.GetComponentInParent<CharacterRoot>();
 
-            bool isAlly = GetComponentInParent<CharacterRoot>().gameObject.layer == hitCharacter.gameObject.layer;
-            foreach (var effect in (isAlly ? ability.friendlyEffects : ability.hostileEffects)) effect.Apply(gameObject, hitCharacter.gameObject);
+            // 1. Check for Character (Enemies/Players)
+            if (hitCharacter != null)
+            {
+                finalTarget = hitCharacter.gameObject;
+            }
+            else
+            {
+                // 2. Check for Simple Health (Barrels/Props)
+                Health hitHealth = col.GetComponentInParent<Health>();
+                if (hitHealth != null)
+                {
+                    finalTarget = hitHealth.gameObject;
+                }
+            }
+
+            // If valid and not already processed this frame
+            if (finalTarget != null && !hitTargets.Contains(finalTarget))
+            {
+                hitTargets.Add(finalTarget);
+
+                // Determine Allegiance
+                bool isAlly = false;
+
+                if (hitCharacter != null)
+                {
+                    CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
+                    if (myRoot != null)
+                    {
+                        isAlly = myRoot.gameObject.layer == hitCharacter.gameObject.layer;
+                    }
+                }
+                // If hitCharacter is null (Prop), remains false (Hostile)
+
+                List<IAbilityEffect> effectsToApply = isAlly ? ability.friendlyEffects : ability.hostileEffects;
+                foreach (var effect in effectsToApply)
+                {
+                    effect.Apply(gameObject, finalTarget);
+                }
+            }
         }
     }
 
@@ -531,7 +565,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    // --- UPDATED METHOD FOR BLIZZARD ABILITY ---
     private void HandleGroundPlacement(Ability ability, Vector3 position)
     {
         if (ability.placementPrefab != null)
@@ -541,19 +574,16 @@ public class PlayerAbilityHolder : MonoBehaviour
             CharacterRoot casterRoot = GetComponentInParent<CharacterRoot>();
             if (casterRoot != null) caster = casterRoot.gameObject;
 
-            // 1. Check for Blizzard/Rain Controller
             if (placedObject.TryGetComponent<AreaBombardmentController>(out var bombardment))
             {
                 bombardment.Initialize(caster, ability);
             }
-            // 2. Check for Traps
             else if (placedObject.TryGetComponent<PlaceableTrap>(out var trap))
             {
                 trap.owner = caster;
             }
         }
     }
-    // -------------------------------------------
 
     public bool GetCooldownStatus(Ability ability, out float remaining) { remaining = 0f; if (cooldowns.TryGetValue(ability, out float endTime)) { if (Time.time < endTime) { remaining = endTime - Time.time; return true; } } return false; }
     public bool CanUseAbility(Ability ability, GameObject target) { if (ability == null || IsCasting) return false; if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false; if (ability.requiresWeaponType && !IsCorrectWeaponEquipped(ability.requiredWeaponCategories)) return false; if ((ability.abilityType == AbilityType.TargetedMelee || ability.abilityType == AbilityType.TargetedProjectile || ability.abilityType == AbilityType.Charge) && target == null) return false; if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false; if (playerStats != null && playerStats.currentMana < ability.manaCost) return false; return true; }

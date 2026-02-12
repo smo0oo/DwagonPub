@@ -25,19 +25,21 @@ public class DamageEffect : IAbilityEffect
     public float splashRadius = 3f;
     public float splashDamageMultiplier = 0.5f;
 
-    // Static buffer for Non-Allocating Physics
+    // Static buffer for Non-Allocating Physics to reduce garbage collection
     private static Collider[] _splashBuffer = new Collider[50];
 
     public void Apply(GameObject caster, GameObject target)
     {
+        // 1. Activation Chance Check
         if (chance < 100f && Random.Range(0f, 100f) > chance) return;
 
         Health targetHealth = target.GetComponentInChildren<Health>();
-        if (targetHealth == null) return;
+        // Note: We continue even if targetHealth is null because splash damage might still hit other things nearby.
 
         float finalDamage = baseDamage;
         bool isCrit = false;
 
+        // 2. Calculate Damage based on Caster Stats
         CharacterRoot casterRoot = caster.GetComponentInParent<CharacterRoot>();
         PlayerStats casterStats = (casterRoot != null) ? casterRoot.GetComponentInChildren<PlayerStats>() : null;
 
@@ -96,51 +98,67 @@ public class DamageEffect : IAbilityEffect
         }
 
         int finalDamageInt = Mathf.FloorToInt(finalDamage);
-        targetHealth.TakeDamage(finalDamageInt, damageType, isCrit, caster);
 
-        if (isSplash) HandleSplash(target, caster, finalDamageInt, damageType, casterRoot);
+        // 3. Apply Damage to Primary Target
+        if (targetHealth != null)
+        {
+            targetHealth.TakeDamage(finalDamageInt, damageType, isCrit, caster);
+        }
+
+        // 4. Handle Splash Damage
+        if (isSplash)
+        {
+            HandleSplash(target, caster, finalDamageInt, damageType, casterRoot);
+        }
     }
 
     private void HandleSplash(GameObject mainTarget, GameObject caster, int mainDamage, DamageType type, CharacterRoot casterRoot)
     {
+        // Use NonAlloc to avoid garbage generation during combat
         int hitCount = Physics.OverlapSphereNonAlloc(mainTarget.transform.position, splashRadius, _splashBuffer);
         int splashDamage = Mathf.FloorToInt(mainDamage * splashDamageMultiplier);
 
-        // Cache the Main Target's Root to ensure we don't hit them twice
         CharacterRoot mainTargetRoot = mainTarget.GetComponentInParent<CharacterRoot>();
 
         for (int i = 0; i < hitCount; i++)
         {
             var hit = _splashBuffer[i];
 
-            // 1. Ignore Aggro/Activation Triggers
+            // 1. Ignore Aggro/Activation Triggers (Layer 21 is usually triggers)
             if (hit.gameObject.layer == 21) continue;
 
-            // 2. Identify the root of what we hit
+            // 2. Identify the root of the hit object (is it a character?)
             CharacterRoot hitRoot = hit.GetComponentInParent<CharacterRoot>();
 
-            // 3. [FIX] Compare CharacterRoot references, NOT transform.root
-            // Check against Main Target
+            // 3. Prevent double-hitting the main target
             if (hitRoot != null && mainTargetRoot != null && hitRoot == mainTargetRoot) continue;
 
-            // Check against Caster (Self-Damage prevention)
+            // 4. Prevent Self-Damage (Caster shouldn't nuke themselves)
             if (hitRoot != null && casterRoot != null && hitRoot == casterRoot) continue;
 
-            // If we hit a non-character object (like a barrel), hitRoot is null.
-            // We usually want to splash damage props, so we allow null hitRoot unless it's the caster's child prop.
+            // 5. Prevent hitting own child objects (e.g., caster's own sword collider or sensor)
             if (hitRoot == null && hit.transform.IsChildOf(caster.transform)) continue;
 
-            // 4. Resolve Target for Damage
+            // 6. Resolve Target Object
             GameObject targetObj = (hitRoot != null) ? hitRoot.gameObject : hit.gameObject;
 
-            // Check hostility
-            bool isHostile = (casterRoot == null) || (targetObj.layer != casterRoot.gameObject.layer);
+            // --- AAA PROPS FIX ---
+            // Explicitly check if the object is a DestructibleProp
+            bool isProp = targetObj.GetComponent<DestructibleProp>() != null || targetObj.GetComponentInChildren<DestructibleProp>() != null;
+
+            // It is considered hostile if:
+            // A) It is a prop (Barrels are always valid targets)
+            // B) Caster is null (Environment damage)
+            // C) It is on a different layer than the caster (Enemy vs Player)
+            bool isHostile = isProp || (casterRoot == null) || (targetObj.layer != casterRoot.gameObject.layer);
+            // ---------------------
 
             if (isHostile)
             {
                 Health splashTargetHealth = targetObj.GetComponentInChildren<Health>();
                 if (splashTargetHealth != null)
                 {
+                    // Apply splash damage (never crit on splash to keep balance)
                     splashTargetHealth.TakeDamage(splashDamage, type, false, caster);
                 }
             }
