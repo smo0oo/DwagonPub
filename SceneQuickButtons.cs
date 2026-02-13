@@ -28,6 +28,22 @@ public class SceneQuickButtons : EditorWindow
         {
             LoadScene("Assets/Scenes/WorldMap/WorldMap_A.unity");
         }
+        if (GUILayout.Button("Load Ambush A"))
+        {
+            LoadScene("Assets/Scenes/Battle/Ambush/Ambush_Basic_01.unity");
+        }
+        if (GUILayout.Button("Load Town A"))
+        {
+            LoadScene("Assets/Scenes/Battle/Towns/Town_Large_A.unity");
+        }
+        if (GUILayout.Button("Load Dungeon A"))
+        {
+            LoadScene("Assets/Scenes/Battle/Dungeons/Dungeon_Basic_A.unity");
+        }
+        if (GUILayout.Button("Load Intro Cin"))
+        {
+            LoadScene("Assets/Scenes/Battle/Cinematic/DW_Cin_Intro_01.unity");
+        }
     }
 
     void LoadScene(string path)
