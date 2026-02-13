@@ -4,13 +4,13 @@ using System.Collections.Generic;
 using System.Linq;
 using System.IO;
 
-// The ColorToPrefabMapping class is NO LONGER defined inside this script.
-// It now exists in its own file, solving the duplicate definition error.
-
 public class LevelGeneratorFromImage : EditorWindow
 {
     private Texture2D blueprintTexture;
     private float gridSize = 5f;
+
+    // Global tweak to fix "Backwards" models instantly
+    private float globalRotationOffset = 180f;
 
     public List<ColorToPrefabMapping> mappings = new List<ColorToPrefabMapping>();
 
@@ -21,6 +21,11 @@ public class LevelGeneratorFromImage : EditorWindow
     private int selectedConfigIndex = 0;
     private GeneratorConfig[] allConfigs;
     private string[] configNames;
+
+    // --- Internal State for Generation ---
+    private TileType[,] typeGrid;
+    private int width;
+    private int height;
 
     [MenuItem("Tools/Level Generator From Image")]
     public static void ShowWindow()
@@ -41,6 +46,8 @@ public class LevelGeneratorFromImage : EditorWindow
 
         blueprintTexture = (Texture2D)EditorGUILayout.ObjectField("Blueprint Texture", blueprintTexture, typeof(Texture2D), false);
         gridSize = EditorGUILayout.FloatField("Grid Size (Meters)", gridSize);
+
+        globalRotationOffset = EditorGUILayout.FloatField("Global Rotation Fix", globalRotationOffset);
 
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Configuration Management", EditorStyles.boldLabel);
@@ -136,19 +143,39 @@ public class LevelGeneratorFromImage : EditorWindow
         }
     }
 
+    // --- GENERATION LOGIC ---
+
     private void GenerateLevel()
     {
         GameObject levelParentGO = GameObject.Find(blueprintTexture.name + " Level");
         if (levelParentGO != null) DestroyImmediate(levelParentGO);
         Transform levelParent = new GameObject(blueprintTexture.name + " Level").transform;
 
-        int width = blueprintTexture.width;
-        int height = blueprintTexture.height;
+        width = blueprintTexture.width;
+        height = blueprintTexture.height;
         Color[] allPixels = blueprintTexture.GetPixels();
 
-        Dictionary<Color, ColorToPrefabMapping> colorToMappingMap = mappings.ToDictionary(x => x.colorKey, x => x);
-        var mappedColors = colorToMappingMap.Keys.ToList();
+        // Pass 1: Build the Type Grid
+        typeGrid = new TileType[width, height];
 
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                Color pixelColor = allPixels[y * width + x];
+                if (pixelColor.a == 0)
+                {
+                    typeGrid[x, y] = TileType.None;
+                    continue;
+                }
+
+                ColorToPrefabMapping match = FindMapping(pixelColor);
+                if (match != null) typeGrid[x, y] = match.type;
+                else typeGrid[x, y] = TileType.None;
+            }
+        }
+
+        // Pass 2: Instantiate with Context Logic
         float pivotOffset = gridSize / 2f;
 
         for (int y = 0; y < height; y++)
@@ -158,56 +185,111 @@ public class LevelGeneratorFromImage : EditorWindow
                 Color pixelColor = allPixels[y * width + x];
                 if (pixelColor.a == 0) continue;
 
-                if (colorToMappingMap.ContainsKey(pixelColor))
+                ColorToPrefabMapping mapping = FindMapping(pixelColor);
+
+                if (mapping != null)
                 {
-                    ColorToPrefabMapping mapping = colorToMappingMap[pixelColor];
-
                     Vector3 position = new Vector3(x * gridSize + pivotOffset, 0, y * gridSize + pivotOffset);
+                    GameObject prefabToSpawn = mapping.prefab;
 
-                    int mask = CalculateBitmask(x, y, width, height, allPixels, mappedColors);
-                    float autoYRotation = GetRotationForMask(mask);
+                    // Default: Use Manual Rotation (Override/Fallback)
+                    float rotationY = mapping.manualYRotation;
 
-                    float finalYRotation = autoYRotation + mapping.manualYRotation;
+                    // --- CONTEXT AWARENESS ---
+                    if (mapping.type == TileType.Wall)
+                    {
+                        // Cardinal Neighbors (Is Floor?)
+                        bool n = IsTiledFloor(x, y + 1);
+                        bool s = IsTiledFloor(x, y - 1);
+                        bool e = IsTiledFloor(x + 1, y);
+                        bool w = IsTiledFloor(x - 1, y);
 
-                    InstantiatePrefab(mapping.prefab, position, Quaternion.Euler(0, finalYRotation, 0), levelParent);
+                        // Diagonal Neighbors (Is Floor?)
+                        bool ne = IsTiledFloor(x + 1, y + 1);
+                        bool nw = IsTiledFloor(x - 1, y + 1);
+                        bool se = IsTiledFloor(x + 1, y - 1);
+                        bool sw = IsTiledFloor(x - 1, y - 1);
+
+                        // RULE 1: PILLAR (Surrounded by floors on all 4 sides)
+                        if (n && s && e && w)
+                        {
+                            if (mapping.pillarPrefab != null)
+                                prefabToSpawn = mapping.pillarPrefab;
+                        }
+
+                        // RULE 2: EXTERNAL CORNER (Convex)
+                        // Floor on 2 adjacent sides (The wall sticks out)
+                        else if (mapping.externalCornerPrefab != null && ((n && e) || (n && w) || (s && e) || (s && w)))
+                        {
+                            prefabToSpawn = mapping.externalCornerPrefab;
+
+                            // Rotate to face the "Outer" corner
+                            if (n && e) rotationY = 0f;
+                            else if (s && e) rotationY = 90f;
+                            else if (s && w) rotationY = 180f;
+                            else if (n && w) rotationY = 270f;
+                        }
+
+                        // RULE 3: INTERNAL CORNER (Concave)
+                        // Wall on 2 adjacent sides, but the DIAGONAL is a Floor.
+                        // (i.e., we are the corner piece of a room)
+                        // Logic: NOT Floor North AND NOT Floor East (so Walls) AND YES Floor North-East
+                        else if (mapping.internalCornerPrefab != null && ((!n && !e && ne) || (!n && !w && nw) || (!s && !e && se) || (!s && !w && sw)))
+                        {
+                            prefabToSpawn = mapping.internalCornerPrefab;
+
+                            // Rotate to face the "Inner" corner (the floor diagonal)
+                            if (!n && !e && ne) rotationY = 0f;       // Room is to North-East
+                            else if (!s && !e && se) rotationY = 90f;  // Room is to South-East
+                            else if (!s && !w && sw) rotationY = 180f; // Room is to South-West
+                            else if (!n && !w && nw) rotationY = 270f; // Room is to North-West
+                        }
+
+                        // RULE 4: STANDARD WALL ORIENTATION
+                        // Only runs if we haven't already picked a corner/pillar
+                        else if (prefabToSpawn == mapping.prefab)
+                        {
+                            // Priority Snapping: Face the first valid *PAINTED* floor found.
+                            if (n) rotationY = 0f;
+                            else if (e) rotationY = 90f;
+                            else if (s) rotationY = 180f;
+                            else if (w) rotationY = 270f;
+                        }
+                    }
+
+                    // --- FINAL APPLICATION: Add Global Offset ---
+                    float finalRotation = rotationY + globalRotationOffset;
+
+                    InstantiatePrefab(prefabToSpawn, position, Quaternion.Euler(0, finalRotation, 0), levelParent);
                 }
             }
         }
-        Debug.Log("Level generation complete!");
+        Debug.Log("Context-Aware Level generation complete!");
     }
 
-    private int CalculateBitmask(int x, int y, int width, int height, Color[] pixels, List<Color> mappedColors)
+    // Helper to handle loose float comparison for colors
+    private ColorToPrefabMapping FindMapping(Color c)
     {
-        int mask = 0;
-        if (IsMappedColor(x, y + 1, width, height, pixels, mappedColors)) mask += 1; // North
-        if (IsMappedColor(x + 1, y, width, height, pixels, mappedColors)) mask += 2; // East
-        if (IsMappedColor(x, y - 1, width, height, pixels, mappedColors)) mask += 4; // South
-        if (IsMappedColor(x - 1, y, width, height, pixels, mappedColors)) mask += 8; // West
-        return mask;
+        foreach (var m in mappings)
+        {
+            if (IsColorSimilar(m.colorKey, c)) return m;
+        }
+        return null;
     }
 
-    private bool IsMappedColor(int x, int y, int width, int height, Color[] pixels, List<Color> mappedColors)
+    private bool IsColorSimilar(Color a, Color b, float tolerance = 0.01f)
+    {
+        return Mathf.Abs(a.r - b.r) < tolerance &&
+               Mathf.Abs(a.g - b.g) < tolerance &&
+               Mathf.Abs(a.b - b.b) < tolerance &&
+               Mathf.Abs(a.a - b.a) < tolerance;
+    }
+
+    // FIXED: Strictly checks for Floor Tiles. Returns FALSE for Void/Out of Bounds.
+    private bool IsTiledFloor(int x, int y)
     {
         if (x < 0 || x >= width || y < 0 || y >= height) return false;
-        return mappedColors.Contains(pixels[y * width + x]);
-    }
-
-    private float GetRotationForMask(int mask)
-    {
-        switch (mask)
-        {
-            case 1: return 0;
-            case 2: return 90;
-            case 4: return 180;
-            case 8: return 270;
-
-            case 3: return 90;
-            case 6: return 180;
-            case 9: return 0;
-            case 12: return 270;
-
-            default: return 0;
-        }
+        return typeGrid[x, y] == TileType.Floor;
     }
 
     private void InstantiatePrefab(GameObject prefab, Vector3 position, Quaternion rotation, Transform parent)
