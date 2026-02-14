@@ -192,64 +192,73 @@ public class LevelGeneratorFromImage : EditorWindow
                     Vector3 position = new Vector3(x * gridSize + pivotOffset, 0, y * gridSize + pivotOffset);
                     GameObject prefabToSpawn = mapping.prefab;
 
-                    // Default: Use Manual Rotation (Override/Fallback)
                     float rotationY = mapping.manualYRotation;
 
-                    // --- CONTEXT AWARENESS ---
-                    if (mapping.type == TileType.Wall)
+                    // --- DOOR LOGIC ---
+                    if (mapping.type == TileType.Door)
                     {
-                        // Cardinal Neighbors (Is Floor?)
+                        // Check specifically for Walls
+                        bool w_isWall = IsWall(x - 1, y);
+                        bool e_isWall = IsWall(x + 1, y);
+                        bool n_isWall = IsWall(x, y + 1);
+                        bool s_isWall = IsWall(x, y - 1);
+
+                        // Horizontal Alignment (Walls East & West)
+                        // If door pivot is at one end (e.g. Left), Rot 0 places hinge on West.
+                        if (w_isWall && e_isWall)
+                        {
+                            rotationY = 0f;
+                        }
+                        // Vertical Alignment (Walls North & South)
+                        // If door pivot is at one end, Rot 90 places hinge on South.
+                        else if (n_isWall && s_isWall)
+                        {
+                            rotationY = 90f;
+                        }
+                        // Fallback / Single Wall Connection
+                        // If we are a door at the end of a corridor (one side floor, one side wall)
+                        // we attach the hinge to the Wall.
+                        else if (w_isWall) rotationY = 0f;
+                        else if (e_isWall) rotationY = 180f;
+                        else if (s_isWall) rotationY = 90f;
+                        else if (n_isWall) rotationY = 270f;
+                    }
+
+                    // --- WALL LOGIC (Unchanged) ---
+                    else if (mapping.type == TileType.Wall)
+                    {
                         bool n = IsTiledFloor(x, y + 1);
                         bool s = IsTiledFloor(x, y - 1);
                         bool e = IsTiledFloor(x + 1, y);
                         bool w = IsTiledFloor(x - 1, y);
 
-                        // Diagonal Neighbors (Is Floor?)
                         bool ne = IsTiledFloor(x + 1, y + 1);
                         bool nw = IsTiledFloor(x - 1, y + 1);
                         bool se = IsTiledFloor(x + 1, y - 1);
                         bool sw = IsTiledFloor(x - 1, y - 1);
 
-                        // RULE 1: PILLAR (Surrounded by floors on all 4 sides)
                         if (n && s && e && w)
                         {
-                            if (mapping.pillarPrefab != null)
-                                prefabToSpawn = mapping.pillarPrefab;
+                            if (mapping.pillarPrefab != null) prefabToSpawn = mapping.pillarPrefab;
                         }
-
-                        // RULE 2: EXTERNAL CORNER (Convex)
-                        // Floor on 2 adjacent sides (The wall sticks out)
                         else if (mapping.externalCornerPrefab != null && ((n && e) || (n && w) || (s && e) || (s && w)))
                         {
                             prefabToSpawn = mapping.externalCornerPrefab;
-
-                            // Rotate to face the "Outer" corner
                             if (n && e) rotationY = 0f;
                             else if (s && e) rotationY = 90f;
                             else if (s && w) rotationY = 180f;
                             else if (n && w) rotationY = 270f;
                         }
-
-                        // RULE 3: INTERNAL CORNER (Concave)
-                        // Wall on 2 adjacent sides, but the DIAGONAL is a Floor.
-                        // (i.e., we are the corner piece of a room)
-                        // Logic: NOT Floor North AND NOT Floor East (so Walls) AND YES Floor North-East
                         else if (mapping.internalCornerPrefab != null && ((!n && !e && ne) || (!n && !w && nw) || (!s && !e && se) || (!s && !w && sw)))
                         {
                             prefabToSpawn = mapping.internalCornerPrefab;
-
-                            // Rotate to face the "Inner" corner (the floor diagonal)
-                            if (!n && !e && ne) rotationY = 0f;       // Room is to North-East
-                            else if (!s && !e && se) rotationY = 90f;  // Room is to South-East
-                            else if (!s && !w && sw) rotationY = 180f; // Room is to South-West
-                            else if (!n && !w && nw) rotationY = 270f; // Room is to North-West
+                            if (!n && !e && ne) rotationY = 0f;
+                            else if (!s && !e && se) rotationY = 90f;
+                            else if (!s && !w && sw) rotationY = 180f;
+                            else if (!n && !w && nw) rotationY = 270f;
                         }
-
-                        // RULE 4: STANDARD WALL ORIENTATION
-                        // Only runs if we haven't already picked a corner/pillar
                         else if (prefabToSpawn == mapping.prefab)
                         {
-                            // Priority Snapping: Face the first valid *PAINTED* floor found.
                             if (n) rotationY = 0f;
                             else if (e) rotationY = 90f;
                             else if (s) rotationY = 180f;
@@ -257,9 +266,7 @@ public class LevelGeneratorFromImage : EditorWindow
                         }
                     }
 
-                    // --- FINAL APPLICATION: Add Global Offset ---
                     float finalRotation = rotationY + globalRotationOffset;
-
                     InstantiatePrefab(prefabToSpawn, position, Quaternion.Euler(0, finalRotation, 0), levelParent);
                 }
             }
@@ -267,7 +274,6 @@ public class LevelGeneratorFromImage : EditorWindow
         Debug.Log("Context-Aware Level generation complete!");
     }
 
-    // Helper to handle loose float comparison for colors
     private ColorToPrefabMapping FindMapping(Color c)
     {
         foreach (var m in mappings)
@@ -285,11 +291,16 @@ public class LevelGeneratorFromImage : EditorWindow
                Mathf.Abs(a.a - b.a) < tolerance;
     }
 
-    // FIXED: Strictly checks for Floor Tiles. Returns FALSE for Void/Out of Bounds.
     private bool IsTiledFloor(int x, int y)
     {
         if (x < 0 || x >= width || y < 0 || y >= height) return false;
         return typeGrid[x, y] == TileType.Floor;
+    }
+
+    private bool IsWall(int x, int y)
+    {
+        if (x < 0 || x >= width || y < 0 || y >= height) return false;
+        return typeGrid[x, y] == TileType.Wall;
     }
 
     private void InstantiatePrefab(GameObject prefab, Vector3 position, Quaternion rotation, Transform parent)
