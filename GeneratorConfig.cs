@@ -1,8 +1,8 @@
 using UnityEngine;
-using System.Collections.Generic; // <-- Add this line
+using System.Collections.Generic;
 
-[CreateAssetMenu(fileName = "NewGeneratorConfig", menuName = "Level Generation/Generator Config")]
+[CreateAssetMenu(fileName = "NewGeneratorConfig", menuName = "Dungeon/Generator Config")]
 public class GeneratorConfig : ScriptableObject
 {
-    public List<ColorToPrefabMapping> mappings;
+    public List<ColorToPrefabMapping> mappings = new List<ColorToPrefabMapping>();
 }

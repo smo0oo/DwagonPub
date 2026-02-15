@@ -40,7 +40,30 @@ public class NPCInteraction : MonoBehaviour, IInteractable
     {
         if (dialogueSystemTrigger != null)
         {
-            dialogueSystemTrigger.OnUse(interactor.transform);
+            // --- FIX FOR INCORRECT NAMES ---
+            // 1. Identify the ACTOR (The Active Player)
+            GameObject playerObj = PartyManager.instance != null ? PartyManager.instance.ActivePlayer : interactor;
+            Transform actorTransform = playerObj.transform;
+
+            // 2. Identify the CONVERSANT (This NPC)
+            Transform conversantTransform = this.transform;
+
+            // 3. Check if this trigger is configured for a Conversation
+            if (!string.IsNullOrEmpty(dialogueSystemTrigger.conversation))
+            {
+                // 4. Force Start with Explicit Transforms
+                // This guarantees the Dialogue System knows exactly who is talking to whom.
+                DialogueManager.StartConversation(
+                    dialogueSystemTrigger.conversation,
+                    actorTransform,
+                    conversantTransform
+                );
+            }
+            else
+            {
+                // Fallback for Barks, Lua-Only triggers, or Sequences
+                dialogueSystemTrigger.OnUse(actorTransform);
+            }
         }
     }
 

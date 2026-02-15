@@ -1,15 +1,35 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-// This is just a helper class (Not a MonoBehaviour)
+// 1. We group the Quest settings into their own class.
+// This automatically makes them collapsible in the Inspector.
+[System.Serializable]
+public class NarrativeQuestSettings
+{
+    [Tooltip("If true, this enemy will count towards a kill quest variable.")]
+    public bool incrementQuestVar = false;
+
+    [Tooltip("The exact name of the Dialogue System variable to increment.")]
+    public string variableName;
+
+    [Tooltip("How much to add (usually 1).")]
+    public int incrementAmount = 1;
+
+    [Tooltip("Refresh the Quest Tracker HUD immediately on death?")]
+    public bool updateQuestTracker = true;
+}
+
 [System.Serializable]
 public class NarrativeSpawnData
 {
+    [Header("Spawn Settings")]
     public GameObject enemyPrefab;
     public Transform spawnPoint;
+
+    // 2. This reference will now appear as a Foldout arrow named "Quest Settings"
+    public NarrativeQuestSettings questSettings;
 }
 
-// This is the Main Script (Must match filename 'NarrativeCombatSpawner.cs')
 public class NarrativeCombatSpawner : MonoBehaviour
 {
     [Header("Configuration")]
@@ -42,6 +62,25 @@ public class NarrativeCombatSpawner : MonoBehaviour
             if (data.enemyPrefab == null || data.spawnPoint == null) continue;
 
             GameObject newEnemy = Instantiate(data.enemyPrefab, data.spawnPoint.position, data.spawnPoint.rotation);
+
+            // --- QUEST INJECTION LOGIC ---
+            // 3. We now access the fields via 'data.questSettings'
+            if (data.questSettings != null && data.questSettings.incrementQuestVar && !string.IsNullOrEmpty(data.questSettings.variableName))
+            {
+                // Check if the enemy already has the script (to avoid duplicates), otherwise Add it.
+                EnemyDeathIncrementer incrementer = newEnemy.GetComponent<EnemyDeathIncrementer>();
+                if (incrementer == null)
+                {
+                    incrementer = newEnemy.AddComponent<EnemyDeathIncrementer>();
+                }
+
+                // Inject the data from the Inspector into the new enemy instance
+                incrementer.variableName = data.questSettings.variableName;
+                incrementer.incrementAmount = data.questSettings.incrementAmount;
+                incrementer.updateQuestTracker = data.questSettings.updateQuestTracker;
+            }
+            // -----------------------------
+
             activeEnemies.Add(newEnemy);
         }
 
