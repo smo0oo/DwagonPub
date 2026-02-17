@@ -1,177 +1,152 @@
 using UnityEngine;
-using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using Unity.VisualScripting;
+using System.Reflection; // Required for the safe input fix
 
-[RequireComponent(typeof(CanvasGroup))]
-[RequireComponent(typeof(RectTransform))]
-public class UIDragDropController : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler
+public class UIDragDropController : MonoBehaviour
 {
-    [Header("References")]
-    public Image itemIcon;
+    [Header("UI References")]
+    public Image draggedItemIcon;
 
-    [HideInInspector] public IDragSource currentSource;
-    private bool _dropSuccessful = false;
-    private bool _isDragging = false;
+    [Header("Drag Visuals")]
+    [Tooltip("The scale of the icon that follows the cursor during a drag operation.")]
+    [Range(0.1f, 1f)]
+    public float dragIconScale = 0.25f;
 
-    // --- STATE VARIABLES ---
-    private Transform _originalParent;
-    private int _originalSiblingIndex;
-    private RectTransform _rectTransform;
-    private CanvasGroup _canvasGroup;
-    private Transform _godLayer;
-    private RectTransform _godLayerRect; // Needed for coordinate conversion
+    [Header("Visual Scripting Hooks")]
+    public GameObject uiManagerObject;
+    public string dragInProgressVariableName = "UIDragInProgress";
 
-    void Awake()
+    public IDragSource currentSource { get; private set; }
+    private bool dropWasSuccessful;
+
+    // --- INPUT SYSTEM CACHING (Performance) ---
+    private MethodInfo _newInputReadValue;
+    private object _newInputPositionControl;
+    private bool _initializedInputCheck = false;
+
+    void Start()
     {
-        _rectTransform = GetComponent<RectTransform>();
-        _canvasGroup = GetComponent<CanvasGroup>();
+        InitializeInputSystem();
 
-        // Ensure icon starts hidden
-        if (itemIcon != null) itemIcon.gameObject.SetActive(false);
-    }
-
-    void LateUpdate()
-    {
-        // --- THE FIX: Robust Coordinate Conversion ---
-        if (_isDragging && _rectTransform != null && _godLayerRect != null)
+        if (draggedItemIcon != null)
         {
-            Vector2 localPoint;
-            // Convert Screen Mouse Pos -> Local Point in the God Layer Rect
-            if (RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                _godLayerRect,
-                Input.mousePosition,
-                null, // null for Screen Space - Overlay (which God Layer is)
-                out localPoint))
-            {
-                _rectTransform.anchoredPosition = localPoint;
-            }
+            draggedItemIcon.raycastTarget = false;
+            draggedItemIcon.gameObject.SetActive(false);
+        }
+        else
+        {
+            Debug.LogError("[UIDragDropController] 'Dragged Item Icon' is NOT assigned in the Inspector! The icon will not appear.");
         }
     }
 
-    // ---------------------------------------------------------
-    // API
-    // ---------------------------------------------------------
+    void Update()
+    {
+        if (draggedItemIcon != null && draggedItemIcon.gameObject.activeSelf)
+        {
+            draggedItemIcon.transform.position = GetMousePosition();
+        }
+    }
+
+    // --- THE UNIVERSAL MOUSE FIX ---
+    private void InitializeInputSystem()
+    {
+        // Try to find the New Input System via Reflection so we don't rely on #defines
+        try
+        {
+            System.Type mouseType = System.Type.GetType("UnityEngine.InputSystem.Mouse, Unity.InputSystem");
+            if (mouseType != null)
+            {
+                PropertyInfo currentProp = mouseType.GetProperty("current");
+                object currentMouse = currentProp.GetValue(null);
+                if (currentMouse != null)
+                {
+                    PropertyInfo positionProp = mouseType.GetProperty("position");
+                    _newInputPositionControl = positionProp.GetValue(currentMouse);
+                    _newInputReadValue = _newInputPositionControl.GetType().GetMethod("ReadValue");
+                }
+            }
+        }
+        catch
+        {
+            // Fallback to old system if anything fails
+            _newInputReadValue = null;
+        }
+        _initializedInputCheck = true;
+    }
+
+    private Vector2 GetMousePosition()
+    {
+        if (!_initializedInputCheck) InitializeInputSystem();
+
+        // 1. Try New Input System
+        if (_newInputReadValue != null && _newInputPositionControl != null)
+        {
+            try
+            {
+                return (Vector2)_newInputReadValue.Invoke(_newInputPositionControl, null);
+            }
+            catch { /* Ignore and fall through */ }
+        }
+
+        // 2. Fallback to Old Input System
+        return Input.mousePosition;
+    }
+    // -------------------------------
 
     public void OnBeginDrag(IDragSource source, Sprite icon)
     {
         currentSource = source;
-        if (icon != null && itemIcon != null)
+        dropWasSuccessful = false;
+        SetDragInProgressFlag(true);
+
+        if (draggedItemIcon != null && icon != null)
         {
-            itemIcon.sprite = icon;
-            itemIcon.gameObject.SetActive(true);
+            draggedItemIcon.sprite = icon;
+            draggedItemIcon.gameObject.SetActive(true);
+
+            // Apply scale
+            draggedItemIcon.transform.localScale = new Vector3(dragIconScale, dragIconScale, 1f);
+
+            // [FIX] Move to mouse immediately so it doesn't flash at (0,0)
+            draggedItemIcon.transform.position = GetMousePosition();
         }
-        StartDragLogic(null);
+        else if (draggedItemIcon == null)
+        {
+            Debug.LogError("[UIDragDropController] OnBeginDrag fired, but 'Dragged Item Icon' is NULL. Check the Inspector.");
+        }
     }
 
-    public void OnEndDrag() => OnEndDrag(null);
-    public void NotifyDropSuccessful(bool success) => _dropSuccessful = success;
-
-    // ---------------------------------------------------------
-    // DRAG LOGIC
-    // ---------------------------------------------------------
-
-    public void OnBeginDrag(PointerEventData eventData) => StartDragLogic(eventData);
-
-    private void StartDragLogic(PointerEventData eventData)
+    public void OnEndDrag()
     {
-        _dropSuccessful = false;
-        _isDragging = true;
-        _originalParent = transform.parent;
-        _originalSiblingIndex = transform.GetSiblingIndex();
-
-        // 1. Find or Create God Layer (Failsafe)
-        if (GameManager.instance != null && GameManager.instance.globalUiOverlay != null)
+        if (currentSource != null && dropWasSuccessful)
         {
-            _godLayer = GameManager.instance.globalUiOverlay;
+            // The target now tells the source if the drop was successful.
         }
-        else
-        {
-            GameObject found = GameObject.Find("GlobalUIOverlay");
-            if (found == null)
-            {
-                found = new GameObject("GlobalUIOverlay");
-                Canvas c = found.AddComponent<Canvas>();
-                c.renderMode = RenderMode.ScreenSpaceOverlay;
-                c.sortingOrder = 30002;
-                found.AddComponent<GraphicRaycaster>();
-                DontDestroyOnLoad(found);
-            }
-            _godLayer = found.transform;
-        }
-
-        _godLayerRect = _godLayer.GetComponent<RectTransform>();
-
-        // 2. Move to God Layer
-        if (_godLayer != null)
-        {
-            // 'false' is critical to allow us to reset coordinates manually below
-            transform.SetParent(_godLayer, false);
-        }
-
-        // 3. Reset Transform & Snap Immediately
-        if (_rectTransform != null)
-        {
-            _rectTransform.anchorMin = new Vector2(0.5f, 0.5f);
-            _rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
-            _rectTransform.pivot = new Vector2(0.5f, 0.5f);
-            _rectTransform.localScale = Vector3.one;
-
-            // Initial snap using the same logic as LateUpdate
-            if (_godLayerRect != null)
-            {
-                Vector2 localPoint;
-                if (RectTransformUtility.ScreenPointToLocalPointInRectangle(_godLayerRect, Input.mousePosition, null, out localPoint))
-                {
-                    _rectTransform.anchoredPosition = localPoint;
-                }
-            }
-        }
-
-        // 4. Visual Settings
-        transform.SetAsLastSibling();
-        if (_canvasGroup != null) _canvasGroup.blocksRaycasts = false;
-        if (TooltipManager.instance != null) TooltipManager.instance.HideTooltip();
-    }
-
-    public void OnDrag(PointerEventData eventData) { }
-
-    public void OnEndDrag(PointerEventData eventData)
-    {
-        _isDragging = false;
-
-        // 1. Handle Drop Failure
-        if (!_dropSuccessful)
-        {
-            if (transform.parent == _godLayer || transform.parent == null)
-            {
-                ReturnToOriginalSlot();
-            }
-        }
-
-        // 2. Cleanup
-        if (_canvasGroup != null)
-        {
-            _canvasGroup.blocksRaycasts = true;
-            _canvasGroup.alpha = 1.0f;
-        }
-
-        if (itemIcon != null) itemIcon.gameObject.SetActive(false);
 
         currentSource = null;
+        if (draggedItemIcon != null)
+        {
+            draggedItemIcon.gameObject.SetActive(false);
+            draggedItemIcon.transform.localScale = Vector3.one;
+        }
+        SetDragInProgressFlag(false);
     }
 
-    private void ReturnToOriginalSlot()
+    public void NotifyDropSuccessful(IDropTarget target)
     {
-        if (_originalParent != null)
+        if (currentSource != null)
         {
-            transform.SetParent(_originalParent, true);
-            transform.SetSiblingIndex(_originalSiblingIndex);
+            currentSource.OnDropSuccess(target);
+            dropWasSuccessful = true;
+        }
+    }
 
-            if (_rectTransform != null)
-            {
-                _rectTransform.anchoredPosition = Vector2.zero;
-                _rectTransform.localScale = Vector3.one;
-            }
+    private void SetDragInProgressFlag(bool value)
+    {
+        if (uiManagerObject != null)
+        {
+            Variables.Object(uiManagerObject).Set(dragInProgressVariableName, value);
         }
     }
 }
