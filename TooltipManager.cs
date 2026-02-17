@@ -46,30 +46,39 @@ public class TooltipManager : MonoBehaviour
     public Ease openEase = Ease.OutBack;
     public Ease closeEase = Ease.InBack;
 
+    // Cache the Canvas to update sorting layer dynamically
+    private Canvas _parentCanvas;
+
     void Awake()
     {
-        if (instance != null && instance != this) Destroy(gameObject);
-        else instance = this;
+        if (instance != null && instance != this) { Destroy(gameObject); return; }
+        instance = this;
+        DontDestroyOnLoad(gameObject);
 
-        if (tooltipPanel != null)
+        // --- GLOBAL OVERLAY PARENTING ---
+        Transform overlay = null;
+        if (GameManager.instance != null && GameManager.instance.globalUiOverlay != null)
         {
+            overlay = GameManager.instance.globalUiOverlay;
+            _parentCanvas = overlay.GetComponent<Canvas>();
+        }
+
+        if (tooltipPanel != null && overlay != null)
+        {
+            // Fix: Use 'false' to reset position relative to the new parent (Overlay)
+            tooltipPanel.transform.SetParent(overlay, false);
+
             tooltipRect = tooltipPanel.GetComponent<RectTransform>();
-
-            // --- THE FIX: Force Tooltip to "God Layer" (30,000) ---
-            // We add a Canvas directly to the visual panel so it breaks out of any parent masks.
-            Canvas panelCanvas = tooltipPanel.GetComponent<Canvas>();
-            if (panelCanvas == null) panelCanvas = tooltipPanel.AddComponent<Canvas>();
-
-            panelCanvas.overrideSorting = true;
-            panelCanvas.sortingOrder = 30000; // Highest priority
-            panelCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
-
-            // Ensure Raycaster exists so it doesn't block mouse clicks weirdly
-            if (tooltipPanel.GetComponent<GraphicRaycaster>() == null)
+            if (tooltipRect != null)
             {
-                tooltipPanel.AddComponent<GraphicRaycaster>();
+                tooltipRect.anchoredPosition = Vector2.zero;
+                tooltipRect.localRotation = Quaternion.identity;
+                tooltipRect.localScale = Vector3.one; // Fix scale issues
             }
-            // -------------------------------------------------------
+
+            CanvasGroup group = tooltipPanel.GetComponent<CanvasGroup>();
+            if (group == null) group = tooltipPanel.AddComponent<CanvasGroup>();
+            group.blocksRaycasts = false;
         }
     }
 
@@ -84,7 +93,25 @@ public class TooltipManager : MonoBehaviour
 
     void Update()
     {
-        if (tooltipPanel != null && tooltipPanel.activeSelf) UpdateTooltipPosition();
+        if (tooltipPanel != null && tooltipPanel.activeSelf)
+        {
+            UpdateTooltipPosition();
+
+            // --- AUTO-FIX SORTING LAYER ---
+            // If the user has multiple sorting layers (Default vs UI), ensure Tooltip stays on top.
+            // We just grab the layer of the "Current" top canvas if we can, or brute force "UI"
+            if (_parentCanvas != null)
+            {
+                // If the overlay accidentally got set to Default, and UI is active, force UI.
+                // Ideally, you set this in the Inspector on 'GlobalUIOverlay', but this is a failsafe.
+                if (_parentCanvas.sortingLayerName == "Default")
+                {
+                    // This is a common Unity issue. Try to guess "UI".
+                    // You can remove this check if you manually set the Canvas to "UI" in the Core Scene.
+                    _parentCanvas.sortingLayerName = "UI";
+                }
+            }
+        }
     }
 
     private void ClearTooltipUI()
@@ -108,12 +135,10 @@ public class TooltipManager : MonoBehaviour
         Ability ability = currentRankAbility ?? nextRankAbility;
         if (ability == null) { HideTooltip(); return; }
 
-        // Header
         tooltipNameText.text = ability.abilityName;
         tooltipNameText.color = Color.white;
         if (nameBackgroundImage) nameBackgroundImage.color = new Color(0.1f, 0.1f, 0.2f, 0.9f);
 
-        // Stats
         StringBuilder sbStats = new StringBuilder();
         void AppendStats(Ability a, string prefix)
         {
@@ -159,7 +184,6 @@ public class TooltipManager : MonoBehaviour
             if (spacer1) spacer1.SetActive(true);
         }
 
-        // Description
         StringBuilder sbDesc = new StringBuilder();
         void AppendEffects(Ability a)
         {
@@ -194,7 +218,6 @@ public class TooltipManager : MonoBehaviour
         if (itemStack == null || itemStack.itemData == null) { HideTooltip(); return; }
         ClearTooltipUI();
 
-        // Header
         tooltipNameText.text = itemStack.itemData.displayName;
         tooltipNameText.color = requirementsMet ? Color.white : requirementsNotMetColor;
 
@@ -214,7 +237,6 @@ public class TooltipManager : MonoBehaviour
             else nameBackgroundImage.color = new Color(0, 0, 0, 0.8f);
         }
 
-        // Stats
         StringBuilder sbStats = new StringBuilder();
         if (viewerStats != null && stats is ItemWeaponStats weaponStats)
         {
@@ -258,7 +280,6 @@ public class TooltipManager : MonoBehaviour
             if (spacer2) spacer2.SetActive(true);
         }
 
-        // Description
         StringBuilder sbDesc = new StringBuilder();
         sbDesc.Append(itemStack.itemData.description);
         if (itemStack.itemData.itemValue > 0)
@@ -276,22 +297,12 @@ public class TooltipManager : MonoBehaviour
     public void ShowSimpleTooltip(string title, string description)
     {
         ClearTooltipUI();
-
-        // Header
         tooltipNameText.text = title;
         tooltipNameText.color = Color.white;
         if (nameBackgroundImage) nameBackgroundImage.color = new Color(0, 0, 0, 0.8f);
-
-        // Description
         tooltipDescriptionText.text = description;
         tooltipDescriptionText.gameObject.SetActive(true);
-
-        // Spacer Logic
-        if (!string.IsNullOrEmpty(title) && spacer1)
-        {
-            spacer1.SetActive(true);
-        }
-
+        if (!string.IsNullOrEmpty(title) && spacer1) spacer1.SetActive(true);
         AnimateTooltip(true);
     }
 

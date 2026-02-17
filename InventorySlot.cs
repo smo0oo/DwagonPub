@@ -4,7 +4,6 @@ using UnityEngine.EventSystems;
 using TMPro;
 
 [RequireComponent(typeof(CanvasGroup))]
-// 1. Add IPointerDownHandler to the interface list
 public class InventorySlot : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, IBeginDragHandler, IDragHandler, IEndDragHandler, IPointerClickHandler, IDropHandler, IDragSource, IDropTarget, IPointerDownHandler
 {
     [Header("UI References")]
@@ -23,10 +22,7 @@ public class InventorySlot : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
     {
         get
         {
-            if (_inventoryManager == null)
-            {
-                _inventoryManager = InventoryManager.instance;
-            }
+            if (_inventoryManager == null) _inventoryManager = InventoryManager.instance;
             return _inventoryManager;
         }
         set => _inventoryManager = value;
@@ -38,20 +34,15 @@ public class InventorySlot : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
         this.slotIndex = index;
         this.parentInventory = parentInv;
 
-        // Use FindFirstObjectByType for slightly better performance than FindAnyObjectByType
         if (dragDropController == null) dragDropController = Object.FindFirstObjectByType<UIDragDropController>();
         canvasGroup = GetComponent<CanvasGroup>();
         equipmentManager = EquipmentManager.instance;
     }
 
-    // --- NEW: Required for OnBeginDrag to fire reliably ---
     public void OnPointerDown(PointerEventData eventData)
     {
-        // This method effectively "claims" the click for this object.
-        // Even if empty, it tells the EventSystem: "I am the object being clicked."
-        // This ensures that when the mouse moves, OnBeginDrag is sent to THIS script.
+        // Claims the click so OnBeginDrag fires reliably
     }
-    // -----------------------------------------------------
 
     public void UpdateSlot(ItemStack itemStack)
     {
@@ -91,45 +82,49 @@ public class InventorySlot : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
 
     public void OnPointerClick(PointerEventData eventData)
     {
-        // Check for right-click context menu
         if (parentInventory != null && eventData.button == PointerEventData.InputButton.Right && parentInventory.items[slotIndex]?.itemData != null)
         {
             inventoryManager.OpenContextMenu(this);
         }
     }
 
+    // --- DRAG IMPLEMENTATION ---
+
     public void OnBeginDrag(PointerEventData eventData)
     {
         if (parentInventory == null || eventData.button != PointerEventData.InputButton.Left) return;
-
-        // Safety check for controller
         if (dragDropController == null) dragDropController = Object.FindFirstObjectByType<UIDragDropController>();
 
         ItemStack item = parentInventory.items[slotIndex];
         if (item != null && item.itemData != null)
         {
-            // IMPORTANT: Disable raycasts so the pointer can "see" what is underneath the dragged icon
-            canvasGroup.blocksRaycasts = false;
+            // Allow clicks to pass through this slot so we can drop it on others
+            if (canvasGroup != null) canvasGroup.blocksRaycasts = false;
+
+            // Start the drag on the controller
             dragDropController.OnBeginDrag(this, item.itemData.icon);
 
-            // Optional: Hide tooltip immediately when drag starts
             inventoryManager.HideTooltip();
         }
     }
 
     public void OnDrag(PointerEventData eventData)
     {
-        // Required interface implementation
+        // INTENTIONALLY EMPTY
+        // The UIDragDropController now handles movement in LateUpdate.
+        // We keep this empty method so Unity still detects this object as draggable.
     }
 
     public void OnEndDrag(PointerEventData eventData)
     {
         if (eventData.button == PointerEventData.InputButton.Left)
         {
-            canvasGroup.blocksRaycasts = true;
+            if (canvasGroup != null) canvasGroup.blocksRaycasts = true;
             if (dragDropController != null) dragDropController.OnEndDrag();
         }
     }
+
+    // ---------------------------
 
     public void OnDrop(PointerEventData eventData)
     {
@@ -143,7 +138,6 @@ public class InventorySlot : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
             int fromIndex = sourceSlot.slotIndex;
             int toIndex = this.slotIndex;
 
-            // Swap items
             ItemStack sourceStack = sourceInventory.items[fromIndex];
             ItemStack targetStack = targetInventory.items[toIndex];
 
@@ -161,10 +155,7 @@ public class InventorySlot : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
 
     public void OnPointerEnter(PointerEventData eventData)
     {
-        // Only show tooltip if we are NOT currently dragging something
-        // (Prevent tooltips from popping up while moving items around)
         if (dragDropController == null) dragDropController = Object.FindFirstObjectByType<UIDragDropController>();
-
         bool isDragging = dragDropController != null && dragDropController.currentSource != null;
 
         if (!isDragging && parentInventory != null && parentInventory.items[slotIndex] != null && parentInventory.items[slotIndex].itemData != null)

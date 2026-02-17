@@ -13,6 +13,10 @@ public class GameManager : MonoBehaviour
 {
     public static GameManager instance;
 
+    [Header("Global UI")]
+    [Tooltip("Assign the 'GlobalUIOverlay' Canvas (Sort Order 30000) from the Core Scene here.")]
+    public Transform globalUiOverlay;
+
     [Header("Scene Transition")]
     public float fadeDuration = 0.5f;
     [Tooltip("The minimum time (in seconds) the loading screen will be visible, even if loading is instant.")]

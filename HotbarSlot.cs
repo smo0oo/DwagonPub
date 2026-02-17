@@ -3,7 +3,9 @@ using UnityEngine.UI;
 using UnityEngine.EventSystems;
 using TMPro;
 
-public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPointerExitHandler, IPointerClickHandler, IDropTarget, IDragSource
+// Added CanvasGroup requirement for Raycast blocking during drag
+[RequireComponent(typeof(CanvasGroup))]
+public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPointerExitHandler, IPointerClickHandler, IDropTarget, IDragSource, IBeginDragHandler, IDragHandler, IEndDragHandler
 {
     [Header("UI References")]
     public Image iconImage;
@@ -26,8 +28,8 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
     private Button button;
     private HotbarAssignment currentAssignment;
     private UIDragDropController dragDropController;
+    private CanvasGroup canvasGroup;
 
-    // Reference to the helper script (Must be attached to the Icon Image)
     private UIIconEffect _iconEffect;
 
     // --- IDragSource Implementation ---
@@ -62,27 +64,54 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
     {
         if (hotbarManager == null) hotbarManager = HotbarManager.instance;
         inventoryManager = InventoryManager.instance;
-
         dragDropController = Object.FindFirstObjectByType<UIDragDropController>();
+        canvasGroup = GetComponent<CanvasGroup>();
 
         button = GetComponent<Button>();
         if (button != null) button.onClick.AddListener(() => TriggerSlot(null));
 
-        // Setup the Icon Effect Helper
         if (iconImage != null)
         {
             _iconEffect = iconImage.GetComponent<UIIconEffect>();
-            // Only log error if strictly necessary for setup
-            if (_iconEffect == null)
-            {
-                Debug.LogError($"[Slot {SlotIndex}] 'UIIconEffect' script is missing from the Icon Image! Please attach it in the Prefab.", this);
-            }
+            if (_iconEffect == null) Debug.LogError($"[Slot {SlotIndex}] 'UIIconEffect' missing!", this);
         }
     }
 
+    // --- DRAG IMPLEMENTATION (NEW) ---
+
+    public void OnBeginDrag(PointerEventData eventData)
+    {
+        // Only drag if we actually have an assignment
+        if (currentAssignment == null || currentAssignment.type == HotbarAssignment.AssignmentType.Unassigned) return;
+
+        if (dragDropController != null && iconImage != null)
+        {
+            if (canvasGroup != null) canvasGroup.blocksRaycasts = false;
+
+            // Start the drag
+            dragDropController.OnBeginDrag(this, iconImage.sprite);
+
+            // Optional: Hide tooltip
+            if (inventoryManager != null) inventoryManager.HideTooltip();
+        }
+    }
+
+    public void OnDrag(PointerEventData eventData)
+    {
+        // INTENTIONALLY EMPTY
+        // Movement is handled by UIDragDropController.LateUpdate
+    }
+
+    public void OnEndDrag(PointerEventData eventData)
+    {
+        if (canvasGroup != null) canvasGroup.blocksRaycasts = true;
+        if (dragDropController != null) dragDropController.OnEndDrag();
+    }
+
+    // ---------------------------------
+
     void Update()
     {
-        // 1. UNASSIGNED
         if (abilityHolder == null || currentAssignment == null || currentAssignment.type == HotbarAssignment.AssignmentType.Unassigned)
         {
             if (button != null) button.interactable = true;
@@ -90,22 +119,15 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
             return;
         }
 
-        // 2. RESOLVE ABILITY
         Ability ability = currentAssignment.ability;
-
         if (ability == null)
         {
             SetVisualState(usableColor, 0f, true);
             return;
         }
 
-        // 3. CHECK REQUIREMENTS
         bool hasEnoughMana = playerStats != null && playerStats.currentMana >= ability.manaCost;
-        bool hasCorrectWeapon = true;
-        if (ability.requiresWeaponType)
-        {
-            hasCorrectWeapon = abilityHolder.IsCorrectWeaponEquipped(ability.requiredWeaponCategories);
-        }
+        bool hasCorrectWeapon = ability.requiresWeaponType ? abilityHolder.IsCorrectWeaponEquipped(ability.requiredWeaponCategories) : true;
 
         if (!hasEnoughMana || !hasCorrectWeapon)
         {
@@ -113,7 +135,6 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
             return;
         }
 
-        // 4. CHECK COOLDOWNS
         bool onCooldown = abilityHolder.GetCooldownStatus(ability, out float remaining);
         bool onGlobalCooldown = ability.triggersGlobalCooldown && abilityHolder.IsOnGlobalCooldown();
         bool isLockedByOtherAbility = HotbarManager.instance != null && HotbarManager.instance.LockingAbility != null && HotbarManager.instance.LockingAbility != ability;
@@ -133,7 +154,6 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
         }
     }
 
-    // Helper to centralize visual updates
     private void SetVisualState(Color tint, float desaturation, bool interactable)
     {
         if (iconImage != null) iconImage.color = tint;
@@ -229,30 +249,25 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
     public void LinkToPlayer(PlayerAbilityHolder newHolder, PlayerStats newStats) { this.abilityHolder = newHolder; this.playerStats = newStats; }
     public void Assign(HotbarAssignment assignment) => currentAssignment = assignment;
 
-    // --- UPDATED VISUAL LOGIC ---
     public void UpdateSlot(HotbarAssignment assignment)
     {
         currentAssignment = assignment;
 
         if (_iconEffect != null) _iconEffect.SetDesaturation(0f);
 
-        // 1. Unassigned / Empty
         if (assignment == null || assignment.type == HotbarAssignment.AssignmentType.Unassigned)
         {
             if (iconImage != null)
             {
                 iconImage.sprite = null;
-                iconImage.color = Color.clear; // Hide visually
-                iconImage.enabled = true;      // Keep Raycasts active
-
-                // Clear Texture in Shader
+                iconImage.color = Color.clear;
+                iconImage.enabled = true;
                 if (_iconEffect != null) _iconEffect.SetTexture(null);
             }
             if (quantityText != null) { quantityText.text = ""; quantityText.enabled = false; }
             return;
         }
 
-        // 2. Item Assignment
         if (assignment.type == HotbarAssignment.AssignmentType.Item)
         {
             ItemStack stack = null;
@@ -269,8 +284,6 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
                     iconImage.sprite = stack.itemData.icon;
                     iconImage.color = usableColor;
                     iconImage.enabled = true;
-
-                    // Force Shader Update
                     if (_iconEffect != null && stack.itemData.icon != null)
                         _iconEffect.SetTexture(stack.itemData.icon.texture);
                 }
@@ -282,7 +295,6 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
             }
             else
             {
-                // Invalid Item
                 if (iconImage != null)
                 {
                     iconImage.sprite = null;
@@ -293,7 +305,6 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
                 if (quantityText != null) { quantityText.text = ""; quantityText.enabled = false; }
             }
         }
-        // 3. Ability Assignment
         else if (assignment.type == HotbarAssignment.AssignmentType.Ability)
         {
             if (assignment.ability != null)
@@ -303,8 +314,6 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
                     iconImage.sprite = assignment.ability.icon;
                     iconImage.color = usableColor;
                     iconImage.enabled = true;
-
-                    // Force Shader Update
                     if (_iconEffect != null && assignment.ability.icon != null)
                         _iconEffect.SetTexture(assignment.ability.icon.texture);
                 }
@@ -312,7 +321,6 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
             }
             else
             {
-                // Invalid Ability
                 if (iconImage != null)
                 {
                     iconImage.sprite = null;
@@ -324,7 +332,6 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
         }
     }
 
-    // --- LEGACY OVERLOADS ---
     public void UpdateSlot(ItemStack itemStack)
     {
         if (_iconEffect != null) _iconEffect.SetDesaturation(0f);
@@ -420,6 +427,9 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
     public void OnPointerEnter(PointerEventData eventData)
     {
         if (inventoryManager == null || currentAssignment == null) return;
+
+        bool isDragging = dragDropController != null && dragDropController.currentSource != null;
+        if (isDragging) return;
 
         if (currentAssignment.type == HotbarAssignment.AssignmentType.Item)
         {

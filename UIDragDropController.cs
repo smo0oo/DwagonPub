@@ -9,127 +9,153 @@ public class UIDragDropController : MonoBehaviour, IBeginDragHandler, IDragHandl
     [Header("References")]
     public Image itemIcon;
 
-    [HideInInspector] public IDragSource currentSource; // Stores who started the drag
+    [HideInInspector] public IDragSource currentSource;
     private bool _dropSuccessful = false;
+    private bool _isDragging = false;
 
     // --- STATE VARIABLES ---
     private Transform _originalParent;
     private int _originalSiblingIndex;
     private RectTransform _rectTransform;
     private CanvasGroup _canvasGroup;
-    private Canvas _rootCanvas;
-    private Canvas _dragCanvas; // [NEW] The temporary canvas for sorting
+    private Transform _godLayer;
+    private RectTransform _godLayerRect; // Needed for coordinate conversion
 
     void Awake()
     {
         _rectTransform = GetComponent<RectTransform>();
         _canvasGroup = GetComponent<CanvasGroup>();
 
-        // Find the absolute root canvas
-        Canvas[] parentCanvases = GetComponentsInParent<Canvas>();
-        if (parentCanvases.Length > 0)
+        // Ensure icon starts hidden
+        if (itemIcon != null) itemIcon.gameObject.SetActive(false);
+    }
+
+    void LateUpdate()
+    {
+        // --- THE FIX: Robust Coordinate Conversion ---
+        if (_isDragging && _rectTransform != null && _godLayerRect != null)
         {
-            _rootCanvas = parentCanvases[parentCanvases.Length - 1];
+            Vector2 localPoint;
+            // Convert Screen Mouse Pos -> Local Point in the God Layer Rect
+            if (RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                _godLayerRect,
+                Input.mousePosition,
+                null, // null for Screen Space - Overlay (which God Layer is)
+                out localPoint))
+            {
+                _rectTransform.anchoredPosition = localPoint;
+            }
         }
     }
 
     // ---------------------------------------------------------
-    // API: The Custom Overloads Your Code Calls
+    // API
     // ---------------------------------------------------------
 
     public void OnBeginDrag(IDragSource source, Sprite icon)
     {
         currentSource = source;
-        if (icon != null && itemIcon != null) itemIcon.sprite = icon;
+        if (icon != null && itemIcon != null)
+        {
+            itemIcon.sprite = icon;
+            itemIcon.gameObject.SetActive(true);
+        }
         StartDragLogic(null);
     }
 
-    public void OnEndDrag()
-    {
-        OnEndDrag(null);
-    }
-
-    public void NotifyDropSuccessful(bool success)
-    {
-        _dropSuccessful = success;
-    }
+    public void OnEndDrag() => OnEndDrag(null);
+    public void NotifyDropSuccessful(bool success) => _dropSuccessful = success;
 
     // ---------------------------------------------------------
     // DRAG LOGIC
     // ---------------------------------------------------------
 
-    public void OnBeginDrag(PointerEventData eventData)
-    {
-        StartDragLogic(eventData);
-    }
+    public void OnBeginDrag(PointerEventData eventData) => StartDragLogic(eventData);
 
     private void StartDragLogic(PointerEventData eventData)
     {
         _dropSuccessful = false;
+        _isDragging = true;
         _originalParent = transform.parent;
         _originalSiblingIndex = transform.GetSiblingIndex();
 
-        // 1. Move to Root Canvas (Escape Masks)
-        if (_rootCanvas != null)
+        // 1. Find or Create God Layer (Failsafe)
+        if (GameManager.instance != null && GameManager.instance.globalUiOverlay != null)
         {
-            transform.SetParent(_rootCanvas.transform, true);
+            _godLayer = GameManager.instance.globalUiOverlay;
+        }
+        else
+        {
+            GameObject found = GameObject.Find("GlobalUIOverlay");
+            if (found == null)
+            {
+                found = new GameObject("GlobalUIOverlay");
+                Canvas c = found.AddComponent<Canvas>();
+                c.renderMode = RenderMode.ScreenSpaceOverlay;
+                c.sortingOrder = 30002;
+                found.AddComponent<GraphicRaycaster>();
+                DontDestroyOnLoad(found);
+            }
+            _godLayer = found.transform;
         }
 
-        // 2. [THE FIX] Force "God Layer" Sorting
-        // We add a temporary Canvas to this object so it draws above EVERYTHING (including Tooltips)
-        _dragCanvas = GetComponent<Canvas>();
-        if (_dragCanvas == null) _dragCanvas = gameObject.AddComponent<Canvas>();
+        _godLayerRect = _godLayer.GetComponent<RectTransform>();
 
-        _dragCanvas.overrideSorting = true;
-        _dragCanvas.sortingOrder = 30002; // Higher than Tooltip (30000)
-
-        // 3. Make transparent to clicks
-        if (_canvasGroup != null)
+        // 2. Move to God Layer
+        if (_godLayer != null)
         {
-            _canvasGroup.blocksRaycasts = false;
+            // 'false' is critical to allow us to reset coordinates manually below
+            transform.SetParent(_godLayer, false);
         }
 
-        if (TooltipManager.instance != null) TooltipManager.instance.HideTooltip();
-
-        // 4. Snap Position
-        if (eventData != null && _rectTransform != null) _rectTransform.position = eventData.position;
-        else if (_rectTransform != null) _rectTransform.position = Input.mousePosition;
-    }
-
-    public void OnDrag(PointerEventData eventData)
-    {
+        // 3. Reset Transform & Snap Immediately
         if (_rectTransform != null)
         {
-            // Use eventData if available, otherwise fallback to Input (for manual calls)
-            if (eventData != null) _rectTransform.position = eventData.position;
-            else _rectTransform.position = Input.mousePosition;
+            _rectTransform.anchorMin = new Vector2(0.5f, 0.5f);
+            _rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
+            _rectTransform.pivot = new Vector2(0.5f, 0.5f);
+            _rectTransform.localScale = Vector3.one;
+
+            // Initial snap using the same logic as LateUpdate
+            if (_godLayerRect != null)
+            {
+                Vector2 localPoint;
+                if (RectTransformUtility.ScreenPointToLocalPointInRectangle(_godLayerRect, Input.mousePosition, null, out localPoint))
+                {
+                    _rectTransform.anchoredPosition = localPoint;
+                }
+            }
         }
+
+        // 4. Visual Settings
+        transform.SetAsLastSibling();
+        if (_canvasGroup != null) _canvasGroup.blocksRaycasts = false;
+        if (TooltipManager.instance != null) TooltipManager.instance.HideTooltip();
     }
+
+    public void OnDrag(PointerEventData eventData) { }
 
     public void OnEndDrag(PointerEventData eventData)
     {
-        // 1. Clean up the temporary Canvas (Critical!)
-        // We must remove it so the icon renders normally inside the slot later
-        if (_dragCanvas != null)
-        {
-            Destroy(_dragCanvas);
-        }
+        _isDragging = false;
 
-        // 2. Handle Drop Failure
+        // 1. Handle Drop Failure
         if (!_dropSuccessful)
         {
-            if (transform.parent == _rootCanvas.transform)
+            if (transform.parent == _godLayer || transform.parent == null)
             {
                 ReturnToOriginalSlot();
             }
         }
 
-        // 3. Restore Input
+        // 2. Cleanup
         if (_canvasGroup != null)
         {
             _canvasGroup.blocksRaycasts = true;
             _canvasGroup.alpha = 1.0f;
         }
+
+        if (itemIcon != null) itemIcon.gameObject.SetActive(false);
 
         currentSource = null;
     }
@@ -144,6 +170,7 @@ public class UIDragDropController : MonoBehaviour, IBeginDragHandler, IDragHandl
             if (_rectTransform != null)
             {
                 _rectTransform.anchoredPosition = Vector2.zero;
+                _rectTransform.localScale = Vector3.one;
             }
         }
     }

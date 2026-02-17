@@ -33,25 +33,36 @@ public class AbilitySlot : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
 
     public void OnDropSuccess(IDropTarget target)
     {
-        // Dragging from the ability book is a "copy", so we do nothing here.
+        // Dragging from the ability book is a "copy" operation, so we do nothing to the source.
     }
+
+    // --- DRAG IMPLEMENTATION ---
 
     public void OnBeginDrag(PointerEventData eventData)
     {
         if (assignedAbility != null)
         {
-            canvasGroup.blocksRaycasts = false;
-            dragDropController.OnBeginDrag(this, assignedAbility.icon);
+            if (canvasGroup != null) canvasGroup.blocksRaycasts = false;
+
+            // Start the drag
+            if (dragDropController != null)
+                dragDropController.OnBeginDrag(this, assignedAbility.icon);
         }
     }
 
-    public void OnDrag(PointerEventData eventData) { }
+    public void OnDrag(PointerEventData eventData)
+    {
+        // INTENTIONALLY EMPTY
+        // Movement is handled by UIDragDropController.LateUpdate
+    }
 
     public void OnEndDrag(PointerEventData eventData)
     {
-        canvasGroup.blocksRaycasts = true;
-        dragDropController.OnEndDrag();
+        if (canvasGroup != null) canvasGroup.blocksRaycasts = true;
+        if (dragDropController != null) dragDropController.OnEndDrag();
     }
+
+    // ---------------------------
 
     public void OnPointerEnter(PointerEventData eventData)
     {
