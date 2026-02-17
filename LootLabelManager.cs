@@ -21,6 +21,10 @@ public class LootLabelManager : MonoBehaviour
     [Tooltip("Distance from camera at which labels vanish.")]
     public float maxViewDistance = 500f;
 
+    [Header("UI Sorting")]
+    [Tooltip("The Sorting Order for the Loot Canvas. Lower this (e.g. 5) to make it draw BEHIND windows like Inventory (usually 10+).")]
+    public int canvasSortOrder = 5; // [ADDED] Automatic Fix
+
     [Header("Rarity Colors (Base LDR)")]
     public Color commonColor = Color.white;
     public Color uncommonColor = Color.green;
@@ -30,7 +34,7 @@ public class LootLabelManager : MonoBehaviour
 
     [Header("HDR Settings")]
     [Tooltip("Multiplier applied to the Rarity Color to create an HDR effect (Glow).")]
-    public float hdrIntensity = 5.0f; // [ADDED] Set to 5 as requested
+    public float hdrIntensity = 5.0f;
 
     // Internal Lists
     private List<WorldItem> activeItems = new List<WorldItem>();
@@ -50,6 +54,33 @@ public class LootLabelManager : MonoBehaviour
     void Start()
     {
         mainCam = Camera.main;
+
+        // --- AUTOMATIC SORT ORDER FIX ---
+        // Try to find the canvas on the assigned parent, or this object
+        Canvas targetCanvas = null;
+
+        if (labelCanvasParent != null)
+        {
+            targetCanvas = labelCanvasParent.GetComponent<Canvas>();
+            // If parent is just a panel, look up for the root canvas
+            if (targetCanvas == null) targetCanvas = labelCanvasParent.GetComponentInParent<Canvas>();
+        }
+        else
+        {
+            targetCanvas = GetComponent<Canvas>();
+        }
+
+        if (targetCanvas != null)
+        {
+            targetCanvas.overrideSorting = true;
+            targetCanvas.sortingOrder = canvasSortOrder;
+            Debug.Log($"[LootLabelManager] Auto-set Canvas Sorting Order to {canvasSortOrder}");
+        }
+        else
+        {
+            Debug.LogWarning("[LootLabelManager] Could not find a Canvas to apply Sorting Order! Labels might draw on top of UI.");
+        }
+        // --------------------------------
     }
 
     public void RegisterOrUpdateItem(WorldItem item)
@@ -106,7 +137,6 @@ public class LootLabelManager : MonoBehaviour
         }
     }
 
-    // [UPDATED] Now applies the HDR Intensity Boost of 5
     public Color GetRarityColor(ItemData data)
     {
         Color baseColor = commonColor;
@@ -123,7 +153,7 @@ public class LootLabelManager : MonoBehaviour
             }
         }
 
-        // Apply HDR Boost (Multiply RGB only, preserve Alpha)
+        // Apply HDR Boost
         return new Color(baseColor.r * hdrIntensity, baseColor.g * hdrIntensity, baseColor.b * hdrIntensity, baseColor.a);
     }
 

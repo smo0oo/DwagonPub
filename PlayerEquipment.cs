@@ -11,23 +11,32 @@ public class DefaultLoadoutItem
     public int quantity = 1;
 }
 
+// 1. NEW: A structure to define your "Naked" parts
+[System.Serializable]
+public class BodyPartDefault
+{
+    public EquipmentType slot;
+    public GameObject prefab; // Drag your "Naked Hands", "Naked Feet" here
+}
+
 public class PlayerEquipment : MonoBehaviour
 {
     public event Action<EquipmentType> OnEquipmentChanged;
     public Dictionary<EquipmentType, ItemStack> equippedItems = new Dictionary<EquipmentType, ItemStack>();
 
     [Header("Target Skeleton")]
-    [Tooltip("A reference renderer that contains the correct bone structure (usually the Head or an invisible master mesh).")]
     public SkinnedMeshRenderer targetMesh;
 
-    [Header("Attachment Points (Weapons)")]
+    [Header("Attachment Points")]
     public Transform rightHandAttachPoint;
     public Transform leftHandAttachPoint;
 
     [Header("Defaults")]
-    [Tooltip("Define items and exactly which slot they go into (e.g., Sword -> RightHand).")]
-    // RENAMED to force Unity to reset the serialization data for this field
     public List<DefaultLoadoutItem> startingLoadout;
+
+    [Header("Naked Body Parts")]
+    [Tooltip("If a slot is empty, these prefabs will be shown (Purely visual, no stats).")]
+    public List<BodyPartDefault> defaultBodyParts; // <--- 2. NEW FIELD
 
     private Dictionary<EquipmentType, GameObject> equippedVisuals = new Dictionary<EquipmentType, GameObject>();
     private Inventory playerInventory;
@@ -42,7 +51,6 @@ public class PlayerEquipment : MonoBehaviour
             playerStats = root.PlayerStats;
         }
 
-        // Initialize dictionary
         foreach (EquipmentType slot in Enum.GetValues(typeof(EquipmentType)))
         {
             equippedItems[slot] = null;
@@ -52,7 +60,23 @@ public class PlayerEquipment : MonoBehaviour
 
     void Start()
     {
+        // 3. First, ensure the body is fully "Naked"
+        InitializeNakedBody();
+
+        // Then equip any starting gear on top
         EquipDefaults();
+    }
+
+    private void InitializeNakedBody()
+    {
+        foreach (EquipmentType slot in Enum.GetValues(typeof(EquipmentType)))
+        {
+            // If the slot is empty, show the naked part
+            if (!equippedItems.ContainsKey(slot) || equippedItems[slot] == null)
+            {
+                RestoreNakedPart(slot);
+            }
+        }
     }
 
     private void EquipDefaults()
@@ -62,17 +86,10 @@ public class PlayerEquipment : MonoBehaviour
         foreach (var entry in startingLoadout)
         {
             if (entry.item == null) continue;
-
-            // Create and Equip
             ItemStack newItem = new ItemStack(entry.item, entry.quantity);
-
-            // 1. Update Data
             equippedItems[entry.targetSlot] = newItem;
-
-            // 2. Create Visual
             EquipVisual(entry.targetSlot, entry.item);
         }
-
         playerStats?.CalculateFinalStats();
     }
 
@@ -82,28 +99,51 @@ public class PlayerEquipment : MonoBehaviour
     {
         if (itemData == null || itemData.equippedPrefab == null) return;
 
+        // Delegate to the shared internal method
+        CreateAndBindVisual(slot, itemData.equippedPrefab, itemData.itemType == ItemType.Weapon);
+    }
+
+    // 4. NEW: Logic to restore the default part
+    private void RestoreNakedPart(EquipmentType slot)
+    {
+        // Find the matching default prefab
+        var defaultPart = defaultBodyParts.Find(x => x.slot == slot);
+
+        if (defaultPart != null && defaultPart.prefab != null)
+        {
+            // Treat it like Armour (Skinned Mesh)
+            CreateAndBindVisual(slot, defaultPart.prefab, false);
+        }
+    }
+
+    // 5. REFACTORED: Shared logic for Items AND Naked parts
+    private void CreateAndBindVisual(EquipmentType slot, GameObject prefab, bool isWeapon)
+    {
+        // Always clean up the old visual first (whether it was armor or a naked arm)
         DestroyVisual(slot);
 
-        if (itemData.itemType == ItemType.Weapon)
+        if (isWeapon)
         {
             Transform attachPoint = GetAttachPoint(slot);
             if (attachPoint == null) return;
-            GameObject visual = Instantiate(itemData.equippedPrefab, attachPoint);
+            GameObject visual = Instantiate(prefab, attachPoint);
             visual.transform.localPosition = Vector3.zero;
             visual.transform.localRotation = Quaternion.identity;
             equippedVisuals[slot] = visual;
         }
-        else if (itemData.itemType == ItemType.Armour)
+        else
         {
+            // ARMOUR / BODY PART LOGIC
             if (targetMesh == null) return;
 
-            GameObject visual = Instantiate(itemData.equippedPrefab, targetMesh.transform.parent);
-            SkinnedMeshRenderer armorRenderer = visual.GetComponentInChildren<SkinnedMeshRenderer>();
+            GameObject visual = Instantiate(prefab, targetMesh.transform.parent);
+            SkinnedMeshRenderer[] renderers = visual.GetComponentsInChildren<SkinnedMeshRenderer>();
 
-            if (armorRenderer != null)
+            // Support multiple meshes (e.g., Left Boot + Right Boot in one prefab)
+            foreach (var renderer in renderers)
             {
-                armorRenderer.bones = targetMesh.bones;
-                armorRenderer.rootBone = targetMesh.rootBone;
+                renderer.bones = targetMesh.bones;
+                renderer.rootBone = targetMesh.rootBone;
             }
             equippedVisuals[slot] = visual;
         }
@@ -135,18 +175,20 @@ public class PlayerEquipment : MonoBehaviour
         ItemStack previouslyEquippedItem = equippedItems[slot];
 
         // 1. Remove old visual
-        if (previouslyEquippedItem != null)
-        {
-            DestroyVisual(slot);
-        }
+        DestroyVisual(slot);
 
         // 2. Set Data
         equippedItems[slot] = itemToEquip;
 
-        // 3. Create new visual
+        // 3. Create new visual OR Restore Default
         if (itemToEquip != null)
         {
             EquipVisual(slot, itemToEquip.itemData);
+        }
+        else
+        {
+            // 6. CRITICAL FIX: If we equipped "Nothing", show Naked Part
+            RestoreNakedPart(slot);
         }
 
         playerStats?.CalculateFinalStats();
@@ -154,6 +196,25 @@ public class PlayerEquipment : MonoBehaviour
 
         return previouslyEquippedItem;
     }
+
+    public ItemStack RemoveItemFromSlot(EquipmentType slot)
+    {
+        ItemStack removedItem = equippedItems[slot];
+        if (removedItem != null)
+        {
+            equippedItems[slot] = null;
+
+            // 7. CRITICAL FIX: Destroy armor -> Restore Naked Part immediately
+            DestroyVisual(slot);
+            RestoreNakedPart(slot);
+
+            playerStats?.CalculateFinalStats();
+            OnEquipmentChanged?.Invoke(slot);
+        }
+        return removedItem;
+    }
+
+    // ... (Rest of the class methods like UnequipItem, RestoreEquipment remain the same) ...
 
     public void EquipItem(ItemData item, int quantity = 1)
     {
@@ -173,19 +234,6 @@ public class PlayerEquipment : MonoBehaviour
             return true;
         }
         return false;
-    }
-
-    public ItemStack RemoveItemFromSlot(EquipmentType slot)
-    {
-        ItemStack removedItem = equippedItems[slot];
-        if (removedItem != null)
-        {
-            equippedItems[slot] = null;
-            DestroyVisual(slot);
-            playerStats?.CalculateFinalStats();
-            OnEquipmentChanged?.Invoke(slot);
-        }
-        return removedItem;
     }
 
     private EquipmentType GetEquipmentSlot(ItemData item)
@@ -208,19 +256,15 @@ public class PlayerEquipment : MonoBehaviour
         return EquipmentType.RightHand;
     }
 
-    // Support for Load Game
     public void RestoreEquipment(Dictionary<EquipmentType, ItemStack> savedEquipment)
     {
-        foreach (EquipmentType slot in Enum.GetValues(typeof(EquipmentType)))
-        {
-            equippedItems[slot] = null;
-        }
+        // Clear everything first (sets to naked)
+        InitializeNakedBody();
 
         foreach (var kvp in savedEquipment)
         {
             if (kvp.Value != null && kvp.Value.itemData != null)
             {
-                // Re-create the visual and data
                 EquipItem(kvp.Key, kvp.Value);
             }
         }

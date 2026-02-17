@@ -52,7 +52,25 @@ public class TooltipManager : MonoBehaviour
         else instance = this;
 
         if (tooltipPanel != null)
+        {
             tooltipRect = tooltipPanel.GetComponent<RectTransform>();
+
+            // --- THE FIX: Force Tooltip to "God Layer" (30,000) ---
+            // We add a Canvas directly to the visual panel so it breaks out of any parent masks.
+            Canvas panelCanvas = tooltipPanel.GetComponent<Canvas>();
+            if (panelCanvas == null) panelCanvas = tooltipPanel.AddComponent<Canvas>();
+
+            panelCanvas.overrideSorting = true;
+            panelCanvas.sortingOrder = 30000; // Highest priority
+            panelCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+
+            // Ensure Raycaster exists so it doesn't block mouse clicks weirdly
+            if (tooltipPanel.GetComponent<GraphicRaycaster>() == null)
+            {
+                tooltipPanel.AddComponent<GraphicRaycaster>();
+            }
+            // -------------------------------------------------------
+        }
     }
 
     void Start()
@@ -255,7 +273,6 @@ public class TooltipManager : MonoBehaviour
         AnimateTooltip(true);
     }
 
-    // --- REFACTORED: Simple Tooltip with AAA Spacing ---
     public void ShowSimpleTooltip(string title, string description)
     {
         ClearTooltipUI();
@@ -269,8 +286,7 @@ public class TooltipManager : MonoBehaviour
         tooltipDescriptionText.text = description;
         tooltipDescriptionText.gameObject.SetActive(true);
 
-        // Spacer Logic: If we have a title, use spacer1 to separate it from description
-        // (Since Stats Text is empty/inactive, spacer1 acts as the divider between Header and Description)
+        // Spacer Logic
         if (!string.IsNullOrEmpty(title) && spacer1)
         {
             spacer1.SetActive(true);

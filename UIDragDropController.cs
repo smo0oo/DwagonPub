@@ -1,88 +1,150 @@
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
-using Unity.VisualScripting;
 
-public class UIDragDropController : MonoBehaviour
+[RequireComponent(typeof(CanvasGroup))]
+[RequireComponent(typeof(RectTransform))]
+public class UIDragDropController : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler
 {
-    [Header("UI References")]
-    public Image draggedItemIcon;
+    [Header("References")]
+    public Image itemIcon;
 
-    // --- NEW: Added a field to control the drag icon's size ---
-    [Header("Drag Visuals")]
-    [Tooltip("The scale of the icon that follows the cursor during a drag operation.")]
-    [Range(0.1f, 1f)]
-    public float dragIconScale = 0.25f;
+    [HideInInspector] public IDragSource currentSource; // Stores who started the drag
+    private bool _dropSuccessful = false;
 
-    [Header("Visual Scripting Hooks")]
-    public GameObject uiManagerObject;
-    public string dragInProgressVariableName = "UIDragInProgress";
+    // --- STATE VARIABLES ---
+    private Transform _originalParent;
+    private int _originalSiblingIndex;
+    private RectTransform _rectTransform;
+    private CanvasGroup _canvasGroup;
+    private Canvas _rootCanvas;
+    private Canvas _dragCanvas; // [NEW] The temporary canvas for sorting
 
-    public IDragSource currentSource { get; private set; }
-    private bool dropWasSuccessful;
-
-    void Start()
+    void Awake()
     {
-        if (draggedItemIcon != null)
+        _rectTransform = GetComponent<RectTransform>();
+        _canvasGroup = GetComponent<CanvasGroup>();
+
+        // Find the absolute root canvas
+        Canvas[] parentCanvases = GetComponentsInParent<Canvas>();
+        if (parentCanvases.Length > 0)
         {
-            draggedItemIcon.raycastTarget = false;
-            draggedItemIcon.gameObject.SetActive(false);
+            _rootCanvas = parentCanvases[parentCanvases.Length - 1];
         }
     }
 
-    void Update()
-    {
-        if (draggedItemIcon != null && draggedItemIcon.gameObject.activeSelf)
-        {
-            draggedItemIcon.transform.position = Input.mousePosition;
-        }
-    }
+    // ---------------------------------------------------------
+    // API: The Custom Overloads Your Code Calls
+    // ---------------------------------------------------------
 
     public void OnBeginDrag(IDragSource source, Sprite icon)
     {
         currentSource = source;
-        dropWasSuccessful = false;
-        SetDragInProgressFlag(true);
-
-        if (draggedItemIcon != null && icon != null)
-        {
-            draggedItemIcon.sprite = icon;
-            draggedItemIcon.gameObject.SetActive(true);
-            // --- NEW: Apply the custom scale to the drag icon ---
-            draggedItemIcon.transform.localScale = new Vector3(dragIconScale, dragIconScale, 1f);
-        }
+        if (icon != null && itemIcon != null) itemIcon.sprite = icon;
+        StartDragLogic(null);
     }
 
     public void OnEndDrag()
     {
-        if (currentSource != null && dropWasSuccessful)
+        OnEndDrag(null);
+    }
+
+    public void NotifyDropSuccessful(bool success)
+    {
+        _dropSuccessful = success;
+    }
+
+    // ---------------------------------------------------------
+    // DRAG LOGIC
+    // ---------------------------------------------------------
+
+    public void OnBeginDrag(PointerEventData eventData)
+    {
+        StartDragLogic(eventData);
+    }
+
+    private void StartDragLogic(PointerEventData eventData)
+    {
+        _dropSuccessful = false;
+        _originalParent = transform.parent;
+        _originalSiblingIndex = transform.GetSiblingIndex();
+
+        // 1. Move to Root Canvas (Escape Masks)
+        if (_rootCanvas != null)
         {
-            // The target now tells the source if the drop was successful.
+            transform.SetParent(_rootCanvas.transform, true);
+        }
+
+        // 2. [THE FIX] Force "God Layer" Sorting
+        // We add a temporary Canvas to this object so it draws above EVERYTHING (including Tooltips)
+        _dragCanvas = GetComponent<Canvas>();
+        if (_dragCanvas == null) _dragCanvas = gameObject.AddComponent<Canvas>();
+
+        _dragCanvas.overrideSorting = true;
+        _dragCanvas.sortingOrder = 30002; // Higher than Tooltip (30000)
+
+        // 3. Make transparent to clicks
+        if (_canvasGroup != null)
+        {
+            _canvasGroup.blocksRaycasts = false;
+        }
+
+        if (TooltipManager.instance != null) TooltipManager.instance.HideTooltip();
+
+        // 4. Snap Position
+        if (eventData != null && _rectTransform != null) _rectTransform.position = eventData.position;
+        else if (_rectTransform != null) _rectTransform.position = Input.mousePosition;
+    }
+
+    public void OnDrag(PointerEventData eventData)
+    {
+        if (_rectTransform != null)
+        {
+            // Use eventData if available, otherwise fallback to Input (for manual calls)
+            if (eventData != null) _rectTransform.position = eventData.position;
+            else _rectTransform.position = Input.mousePosition;
+        }
+    }
+
+    public void OnEndDrag(PointerEventData eventData)
+    {
+        // 1. Clean up the temporary Canvas (Critical!)
+        // We must remove it so the icon renders normally inside the slot later
+        if (_dragCanvas != null)
+        {
+            Destroy(_dragCanvas);
+        }
+
+        // 2. Handle Drop Failure
+        if (!_dropSuccessful)
+        {
+            if (transform.parent == _rootCanvas.transform)
+            {
+                ReturnToOriginalSlot();
+            }
+        }
+
+        // 3. Restore Input
+        if (_canvasGroup != null)
+        {
+            _canvasGroup.blocksRaycasts = true;
+            _canvasGroup.alpha = 1.0f;
         }
 
         currentSource = null;
-        if (draggedItemIcon != null)
-        {
-            draggedItemIcon.gameObject.SetActive(false);
-            // --- NEW: Reset the scale for the next drag operation ---
-            draggedItemIcon.transform.localScale = Vector3.one;
-        }
-        SetDragInProgressFlag(false);
     }
 
-    public void NotifyDropSuccessful(IDropTarget target)
+    private void ReturnToOriginalSlot()
     {
-        if (currentSource != null)
+        if (_originalParent != null)
         {
-            currentSource.OnDropSuccess(target);
-            dropWasSuccessful = true;
-        }
-    }
+            transform.SetParent(_originalParent, true);
+            transform.SetSiblingIndex(_originalSiblingIndex);
 
-    private void SetDragInProgressFlag(bool value)
-    {
-        if (uiManagerObject != null)
-        {
-            Variables.Object(uiManagerObject).Set(dragInProgressVariableName, value);
+            if (_rectTransform != null)
+            {
+                _rectTransform.anchoredPosition = Vector2.zero;
+            }
         }
     }
 }

@@ -1,15 +1,31 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-[CreateAssetMenu(fileName = "LoadingScreenData", menuName = "Scene Management/Loading Screen Data")]
+[System.Serializable]
+public class LoreScreenEntry
+{
+    [Header("Content")]
+    public string title;
+    [TextArea(3, 10)] public string description;
+    public Sprite backgroundImage;
+
+    [Header("Requirements")]
+    [Tooltip("If checked, this screen only appears if the player is visiting a specific Scene Type (e.g. Dungeons).")]
+    public bool requireSceneType = false;
+    public SceneType requiredSceneType;
+
+    [Tooltip("Minimum party level required to see this hint (good for avoiding spoilers).")]
+    public int minLevel = 1;
+
+    [Tooltip("Maximum party level (good for hiding 'Tutorial' tips later on).")]
+    public int maxLevel = 999;
+}
+
+[CreateAssetMenu(fileName = "LoadingScreenDatabase", menuName = "UI/Loading Screen Database")]
 public class LoadingScreenData : ScriptableObject
 {
-    [Header("Backgrounds")]
-    [Tooltip("The names of the sprite files inside a 'Resources/LoadingScreens' folder.")]
-    public List<string> backgroundResourcesPaths;
+    public List<LoreScreenEntry> entries = new List<LoreScreenEntry>();
 
-    [Header("Tips & Lore")]
-    [Tooltip("A list of all possible text snippets (tips, lore, etc.) to display.")]
-    [TextArea(3, 5)]
-    public List<string> loadingTips;
+    // Fallback for when no specific lore matches
+    public Sprite defaultFallbackImage;
 }

@@ -403,6 +403,19 @@ public class GameManager : MonoBehaviour
         }
 
         float startTime = Time.realtimeSinceStartup;
+
+        // --- CONTEXT-AWARE LOADING SCREEN LOGIC ---
+        // Guess the SceneType based on name (allows showing specific lore cards)
+        SceneType guessedType = SceneType.Dungeon;
+        if (sceneName.Contains("WorldMap")) guessedType = SceneType.WorldMap;
+        else if (sceneName.Contains("Town")) guessedType = SceneType.Town;
+
+        if (LoadingScreenManager.instance != null)
+        {
+            LoadingScreenManager.instance.SetLoadContext(sceneName, guessedType);
+        }
+        // ------------------------------------------
+
         yield return LoadingScreenManager.instance.ShowLoadingScreen(fadeDuration);
 
         if (SceneStateManager.instance != null && FindAnyObjectByType<InventoryManager>() != null)
@@ -576,6 +589,13 @@ public class GameManager : MonoBehaviour
         string sceneBeforeExit = currentLevelScene;
         lastLocationType = NodeType.Scene;
         float startTime = Time.realtimeSinceStartup;
+
+        // Pass World Map context
+        if (LoadingScreenManager.instance != null)
+        {
+            LoadingScreenManager.instance.SetLoadContext(worldMapSceneName, SceneType.WorldMap);
+        }
+
         yield return LoadingScreenManager.instance.ShowLoadingScreen(fadeDuration);
 
         if (SceneStateManager.instance != null && FindAnyObjectByType<InventoryManager>() != null)
@@ -656,6 +676,12 @@ public class GameManager : MonoBehaviour
 
         // Disable controls immediately for load too
         SetPlayerMovementComponentsActive(false);
+
+        // Pass generic load context
+        if (LoadingScreenManager.instance != null)
+        {
+            LoadingScreenManager.instance.SetLoadContext(startingSceneName, SceneType.MainMenu);
+        }
 
         yield return LoadingScreenManager.instance.ShowLoadingScreen(fadeDuration);
         string path = Path.Combine(Application.persistentDataPath, "savegame.json");
