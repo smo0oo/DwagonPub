@@ -144,6 +144,9 @@ public class Ability : ScriptableObject
     [Header("Enemy AI Settings")]
     [Tooltip("The specific warning decal to spawn for this ability (e.g. Green Splat for Poison). If null, uses the default Red Circle.")]
     public GameObject enemyTelegraphPrefab;
+
+    [Tooltip("If TRUE, this ability is treated as a Raid-Wipe/Major mechanic. Party AI will attempt to find a Tactical Node (Safe Spot) when this cast begins.")]
+    public bool isMajorTacticalThreat = false;
     // ----------------------------------
 
     [Header("Legacy / Simple Effects")]

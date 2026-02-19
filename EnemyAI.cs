@@ -4,7 +4,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System;
-using System.Diagnostics; // Required for Stopwatch
+using System.Diagnostics;
 
 [RequireComponent(typeof(NavMeshAgent), typeof(Health), typeof(EnemyAbilityHolder))]
 [RequireComponent(typeof(AITargeting), typeof(AIAbilitySelector))]
@@ -45,6 +45,10 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     [Header("Enemy Stats & Behavior")]
     public EnemyClass enemyClass;
     public AIBehaviorProfile behaviorProfile;
+
+    [Header("Boss / Giant Settings")]
+    [Tooltip("If true, this enemy will NEVER move, retreat, leap, or be pushed. Vision is calculated from its Center/Head anchor instead of the floor.")]
+    public bool isStationary = false;
 
     [Header("Leashing & State")]
     public float chaseLeashRadius = 30f;
@@ -92,6 +96,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private int attackIndexHash;
     private int idleIndexHash;
     private int walkIndexHash;
+    private int rollDodgeHash;
     private bool wasMoving = false;
 
     // --- Caching ---
@@ -114,6 +119,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         attackIndexHash = Animator.StringToHash("AttackIndex");
         idleIndexHash = Animator.StringToHash("IdleIndex");
         walkIndexHash = Animator.StringToHash("WalkIndex");
+        rollDodgeHash = Animator.StringToHash("RollDodge");
     }
 
     void Start()
@@ -128,7 +134,18 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         StartPosition = transform.position;
         OriginalSpeed = NavAgent.speed;
 
-        if (NavAgent != null) NavAgent.updateRotation = false;
+        if (NavAgent != null)
+        {
+            NavAgent.updateRotation = false;
+
+            if (isStationary)
+            {
+                NavAgent.speed = 0f;
+                NavAgent.angularSpeed = 0f;
+                NavAgent.stoppingDistance = 0f;
+                NavAgent.avoidancePriority = 0;
+            }
+        }
 
         CollectPatrolPoints();
         SwitchState(new IdleState());
@@ -184,10 +201,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
-    // --- UPDATED: Performance Tracking Loop ---
     void Update()
     {
-        // Start Stopwatch
         _perfWatch.Restart();
 
         if (isDead)
@@ -199,7 +214,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
         HandleRotation();
 
-        // 1. Animation Lock Check
         bool isAnimationLocked = false;
         if (Animator != null)
         {
@@ -213,13 +227,12 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         if (isAnimationLocked || Time.time < recoveryTimer)
         {
             StopMovement();
-            if (Animator != null)
+            if (Animator != null && !IsInActionSequence)
             {
                 Animator.SetFloat(velocityXHash, 0f);
                 Animator.SetFloat(velocityZHash, 0f);
             }
 
-            // Stop Stopwatch & Record
             _perfWatch.Stop();
             LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
             return;
@@ -237,22 +250,24 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
                 if (lookDir != Vector3.zero) transform.rotation = Quaternion.LookRotation(lookDir);
             }
 
-            // Stop Stopwatch & Record
             _perfWatch.Stop();
             LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
             return;
         }
 
-        // Stop Stopwatch & Record
         _perfWatch.Stop();
         LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
     }
-    // ------------------------------------------
 
     private void UpdateAnimator()
     {
         if (Animator == null) return;
-        if (NavAgent == null || !NavAgent.isActiveAndEnabled || !NavAgent.isOnNavMesh)
+
+        // --- AAA FIX: Do not update velocity or trigger idles while rolling ---
+        if (IsInActionSequence) return;
+        // ----------------------------------------------------------------------
+
+        if (NavAgent == null || !NavAgent.isActiveAndEnabled || !NavAgent.isOnNavMesh || isStationary)
         {
             Animator.SetFloat(velocityXHash, 0f);
             Animator.SetFloat(velocityZHash, 0f);
@@ -299,6 +314,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     public void StopMovement()
     {
+        if (isStationary) return;
+
         if (NavAgent != null && NavAgent.isActiveAndEnabled && NavAgent.isOnNavMesh)
         {
             NavAgent.ResetPath();
@@ -308,6 +325,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     public void RetreatFromTarget()
     {
+        if (isStationary) return;
+
         if (NavAgent == null || !NavAgent.isActiveAndEnabled || !NavAgent.isOnNavMesh || currentTarget == null) return;
 
         Vector3 directionAway = (transform.position - currentTarget.position).normalized;
@@ -345,8 +364,17 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     {
         if (Targeting != null && !Targeting.checkLineOfSight) return true;
         if (target == null) return false;
+
         Vector3 origin = transform.position + Vector3.up;
+        if (isStationary && AbilityHolder != null)
+        {
+            if (AbilityHolder.centerAnchor != null) origin = AbilityHolder.centerAnchor.position;
+            else if (AbilityHolder.headAnchor != null) origin = AbilityHolder.headAnchor.position;
+            else origin = transform.position + (Vector3.up * 5f);
+        }
+
         Vector3 dest = target.position + Vector3.up;
+
         if (Physics.Raycast(origin, (dest - origin).normalized, out RaycastHit hit, Vector3.Distance(origin, dest), Targeting.obstacleLayers))
         {
             return hit.transform == target || hit.transform.IsChildOf(target);
@@ -409,7 +437,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             targetLookPos = currentTarget.position;
             shouldRotate = true;
         }
-        else if (NavAgent.velocity.sqrMagnitude > 0.1f)
+        else if (NavAgent.velocity.sqrMagnitude > 0.1f && !isStationary)
         {
             targetLookPos = transform.position + NavAgent.velocity;
             shouldRotate = true;
@@ -455,7 +483,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     }
 
     private IEnumerator HandleCorpseCleanup() { yield return new WaitForSeconds(corpseDuration); Destroy(gameObject); }
-    public void ActivateAI() { hasBeenActivated = true; this.enabled = true; if (NavAgent != null) NavAgent.enabled = true; if (Animator != null) Animator.enabled = true; }
+    public void ActivateAI() { hasBeenActivated = true; this.enabled = true; if (NavAgent != null && !isStationary) NavAgent.enabled = true; if (Animator != null) Animator.enabled = true; }
     public void DeactivateAI() { if (currentTarget != null) return; this.enabled = false; if (NavAgent != null) NavAgent.enabled = false; if (Animator != null) Animator.enabled = false; }
 
     private void CollectPatrolPoints()
@@ -492,30 +520,192 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
-    private void HandlePlayerAbilityUsed(PlayerAbilityHolder player, Ability usedAbility)
+    private void HandlePlayerAbilityUsed(PlayerAbilityHolder player, Ability usedAbility, GameObject target, Vector3 targetPosition)
     {
         if (isDead || AbilityHolder.IsCasting) return;
-        var pMove = player.GetComponentInParent<PlayerMovement>();
-        if (pMove == null || pMove.TargetObject != gameObject) return;
 
-        if (behaviorProfile != null)
+        bool isThreatToMe = false;
+
+        if (target != null && (target == gameObject || target.transform.IsChildOf(this.transform)))
         {
-            foreach (var trigger in behaviorProfile.reactiveTriggers)
+            isThreatToMe = true;
+        }
+        else if (target == null)
+        {
+            float threatRadius = usedAbility.aoeRadius > 0 ? usedAbility.aoeRadius : 3f;
+            if (Vector3.Distance(transform.position, targetPosition) <= threatRadius + 2f)
             {
-                if (trigger.triggerType == usedAbility.abilityType && UnityEngine.Random.value <= trigger.chanceToReact)
-                {
-                    AbilityHolder.UseAbility(trigger.reactionAbility, player.gameObject);
-                    break;
-                }
+                isThreatToMe = true;
+            }
+        }
+
+        if (!isThreatToMe) return;
+
+        if (behaviorProfile == null || behaviorProfile.reactiveTriggers == null || behaviorProfile.reactiveTriggers.Count == 0) return;
+
+        foreach (var trigger in behaviorProfile.reactiveTriggers)
+        {
+            bool isMatch = false;
+
+            if (trigger.specificAbilityTrigger != null) isMatch = (trigger.specificAbilityTrigger == usedAbility);
+            else isMatch = (trigger.triggerType == usedAbility.abilityType);
+
+            if (isMatch && UnityEngine.Random.value <= trigger.chanceToReact)
+            {
+                ExecuteReaction(trigger, player.transform);
+                break;
             }
         }
     }
 
-    private void HandleCastStarted(string n, float d) { enemyHealthUI?.StartCast(n, d); SetAIStatus("Combat", "Casting"); if (NavAgent.isOnNavMesh) NavAgent.ResetPath(); }
+    private bool TryFindEvasionPoint(Vector3 threatPosition, float desiredDistance, out Vector3 safePosition)
+    {
+        safePosition = transform.position;
+        Vector3 baseDirAway = (transform.position - threatPosition).normalized;
+        baseDirAway.y = 0;
+
+        float[] checkAngles = { 0f, 30f, -30f, 60f, -60f, 90f, -90f, 120f, -120f };
+
+        foreach (float angle in checkAngles)
+        {
+            Vector3 rotatedDir = Quaternion.Euler(0, angle, 0) * baseDirAway;
+            Vector3 testDestination = transform.position + (rotatedDir * desiredDistance);
+
+            if (!UnityEngine.AI.NavMesh.Raycast(transform.position, testDestination, out UnityEngine.AI.NavMeshHit hit, UnityEngine.AI.NavMesh.AllAreas))
+            {
+                if (UnityEngine.AI.NavMesh.SamplePosition(testDestination, out UnityEngine.AI.NavMeshHit finalHit, 2f, UnityEngine.AI.NavMesh.AllAreas))
+                {
+                    safePosition = finalHit.position;
+                    return true;
+                }
+            }
+            else
+            {
+                if (hit.distance > (desiredDistance * 0.4f))
+                {
+                    Vector3 safeWallPos = hit.position - (rotatedDir * 0.5f);
+                    if (UnityEngine.AI.NavMesh.SamplePosition(safeWallPos, out UnityEngine.AI.NavMeshHit finalHit, 2f, UnityEngine.AI.NavMesh.AllAreas))
+                    {
+                        safePosition = finalHit.position;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private void ExecuteReaction(ReactiveTrigger trigger, Transform playerTransform)
+    {
+        switch (trigger.reactionAction)
+        {
+            case AIReactionAction.CastReactionAbility:
+                if (trigger.reactionAbility != null)
+                {
+                    AbilityHolder.UseAbility(trigger.reactionAbility, playerTransform.gameObject);
+                }
+                break;
+
+            case AIReactionAction.LeapBackward:
+                if (isStationary || trigger.movementDistance <= 0.1f) return;
+
+                if (MovementHandler != null && !MovementHandler.IsSpecialMovementActive)
+                {
+                    if (TryFindEvasionPoint(playerTransform.position, trigger.movementDistance, out Vector3 leapDest))
+                    {
+                        MovementHandler.ExecuteLeap(leapDest, null);
+                    }
+                }
+                break;
+
+            case AIReactionAction.RollAway:
+                if (isStationary || trigger.movementDistance <= 0.1f) return;
+                if (IsInActionSequence) return;
+
+                if (TryFindEvasionPoint(playerTransform.position, trigger.movementDistance, out Vector3 rollDest))
+                {
+                    StartCoroutine(PerformRollDodge(rollDest));
+                }
+                break;
+
+            case AIReactionAction.TeleportAway:
+                if (isStationary) return;
+
+                if (TryFindEvasionPoint(playerTransform.position, trigger.movementDistance, out Vector3 tpDest))
+                {
+                    ExecuteTeleport(tpDest);
+                }
+                break;
+        }
+    }
+
+    // --- AAA HORIZONTAL GOD-MODE ROLL ---
+    private IEnumerator PerformRollDodge(Vector3 targetPos)
+    {
+        IsInActionSequence = true; // Locks out normal AI thinking/rotation/animation updates
+
+        // 1. Play Dodge Animation Instantly
+        if (Animator != null)
+        {
+            Animator.ResetTrigger(attackTriggerHash); // Clear any pending attacks
+            Animator.SetTrigger(rollDodgeHash);
+        }
+
+        // 2. Enable I-Frames (God Mode)
+        if (Health != null) Health.isInvulnerable = true;
+
+        // 3. Detach from NavMesh temporarily to slide seamlessly
+        if (NavAgent != null && NavAgent.isOnNavMesh)
+        {
+            NavAgent.isStopped = true;
+            NavAgent.updatePosition = false;
+        }
+
+        // 4. Slide Logistics
+        float rollDuration = 0.45f; // Fast, snappy dodge (tune this to match your animation length!)
+        float elapsed = 0f;
+        Vector3 startPos = transform.position;
+
+        while (elapsed < rollDuration)
+        {
+            if (isDead) yield break; // Emergency abort if somehow killed
+
+            elapsed += Time.deltaTime;
+
+            // Smooth ease-out lerp (Fast explosive start, slows down at the end)
+            float t = elapsed / rollDuration;
+            float easeOut = 1f - (1f - t) * (1f - t);
+
+            transform.position = Vector3.Lerp(startPos, targetPos, easeOut);
+            yield return null;
+        }
+
+        // 5. Reattach to NavMesh safely
+        if (!isDead)
+        {
+            transform.position = targetPos;
+
+            if (NavAgent != null && NavAgent.isOnNavMesh)
+            {
+                NavAgent.nextPosition = transform.position;
+                NavAgent.updatePosition = true;
+                NavAgent.isStopped = false;
+            }
+        }
+
+        // 6. Disable I-Frames and resume normal combat logic
+        if (Health != null) Health.isInvulnerable = false;
+        IsInActionSequence = false;
+    }
+    // ------------------------------------
+
+    private void HandleCastStarted(string n, float d) { enemyHealthUI?.StartCast(n, d); SetAIStatus("Combat", "Casting"); if (NavAgent.isOnNavMesh && !isStationary) NavAgent.ResetPath(); }
     private void HandleCastFinished() { enemyHealthUI?.StopCast(); recoveryTimer = Time.time + attackRecoveryDelay; }
-    public void ExecuteLeap(Vector3 d, Action a) => MovementHandler?.ExecuteLeap(d, a);
-    public void ExecuteCharge(GameObject t, Ability c) { if (AbilitySelector.abilities.Contains(c)) MovementHandler?.ExecuteCharge(t, c); }
-    public void ExecuteTeleport(Vector3 d) { if (NavAgent.isOnNavMesh) NavAgent.Warp(d); else transform.position = d; }
+
+    public void ExecuteLeap(Vector3 d, Action a) { if (!isStationary) MovementHandler?.ExecuteLeap(d, a); }
+    public void ExecuteCharge(GameObject t, Ability c) { if (!isStationary && AbilitySelector.abilities.Contains(c)) MovementHandler?.ExecuteCharge(t, c); }
+    public void ExecuteTeleport(Vector3 d) { if (!isStationary) { if (NavAgent.isOnNavMesh) NavAgent.Warp(d); else transform.position = d; } }
 
     void OnDestroy()
     {

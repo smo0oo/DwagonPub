@@ -6,9 +6,9 @@ using System;
 [RequireComponent(typeof(AudioSource))]
 public class PlayerAbilityHolder : MonoBehaviour
 {
-    public static event Action<PlayerAbilityHolder, Ability> OnPlayerAbilityUsed;
+    // --- AAA FIX: Added Target and Position to the payload so enemies can filter efficiently ---
+    public static event Action<PlayerAbilityHolder, Ability, GameObject, Vector3> OnPlayerAbilityUsed;
 
-    // [FIX] Added Vector3 to pass the source position of the shake
     public static event Action<float, float, Vector3> OnCameraShakeRequest;
 
     public event Action<string, float> OnCastStarted;
@@ -283,11 +283,13 @@ public class PlayerAbilityHolder : MonoBehaviour
             else SpawnCastVFX(ability, aimRotation);
         }
 
-        // [FIX] Pass transform.position to the shake event so listeners can check distance
         if (ability.screenShakeIntensity > 0)
             OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration, transform.position);
 
-        OnPlayerAbilityUsed?.Invoke(this, ability);
+        // --- AAA FIX: Broadcast exactly WHERE and WHO this ability is aiming at ---
+        OnPlayerAbilityUsed?.Invoke(this, ability, target, position);
+        // -------------------------------------------------------------------------
+
         if (triggerAnimation) TriggerAttackAnimation(ability);
 
         if (ability.movementLockDuration > 0)
@@ -492,10 +494,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (ability.impactSound != null) AudioSource.PlayClipAtPoint(ability.impactSound, position);
 
         Collider[] _aoeBuffer = new Collider[100];
-
-        // Ensure your PlayerAbilityHolder 'Target Layers' includes 'Destructible' in the Inspector!
         int hitCount = Physics.OverlapSphereNonAlloc(position, ability.aoeRadius, _aoeBuffer, targetLayers);
-
         HashSet<GameObject> hitTargets = new HashSet<GameObject>();
 
         for (int i = 0; i < hitCount; i++)
@@ -504,38 +503,23 @@ public class PlayerAbilityHolder : MonoBehaviour
             GameObject finalTarget = null;
             CharacterRoot hitCharacter = col.GetComponentInParent<CharacterRoot>();
 
-            // 1. Check for Character (Enemies/Players)
-            if (hitCharacter != null)
-            {
-                finalTarget = hitCharacter.gameObject;
-            }
+            if (hitCharacter != null) finalTarget = hitCharacter.gameObject;
             else
             {
-                // 2. Check for Simple Health (Barrels/Props)
                 Health hitHealth = col.GetComponentInParent<Health>();
-                if (hitHealth != null)
-                {
-                    finalTarget = hitHealth.gameObject;
-                }
+                if (hitHealth != null) finalTarget = hitHealth.gameObject;
             }
 
-            // If valid and not already processed this frame
             if (finalTarget != null && !hitTargets.Contains(finalTarget))
             {
                 hitTargets.Add(finalTarget);
-
-                // Determine Allegiance
                 bool isAlly = false;
 
                 if (hitCharacter != null)
                 {
                     CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
-                    if (myRoot != null)
-                    {
-                        isAlly = myRoot.gameObject.layer == hitCharacter.gameObject.layer;
-                    }
+                    if (myRoot != null) isAlly = myRoot.gameObject.layer == hitCharacter.gameObject.layer;
                 }
-                // If hitCharacter is null (Prop), remains false (Hostile)
 
                 List<IAbilityEffect> effectsToApply = isAlly ? ability.friendlyEffects : ability.hostileEffects;
                 foreach (var effect in effectsToApply)

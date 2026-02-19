@@ -5,7 +5,8 @@ public enum AICommand
     Follow,
     AttackTarget,
     HealTarget,
-    MoveToAndDefend
+    MoveToAndDefend,
+    Evade // NEW: Running to a tactical node
 }
 
 public enum AIStance

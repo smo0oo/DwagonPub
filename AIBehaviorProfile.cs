@@ -1,6 +1,14 @@
 using UnityEngine;
 using System.Collections.Generic;
 
+public enum AIReactionAction
+{
+    CastReactionAbility, // The standard response (casts the assigned Ability)
+    LeapBackward,        // Physically jump away from the player
+    RollAway,            // Ground dash/roll away
+    TeleportAway         // Instantly warp to a safer distance
+}
+
 // Helper class for phase-based triggers
 [System.Serializable]
 public class HealthThresholdTrigger
@@ -16,10 +24,22 @@ public class HealthThresholdTrigger
 [System.Serializable]
 public class ReactiveTrigger
 {
-    [Tooltip("The type of player ability that will trigger this reaction.")]
+    [Header("The Trigger (What causes the reaction)")]
+    [Tooltip("If assigned, the enemy will ONLY react to this specific ability. If left blank, it falls back to checking the Trigger Type below.")]
+    public Ability specificAbilityTrigger;
+
+    [Tooltip("The broad category of player ability that triggers this (used only if Specific Ability Trigger is empty).")]
     public AbilityType triggerType;
-    [Tooltip("The ability the boss will use in response (e.g., a teleport or a shield).")]
+
+    [Header("The Reaction (What the enemy does)")]
+    public AIReactionAction reactionAction = AIReactionAction.CastReactionAbility;
+
+    [Tooltip("The ability to cast (Only used if Reaction Action is set to CastReactionAbility).")]
     public Ability reactionAbility;
+
+    [Tooltip("How far the enemy should move (Only used if Reaction Action is Leap, Roll, or Teleport).")]
+    public float movementDistance = 5f;
+
     [Tooltip("The chance for this reaction to occur (0.0 to 1.0).")]
     [Range(0f, 1f)]
     public float chanceToReact = 0.5f;

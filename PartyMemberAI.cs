@@ -60,6 +60,11 @@ public class PartyMemberAI : MonoBehaviour
     private float lastPathUpdateTime = 0f;
     private const float PATH_UPDATE_INTERVAL = 0.25f;
 
+    // --- NEW: TACTICAL VARIABLES ---
+    private TacticalNode claimedTacticalNode;
+    private EnemyAbilityHolder currentThreatCaster;
+    // -------------------------------
+
     public string CurrentStatus { get; private set; }
 
     void Awake()
@@ -86,7 +91,24 @@ public class PartyMemberAI : MonoBehaviour
 
     void OnEnable()
     {
+        EnemyAbilityHolder.OnMajorThreatTelegraphed += HandleMajorThreat;
         StartCoroutine(InitializeAgent());
+    }
+
+    void OnDisable()
+    {
+        EnemyAbilityHolder.OnMajorThreatTelegraphed -= HandleMajorThreat;
+
+        if (currentThreatCaster != null)
+        {
+            currentThreatCaster.OnCastFinished -= OnThreatPassed;
+            currentThreatCaster = null;
+        }
+        if (claimedTacticalNode != null)
+        {
+            claimedTacticalNode.ReleaseNode(gameObject);
+            claimedTacticalNode = null;
+        }
     }
 
     private IEnumerator InitializeAgent()
@@ -164,6 +186,8 @@ public class PartyMemberAI : MonoBehaviour
 
     private void Think()
     {
+        if (currentCommand == AICommand.Evade) return;
+
         if (hasExplicitCommand)
         {
             if ((currentCommand == AICommand.AttackTarget || currentCommand == AICommand.HealTarget) &&
@@ -249,6 +273,7 @@ public class PartyMemberAI : MonoBehaviour
             case AICommand.AttackTarget: HandleAttackState(); break;
             case AICommand.HealTarget: HandleHealState(); break;
             case AICommand.MoveToAndDefend: HandleMoveToAndDefendState(); break;
+            case AICommand.Evade: HandleEvadeState(); break;
         }
     }
 
@@ -268,6 +293,79 @@ public class PartyMemberAI : MonoBehaviour
             }
         }
     }
+
+    // --- TACTICAL LOGIC (AAA BOSS REACTION) ---
+    private void HandleMajorThreat(EnemyAbilityHolder boss, Ability threatAbility, Vector3 attackTarget)
+    {
+        if (health == null || health.currentHealth <= 0 || (PartyManager.instance != null && PartyManager.instance.ActivePlayer == gameObject)) return;
+        if (TacticalArena.ActiveArena == null) return;
+
+        float distToDanger = Vector3.Distance(transform.position, attackTarget);
+        if (distToDanger > threatAbility.aoeRadius + 1.5f) return;
+
+        // [FIX] Using TacticalNodeType to avoid conflict with LocationNode
+        TacticalNodeType preferredType = TacticalNodeType.Cover;
+        if (playerStats != null && playerStats.characterClass != null)
+        {
+            if (playerStats.characterClass.aiRole == PlayerClass.AILogicRole.Support) preferredType = TacticalNodeType.HealerSpot;
+            else if (playerStats.characterClass.aiRole == PlayerClass.AILogicRole.RangedDamage) preferredType = TacticalNodeType.RangedVantage;
+            else if (playerStats.characterClass.aiRole == PlayerClass.AILogicRole.MeleeDamage || playerStats.characterClass.aiRole == PlayerClass.AILogicRole.Tank) preferredType = TacticalNodeType.MeleeAnchor;
+        }
+
+        TacticalNode safeSpot = TacticalArena.ActiveArena.GetBestAvailableNode(preferredType, transform.position, gameObject);
+
+        if (safeSpot != null)
+        {
+            if (claimedTacticalNode != null) claimedTacticalNode.ReleaseNode(gameObject);
+            if (currentThreatCaster != null) currentThreatCaster.OnCastFinished -= OnThreatPassed;
+
+            claimedTacticalNode = safeSpot;
+            currentThreatCaster = boss;
+            currentThreatCaster.OnCastFinished += OnThreatPassed;
+
+            SetCommand(AICommand.Evade, null, safeSpot.transform.position);
+            UpdateStatus("Evading Mechanic!");
+        }
+    }
+
+    private void HandleEvadeState()
+    {
+        float distToCommand = Vector3.Distance(transform.position, commandMovePosition);
+        if (distToCommand > 1.0f)
+        {
+            navMeshAgent.speed = originalNavMeshSpeed * 1.6f;
+            navMeshAgent.stoppingDistance = 0.2f;
+            MoveTo(commandMovePosition);
+            HandleSmoothRotation();
+        }
+        else
+        {
+            HandleSmoothRotation();
+            UpdateStatus("Taking Cover");
+        }
+    }
+
+    private void OnThreatPassed()
+    {
+        if (currentThreatCaster != null)
+        {
+            currentThreatCaster.OnCastFinished -= OnThreatPassed;
+            currentThreatCaster = null;
+        }
+
+        if (claimedTacticalNode != null)
+        {
+            claimedTacticalNode.ReleaseNode(gameObject);
+            claimedTacticalNode = null;
+        }
+
+        if (currentCommand == AICommand.Evade)
+        {
+            currentCommand = AICommand.Follow;
+            if (navMeshAgent != null) navMeshAgent.speed = originalNavMeshSpeed;
+        }
+    }
+    // ------------------------------------------
 
     private void HandleFollowState()
     {
@@ -473,7 +571,7 @@ public class PartyMemberAI : MonoBehaviour
 
     public void SetCommand(AICommand newCommand, GameObject target = null, Vector3 position = default)
     {
-        hasExplicitCommand = (newCommand != AICommand.Follow);
+        hasExplicitCommand = (newCommand != AICommand.Follow && newCommand != AICommand.Evade);
         currentCommand = newCommand;
         currentTarget = target;
         commandMovePosition = position;
