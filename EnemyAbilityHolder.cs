@@ -18,6 +18,10 @@ public class EnemyAbilityHolder : MonoBehaviour
     public Transform feetAnchor;
     public Transform centerAnchor;
 
+    [Header("Visual Feedback (AAA)")]
+    [Tooltip("The default 'Red Circle' prefab to use if the Ability doesn't have a specific override.")]
+    public GameObject dangerZonePrefab;
+
     [Header("Global Cooldown")]
     public float globalCooldownDuration = 1.5f;
 
@@ -33,7 +37,11 @@ public class EnemyAbilityHolder : MonoBehaviour
     private EnemyAI enemyAI;
     private float globalCooldownTimer = 0f;
     private Animator animator;
+
+    // VFX Instances
     private GameObject currentCastingVFXInstance;
+    private GameObject activeTelegraphInstance;
+
     private Collider[] hitBuffer = new Collider[20];
 
     // Debug Gizmos
@@ -59,6 +67,7 @@ public class EnemyAbilityHolder : MonoBehaviour
         if (activeCastCoroutine != null) { StopCoroutine(activeCastCoroutine); activeCastCoroutine = null; }
         IsCasting = false;
         CleanupCastingVFX();
+        CleanupTelegraph();
         if (ActiveBeam != null) { ActiveBeam.Interrupt(); ActiveBeam = null; }
     }
 
@@ -80,9 +89,11 @@ public class EnemyAbilityHolder : MonoBehaviour
         IsCasting = true;
         try
         {
+            // 1. Play Animation
             if (ability.telegraphDuration > 0 && animator != null && !string.IsNullOrEmpty(ability.telegraphAnimationTrigger))
                 animator.SetTrigger(ability.telegraphAnimationTrigger);
 
+            // 2. Spawn Casting VFX (Hands/Body)
             if (ability.castingVFX != null)
             {
                 Transform anchor = GetAnchorTransform(ability.castingVFXAnchor);
@@ -96,9 +107,46 @@ public class EnemyAbilityHolder : MonoBehaviour
                 }
             }
 
+            // 3. Spawn Ground Telegraph (Danger Zone)
+            // Priority: Ability Override -> Global Default
+            GameObject telegraphToSpawn = ability.enemyTelegraphPrefab != null ? ability.enemyTelegraphPrefab : dangerZonePrefab;
+
+            if (telegraphToSpawn != null)
+            {
+                // Determine spawn rotation (Face target for cones/lines, Identity for circles)
+                Quaternion spawnRot = Quaternion.identity;
+                if (ability.abilityType == AbilityType.DirectionalMelee || ability.abilityType == AbilityType.Charge)
+                {
+                    Vector3 dir = (position - transform.position).normalized;
+                    if (dir != Vector3.zero) spawnRot = Quaternion.LookRotation(dir);
+                    else spawnRot = transform.rotation;
+                }
+
+                Vector3 spawnPos = position + Vector3.up * 0.05f; // Slight offset to prevent Z-fighting
+
+                // If Directional, spawn at caster's feet, not target position
+                if (ability.abilityType == AbilityType.DirectionalMelee || ability.abilityType == AbilityType.Charge)
+                {
+                    spawnPos = transform.position + Vector3.up * 0.05f;
+                }
+
+                activeTelegraphInstance = Instantiate(telegraphToSpawn, spawnPos, spawnRot);
+
+                // Only auto-scale generic circular AOEs (GroundAOE)
+                // We assume custom prefabs for cones/lines are already sized correctly or handled by their own scripts
+                if (ability.abilityType == AbilityType.GroundAOE)
+                {
+                    float diameter = ability.aoeRadius * 2f;
+                    activeTelegraphInstance.transform.localScale = new Vector3(diameter, 1f, diameter);
+                }
+            }
+
+            // 4. Wait for Telegraph (Wind-up)
             if (ability.telegraphDuration > 0) yield return new WaitForSeconds(ability.telegraphDuration);
 
             OnCastStarted?.Invoke(ability.abilityName, ability.castTime);
+
+            // 5. Wait for Cast Time (Channeling)
             if (ability.castTime > 0) yield return new WaitForSeconds(ability.castTime);
 
             if (enemyAI != null && (enemyAI.Health.currentHealth <= 0 || !enemyAI.enabled)) yield break;
@@ -108,6 +156,8 @@ public class EnemyAbilityHolder : MonoBehaviour
         finally
         {
             CleanupCastingVFX();
+            CleanupTelegraph();
+
             if (ability.abilityType != AbilityType.TargetedMelee && ability.abilityType != AbilityType.DirectionalMelee)
             {
                 IsCasting = false;
@@ -125,6 +175,15 @@ public class EnemyAbilityHolder : MonoBehaviour
             if (pooled != null) pooled.ReturnToPool();
             else Destroy(currentCastingVFXInstance);
             currentCastingVFXInstance = null;
+        }
+    }
+
+    private void CleanupTelegraph()
+    {
+        if (activeTelegraphInstance != null)
+        {
+            Destroy(activeTelegraphInstance);
+            activeTelegraphInstance = null;
         }
     }
 
@@ -213,18 +272,11 @@ public class EnemyAbilityHolder : MonoBehaviour
         for (int i = 0; i < hitCount; i++)
         {
             Collider hit = hitBuffer[i];
-
-            // 1. Ignore Activation Triggers
             if (hit.gameObject.layer == 21) continue;
 
-            // 2. Identify Target Root
             CharacterRoot targetRoot = hit.GetComponentInParent<CharacterRoot>();
-
-            // 3. [FIX] Compare CharacterRoots, not Transform.Root
-            // Stop self-hit
             if (myRoot != null && targetRoot != null && myRoot == targetRoot) continue;
 
-            // 4. Resolve Target Object
             GameObject uniqueTargetObj = (targetRoot != null) ? targetRoot.gameObject : hit.gameObject;
 
             if (hitTargets.Contains(uniqueTargetObj)) continue;
@@ -255,17 +307,11 @@ public class EnemyAbilityHolder : MonoBehaviour
         for (int i = 0; i < hitCount; i++)
         {
             Collider hit = hitBuffer[i];
-
-            // 1. Ignore Activation Triggers
             if (hit.gameObject.layer == 21) continue;
-
-            // 2. Distance Check
             if (Vector3.Distance(position, hit.transform.position) > ability.aoeRadius + 1.0f) continue;
 
-            // 3. Identify Target Root
             CharacterRoot hitCharacter = hit.GetComponentInParent<CharacterRoot>();
 
-            // 4. [FIX] Avoid hitting self or duplicates
             if (hitCharacter == null || affectedCharacters.Contains(hitCharacter)) continue;
             if (casterRoot != null && hitCharacter == casterRoot) continue;
 
@@ -283,7 +329,7 @@ public class EnemyAbilityHolder : MonoBehaviour
         }
     }
 
-    // [Standard Helpers unchanged]
+    // [Standard Helpers]
     private void PayCostAndStartCooldown(Ability ability, bool bypassCooldown) { if (!bypassCooldown) { cooldowns[ability] = Time.time + ability.cooldown; if (ability.triggersGlobalCooldown) globalCooldownTimer = Time.time + globalCooldownDuration; } }
     public bool CanUseAbility(Ability ability, GameObject target) { if (ability == null || IsCasting) return false; if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false; if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false; return true; }
     private void HandleChanneledBeam(Ability ability, GameObject target) { GameObject prefab = ability.enemyProjectilePrefab ?? ability.playerProjectilePrefab; if (prefab != null) { GameObject beam = Instantiate(prefab, transform.position, transform.rotation); if (beam.TryGetComponent<ChanneledBeamController>(out var b)) { b.Initialize(ability, gameObject, target); ActiveBeam = b; } } }

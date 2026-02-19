@@ -251,6 +251,24 @@ public class HotbarManager : MonoBehaviour
         RefreshHotbarSlot(hotbarIndex);
     }
 
+    // [FIX] NEW: Handles swapping two hotbar slots (Swaps the data assignment and refreshes visuals)
+    public void SwapHotbarSlots(int indexA, int indexB)
+    {
+        if (currentPlayerHotbar == null) return;
+        if (indexA < 0 || indexA >= hotbarSlots.Count) return;
+        if (indexB < 0 || indexB >= hotbarSlots.Count) return;
+        if (indexA == indexB) return;
+
+        // Swap the actual data in the PlayerHotbar (Persistent Data)
+        HotbarAssignment temp = currentPlayerHotbar.hotbarSlotAssignments[indexA];
+        currentPlayerHotbar.hotbarSlotAssignments[indexA] = currentPlayerHotbar.hotbarSlotAssignments[indexB];
+        currentPlayerHotbar.hotbarSlotAssignments[indexB] = temp;
+
+        // Update the visual slots
+        RefreshHotbarSlot(indexA);
+        RefreshHotbarSlot(indexB);
+    }
+
     public void ClearHotbarSlot(int hotbarIndex)
     {
         if (hotbarIndex == 0) return;
@@ -281,7 +299,6 @@ public class HotbarManager : MonoBehaviour
         HotbarSlot h_slot = hotbarSlots[hotbarIndex];
         if (currentPlayerHotbar == null)
         {
-            // FIX: Ambiguous call resolved by explicit cast
             h_slot.UpdateSlot((HotbarAssignment)null);
             return;
         }

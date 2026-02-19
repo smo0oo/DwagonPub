@@ -140,6 +140,12 @@ public class Ability : ScriptableObject
     [Range(0f, 2f)] public float screenShakeIntensity = 0f;
     [Range(0f, 1f)] public float screenShakeDuration = 0f;
 
+    // --- NEW: Enemy AI Telegraphing ---
+    [Header("Enemy AI Settings")]
+    [Tooltip("The specific warning decal to spawn for this ability (e.g. Green Splat for Poison). If null, uses the default Red Circle.")]
+    public GameObject enemyTelegraphPrefab;
+    // ----------------------------------
+
     [Header("Legacy / Simple Effects")]
     public List<string> effects = new List<string>();
 

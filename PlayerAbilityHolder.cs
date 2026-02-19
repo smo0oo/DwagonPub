@@ -7,7 +7,9 @@ using System;
 public class PlayerAbilityHolder : MonoBehaviour
 {
     public static event Action<PlayerAbilityHolder, Ability> OnPlayerAbilityUsed;
-    public static event Action<float, float> OnCameraShakeRequest;
+
+    // [FIX] Added Vector3 to pass the source position of the shake
+    public static event Action<float, float, Vector3> OnCameraShakeRequest;
 
     public event Action<string, float> OnCastStarted;
     public event Action OnCastFinished;
@@ -281,7 +283,9 @@ public class PlayerAbilityHolder : MonoBehaviour
             else SpawnCastVFX(ability, aimRotation);
         }
 
-        if (ability.screenShakeIntensity > 0) OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration);
+        // [FIX] Pass transform.position to the shake event so listeners can check distance
+        if (ability.screenShakeIntensity > 0)
+            OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration, transform.position);
 
         OnPlayerAbilityUsed?.Invoke(this, ability);
         if (triggerAnimation) TriggerAttackAnimation(ability);

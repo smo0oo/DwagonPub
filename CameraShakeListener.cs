@@ -7,6 +7,9 @@ public class CameraShakeListener : MonoBehaviour
     [Tooltip("Multiplier for all shakes. Set to 0 to disable screenshake globally.")]
     public float globalShakeMultiplier = 1.0f;
 
+    [Tooltip("Maximum distance at which this camera will feel a shake. Sources further than this are ignored.")]
+    public float maxShakeDistance = 50f;
+
     // Internal state
     private float currentShakeDuration = 0f;
     private float currentShakeIntensity = 0f;
@@ -27,14 +30,24 @@ public class CameraShakeListener : MonoBehaviour
         PlayerAbilityHolder.OnCameraShakeRequest -= TriggerShake;
     }
 
-    private void TriggerShake(float intensity, float duration)
+    // [FIX] Updated signature to accept sourcePosition
+    private void TriggerShake(float intensity, float duration, Vector3 sourcePosition)
     {
         if (globalShakeMultiplier <= 0) return;
 
-        // If we are already shaking, only overwrite if the new shake is stronger
-        if (isShaking && intensity < currentShakeIntensity) return;
+        // [FIX] Distance Check
+        float distance = Vector3.Distance(transform.position, sourcePosition);
+        if (distance > maxShakeDistance) return;
 
-        currentShakeIntensity = intensity * globalShakeMultiplier;
+        // [FIX] Linear Attenuation (Falloff)
+        // 0 distance = 1.0 multiplier. Max distance = 0.0 multiplier.
+        float distanceFactor = 1f - Mathf.Clamp01(distance / maxShakeDistance);
+        float attenuatedIntensity = intensity * distanceFactor;
+
+        // If we are already shaking, only overwrite if the new attenuated shake is stronger
+        if (isShaking && attenuatedIntensity < currentShakeIntensity) return;
+
+        currentShakeIntensity = attenuatedIntensity * globalShakeMultiplier;
         currentShakeDuration = duration;
         initialShakeDuration = duration;
 
@@ -63,7 +76,7 @@ public class CameraShakeListener : MonoBehaviour
 
             // Optional: Dampen the intensity over time (Linear Falloff)
             float dampeningFactor = currentShakeDuration / initialShakeDuration;
-            float currentFrameIntensity = currentShakeIntensity * dampeningFactor;
+            // float currentFrameIntensity = currentShakeIntensity * dampeningFactor; // Not strictly used in this logic, but good for reference
 
             yield return null;
         }

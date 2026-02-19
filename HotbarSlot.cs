@@ -399,17 +399,26 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
 
     public void OnDrop(object item)
     {
-        int hotbarIndex = transform.GetSiblingIndex();
-        if (item is ItemStack)
+        // [FIX] Renamed variable to 'sourceHotbar' to avoid conflict
+        if (dragDropController.currentSource is HotbarSlot sourceHotbar)
         {
-            if (dragDropController.currentSource is InventorySlot sourceSlot)
-            {
-                hotbarManager.SetHotbarSlotWithItem(hotbarIndex, sourceSlot.slotIndex);
-            }
+            hotbarManager.SwapHotbarSlots(sourceHotbar.SlotIndex, this.SlotIndex);
         }
-        else if (item is Ability ability)
+        else
         {
-            hotbarManager.SetHotbarSlotWithAbility(hotbarIndex, ability);
+            int hotbarIndex = SlotIndex;
+            if (item is ItemStack)
+            {
+                // [FIX] Renamed variable to 'sourceInventory' to avoid conflict
+                if (dragDropController.currentSource is InventorySlot sourceInventory)
+                {
+                    hotbarManager.SetHotbarSlotWithItem(hotbarIndex, sourceInventory.slotIndex);
+                }
+            }
+            else if (item is Ability ability)
+            {
+                hotbarManager.SetHotbarSlotWithAbility(hotbarIndex, ability);
+            }
         }
     }
 

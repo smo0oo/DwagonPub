@@ -23,6 +23,10 @@ public class PlayerCameraController : MonoBehaviour
     [Tooltip("The starting zoom level (0 = Fully Out, 1 = Fully In).")]
     public float defaultZoomLevel = 0.5f;
 
+    [Header("Shake Settings")]
+    [Tooltip("Maximum distance from the camera to the source for a shake to be felt.")]
+    public float maxShakeDistance = 50f;
+
     // Internal State
     private float currentZoom = 0f;
     private CinemachineTransposer transposer;
@@ -95,7 +99,8 @@ public class PlayerCameraController : MonoBehaviour
 
     // --- Shake Logic ---
 
-    private void TriggerShake(float intensity, float duration)
+    // [FIX] Updated signature to accept Vector3 sourcePosition
+    private void TriggerShake(float intensity, float duration, Vector3 sourcePosition)
     {
         // Safety: Ensure we have the noise component
         if (noisePerlin == null)
@@ -106,8 +111,18 @@ public class PlayerCameraController : MonoBehaviour
             if (noisePerlin == null) return; // Still null? Exit.
         }
 
+        // [FIX] Distance Check
+        float distance = Vector3.Distance(transform.position, sourcePosition);
+        if (distance > maxShakeDistance) return;
+
+        // [FIX] Attenuate intensity based on distance
+        float distanceFactor = 1f - Mathf.Clamp01(distance / maxShakeDistance);
+        float finalIntensity = intensity * distanceFactor;
+
+        if (finalIntensity <= 0.01f) return;
+
         if (shakeCoroutine != null) StopCoroutine(shakeCoroutine);
-        shakeCoroutine = StartCoroutine(ProcessShake(intensity, duration));
+        shakeCoroutine = StartCoroutine(ProcessShake(finalIntensity, duration));
     }
 
     private IEnumerator ProcessShake(float intensity, float duration)
