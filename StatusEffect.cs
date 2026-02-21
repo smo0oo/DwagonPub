@@ -17,11 +17,13 @@ public class StatusEffect : ScriptableObject
     [Tooltip("Is this a helpful effect (buff) or a harmful one (debuff)? This can be used for UI color and dispel logic.")]
     public bool isBuff;
 
-    // --- NEW: Invulnerability Flag ---
-    [Header("Special Properties")]
+    [Header("Crowd Control & States")]
+    [Tooltip("If true, the target cannot move, attack, or dodge. Animation freezes.")]
+    public bool isStun = false;
+    [Tooltip("If true, the target cannot move or dodge, but can still cast/attack.")]
+    public bool isRoot = false;
     [Tooltip("If true, the target will take 0 damage from all sources while this effect is active.")]
     public bool grantsInvulnerability = false;
-    // --------------------------------
 
     [Header("Duration")]
     public DurationType durationType;
@@ -36,7 +38,7 @@ public class StatusEffect : ScriptableObject
     [Tooltip("How often the tick effects should apply (in seconds). Set to 0 if they should not tick.")]
     public float tickRate;
 
-    [SerializeReference] // This is crucial for the effects list to work correctly
+    [SerializeReference]
     [Tooltip("Effects that apply on each tick (e.g., a DamageEffect for poison, or a HealEffect for regeneration).")]
     public List<IAbilityEffect> tickEffects;
 }

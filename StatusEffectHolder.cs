@@ -10,12 +10,17 @@ public class StatusEffectHolder : MonoBehaviour
 
     private List<ActiveStatusEffect> activeEffects = new List<ActiveStatusEffect>();
     private PlayerStats playerStats;
-    private Health health; // Added ref to Health
+    private Health health;
+
+    // --- AAA FIX: Crowd Control States ---
+    public bool IsStunned { get; private set; }
+    public bool IsRooted { get; private set; }
+    // -------------------------------------
 
     private void Awake()
     {
         playerStats = GetComponentInParent<PlayerStats>();
-        health = GetComponentInParent<Health>(); // Get health to toggle invulnerability
+        health = GetComponentInParent<Health>();
     }
 
     private void Update()
@@ -43,9 +48,7 @@ public class StatusEffectHolder : MonoBehaviour
         activeEffects.Add(newEffect);
         ApplyStatModifiers(newEffect, true);
 
-        // --- NEW: Update Invulnerability ---
-        CheckInvulnerability();
-        // -----------------------------------
+        UpdateEntityStates();
 
         OnStatusEffectChanged?.Invoke(new StatusEffectInfo { Target = this.gameObject, Effect = effectData, IsApplied = true });
         OnEffectsChanged?.Invoke(this);
@@ -56,23 +59,31 @@ public class StatusEffectHolder : MonoBehaviour
         ApplyStatModifiers(effectToRemove, false);
         activeEffects.Remove(effectToRemove);
 
-        // --- NEW: Update Invulnerability ---
-        CheckInvulnerability();
-        // -----------------------------------
+        UpdateEntityStates();
 
         OnStatusEffectChanged?.Invoke(new StatusEffectInfo { Target = this.gameObject, Effect = effectToRemove.EffectData, IsApplied = false });
         OnEffectsChanged?.Invoke(this);
     }
 
-    // --- NEW HELPER METHOD ---
-    private void CheckInvulnerability()
+    // --- AAA FIX: Boss Phase Transition Helper ---
+    public void ClearAllNegativeEffects()
     {
-        if (health == null) return;
-
-        bool shouldBeInvulnerable = activeEffects.Any(e => e.EffectData.grantsInvulnerability);
-        health.isInvulnerable = shouldBeInvulnerable;
+        for (int i = activeEffects.Count - 1; i >= 0; i--)
+        {
+            if (!activeEffects[i].EffectData.isBuff)
+            {
+                RemoveStatusEffect(activeEffects[i]);
+            }
+        }
     }
-    // -------------------------
+
+    private void UpdateEntityStates()
+    {
+        if (health != null) health.isInvulnerable = activeEffects.Any(e => e.EffectData.grantsInvulnerability);
+
+        IsStunned = activeEffects.Any(e => e.EffectData.isStun);
+        IsRooted = activeEffects.Any(e => e.EffectData.isRoot);
+    }
 
     public List<ActiveStatusEffect> GetActiveEffects() { return activeEffects; }
     private void ApplyStatModifiers(ActiveStatusEffect activeEffect, bool apply) { if (playerStats == null || activeEffect.EffectData.statModifiers.Count == 0) return; int multiplier = apply ? 1 : -1; foreach (var modifier in activeEffect.EffectData.statModifiers) { switch (modifier.stat) { case StatType.Strength: playerStats.bonusStrength += modifier.value * multiplier; break; case StatType.Agility: playerStats.bonusAgility += modifier.value * multiplier; break; case StatType.Intelligence: playerStats.bonusIntelligence += modifier.value * multiplier; break; case StatType.Faith: playerStats.bonusFaith += modifier.value * multiplier; break; } } playerStats.CalculateFinalStats(); }

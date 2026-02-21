@@ -10,7 +10,6 @@ using System.Diagnostics;
 [RequireComponent(typeof(AITargeting), typeof(AIAbilitySelector))]
 public class EnemyAI : MonoBehaviour, IMovementHandler
 {
-    // --- Public Properties ---
     public NavMeshAgent NavAgent { get; private set; }
     public Health Health { get; private set; }
     public EnemyAbilityHolder AbilityHolder { get; private set; }
@@ -19,11 +18,13 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public Animator Animator { get; private set; }
     public CharacterMovementHandler MovementHandler { get; private set; }
 
-    // --- Performance Monitoring (AAA) ---
+    // --- AAA FIX: Status Effect Tracking ---
+    public StatusEffectHolder StatusEffects { get; private set; }
+    // ---------------------------------------
+
     public float LastExecutionTimeMs { get; private set; }
     private Stopwatch _perfWatch = new Stopwatch();
 
-    // --- State Data ---
     [HideInInspector]
     public Transform currentTarget;
 
@@ -37,17 +38,14 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public float OriginalSpeed { get; private set; }
     public bool IsInActionSequence { get; set; } = false;
 
-    // --- Cooldown Tracker for Retreating ---
     public float LastRetreatTime { get; set; } = -999f;
     public float RetreatCooldown { get; set; } = 10f;
 
-    // --- Configuration ---
     [Header("Enemy Stats & Behavior")]
     public EnemyClass enemyClass;
     public AIBehaviorProfile behaviorProfile;
 
     [Header("Boss / Giant Settings")]
-    [Tooltip("If true, this enemy will NEVER move, retreat, leap, or be pushed. Vision is calculated from its Center/Head anchor instead of the floor.")]
     public bool isStationary = false;
 
     [Header("Leashing & State")]
@@ -84,12 +82,10 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public bool startDeactivated = true;
     private bool hasBeenActivated = false;
 
-    // --- State Machine ---
     private string lastState = "";
     private string lastAction = "";
     private IEnemyState currentState;
 
-    // --- Animation Hashes ---
     private int velocityXHash;
     private int velocityZHash;
     private int attackTriggerHash;
@@ -99,7 +95,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private int rollDodgeHash;
     private bool wasMoving = false;
 
-    // --- Caching ---
     private Transform _cachedPlayerTransform;
 
     void Awake()
@@ -112,6 +107,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         Targeting = GetComponent<AITargeting>();
         AbilitySelector = GetComponent<AIAbilitySelector>();
         MovementHandler = GetComponent<CharacterMovementHandler>();
+        StatusEffects = GetComponent<StatusEffectHolder>(); // Hook up CC
 
         velocityXHash = Animator.StringToHash("VelocityX");
         velocityZHash = Animator.StringToHash("VelocityZ");
@@ -193,6 +189,13 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
         while (!isDead && this.enabled)
         {
+            // --- AAA FIX: Suspend thinking if Stunned ---
+            if (StatusEffects != null && StatusEffects.IsStunned)
+            {
+                yield return wait;
+                continue;
+            }
+
             if (NavAgent != null && NavAgent.isOnNavMesh && NavAgent.isActiveAndEnabled)
             {
                 if (Time.time >= recoveryTimer) currentState?.Execute(this);
@@ -211,6 +214,27 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             LastExecutionTimeMs = 0f;
             return;
         }
+
+        // --- AAA FIX: Check for Crowd Control ---
+        if (StatusEffects != null)
+        {
+            if (StatusEffects.IsStunned)
+            {
+                StopMovement();
+                if (Animator != null) Animator.speed = 0f; // Freeze animation beautifully
+
+                _perfWatch.Stop();
+                LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
+                return;
+            }
+            else
+            {
+                if (Animator != null && Animator.speed == 0f) Animator.speed = 1f; // Unfreeze
+
+                if (StatusEffects.IsRooted) StopMovement(); // Block movement but allow attacks
+            }
+        }
+        // ----------------------------------------
 
         HandleRotation();
 
@@ -243,7 +267,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         if (IsInActionSequence || (MovementHandler != null && MovementHandler.IsSpecialMovementActive) || AbilityHolder.IsCasting || AbilityHolder.ActiveBeam != null)
         {
             if (AbilityHolder.IsCasting) StopMovement();
-            if (AbilityHolder.ActiveBeam != null && currentTarget != null)
+            if (AbilityHolder.ActiveBeam != null && currentTarget != null && (StatusEffects == null || !StatusEffects.IsStunned))
             {
                 Vector3 lookDir = currentTarget.position - transform.position;
                 lookDir.y = 0;
@@ -262,12 +286,9 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private void UpdateAnimator()
     {
         if (Animator == null) return;
-
-        // --- AAA FIX: Do not update velocity or trigger idles while rolling ---
         if (IsInActionSequence) return;
-        // ----------------------------------------------------------------------
 
-        if (NavAgent == null || !NavAgent.isActiveAndEnabled || !NavAgent.isOnNavMesh || isStationary)
+        if (NavAgent == null || !NavAgent.isActiveAndEnabled || !NavAgent.isOnNavMesh || isStationary || (StatusEffects != null && StatusEffects.IsRooted))
         {
             Animator.SetFloat(velocityXHash, 0f);
             Animator.SetFloat(velocityZHash, 0f);
@@ -297,6 +318,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     public void PerformAttack(Ability ability)
     {
+        if (StatusEffects != null && StatusEffects.IsStunned) return; // Cant attack if stunned
+
         if (Animator != null)
         {
             if (!string.IsNullOrEmpty(ability.overrideTriggerName))
@@ -325,7 +348,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     public void RetreatFromTarget()
     {
-        if (isStationary) return;
+        if (isStationary || (StatusEffects != null && (StatusEffects.IsRooted || StatusEffects.IsStunned))) return;
 
         if (NavAgent == null || !NavAgent.isActiveAndEnabled || !NavAgent.isOnNavMesh || currentTarget == null) return;
 
@@ -411,32 +434,21 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private void HandleRotation()
     {
         if (NavAgent == null || isDead) return;
+        if (StatusEffects != null && StatusEffects.IsStunned) return; // Prevent rotation while stunned
 
         Vector3 targetLookPos = Vector3.zero;
         bool shouldRotate = false;
 
         if (IsInActionSequence)
         {
-            if (currentTarget != null)
-            {
-                targetLookPos = currentTarget.position;
-                shouldRotate = true;
-            }
+            if (currentTarget != null) { targetLookPos = currentTarget.position; shouldRotate = true; }
             else
             {
                 Transform player = GetPlayerTransform();
-                if (player != null)
-                {
-                    targetLookPos = player.position;
-                    shouldRotate = true;
-                }
+                if (player != null) { targetLookPos = player.position; shouldRotate = true; }
             }
         }
-        else if (currentTarget != null)
-        {
-            targetLookPos = currentTarget.position;
-            shouldRotate = true;
-        }
+        else if (currentTarget != null) { targetLookPos = currentTarget.position; shouldRotate = true; }
         else if (NavAgent.velocity.sqrMagnitude > 0.1f && !isStationary)
         {
             targetLookPos = transform.position + NavAgent.velocity;
@@ -474,6 +486,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
         if (Animator != null)
         {
+            Animator.speed = 1f; // Failsafe so death animation always plays even if they die while stunned
             Animator.SetFloat(velocityXHash, 0f);
             Animator.SetFloat(velocityZHash, 0f);
             Animator.ResetTrigger(attackTriggerHash);
@@ -512,13 +525,52 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
                 if (hpPercent <= trigger.healthPercentage && !triggeredHealthPhases.Contains(trigger))
                 {
                     triggeredHealthPhases.Add(trigger);
-                    GameObject targetObj = (currentTarget != null) ? currentTarget.gameObject : gameObject;
-                    AbilityHolder.UseAbility(trigger.abilityToUse, targetObj);
+
+                    // --- AAA FIX: Support Phase Transitions ---
+                    if (trigger.isPhaseTransition)
+                    {
+                        StartCoroutine(PerformPhaseTransition(trigger));
+                    }
+                    else
+                    {
+                        GameObject targetObj = (currentTarget != null) ? currentTarget.gameObject : gameObject;
+                        AbilityHolder.UseAbility(trigger.abilityToUse, targetObj, true);
+                    }
+                    // ------------------------------------------
                     break;
                 }
             }
         }
     }
+
+    // --- AAA FIX: Phase Transition Logic ---
+    private IEnumerator PerformPhaseTransition(HealthThresholdTrigger trigger)
+    {
+        IsInActionSequence = true; // Locks out normal AI thinking/rotation
+
+        if (Health != null) Health.isInvulnerable = true;
+        if (StatusEffects != null && trigger.clearDebuffsOnPhase) StatusEffects.ClearAllNegativeEffects();
+
+        if (Animator != null && !string.IsNullOrEmpty(trigger.phaseAnimationTrigger))
+        {
+            Animator.ResetTrigger(attackTriggerHash); // Clear pending attacks
+            Animator.SetTrigger(trigger.phaseAnimationTrigger);
+        }
+
+        StopMovement();
+
+        if (trigger.abilityToUse != null)
+        {
+            GameObject targetObj = (currentTarget != null) ? currentTarget.gameObject : gameObject;
+            AbilityHolder.UseAbility(trigger.abilityToUse, targetObj, true);
+        }
+
+        yield return new WaitForSeconds(trigger.invulnerabilityDuration);
+
+        if (Health != null) Health.isInvulnerable = false;
+        IsInActionSequence = false;
+    }
+    // ---------------------------------------
 
     private void HandlePlayerAbilityUsed(PlayerAbilityHolder player, Ability usedAbility, GameObject target, Vector3 targetPosition)
     {
@@ -598,6 +650,14 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     private void ExecuteReaction(ReactiveTrigger trigger, Transform playerTransform)
     {
+        // --- AAA FIX: Block Dodging if Crowd Controlled! ---
+        if (StatusEffects != null && (StatusEffects.IsStunned || StatusEffects.IsRooted))
+        {
+            UnityEngine.Debug.Log($"<color=grey>[Enemy Reaction] Blocked: Enemy is Stunned or Rooted.</color>");
+            return;
+        }
+        // ---------------------------------------------------
+
         switch (trigger.reactionAction)
         {
             case AIReactionAction.CastReactionAbility:
@@ -640,40 +700,34 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
-    // --- AAA HORIZONTAL GOD-MODE ROLL ---
     private IEnumerator PerformRollDodge(Vector3 targetPos)
     {
-        IsInActionSequence = true; // Locks out normal AI thinking/rotation/animation updates
+        IsInActionSequence = true;
 
-        // 1. Play Dodge Animation Instantly
         if (Animator != null)
         {
-            Animator.ResetTrigger(attackTriggerHash); // Clear any pending attacks
-            Animator.SetTrigger(rollDodgeHash);
+            Animator.ResetTrigger(attackTriggerHash);
+            Animator.Play("RollDodge", 0, 0f);
         }
 
-        // 2. Enable I-Frames (God Mode)
         if (Health != null) Health.isInvulnerable = true;
 
-        // 3. Detach from NavMesh temporarily to slide seamlessly
         if (NavAgent != null && NavAgent.isOnNavMesh)
         {
             NavAgent.isStopped = true;
             NavAgent.updatePosition = false;
         }
 
-        // 4. Slide Logistics
-        float rollDuration = 0.45f; // Fast, snappy dodge (tune this to match your animation length!)
+        float rollDuration = 0.45f;
         float elapsed = 0f;
         Vector3 startPos = transform.position;
 
         while (elapsed < rollDuration)
         {
-            if (isDead) yield break; // Emergency abort if somehow killed
+            if (isDead) yield break;
 
             elapsed += Time.deltaTime;
 
-            // Smooth ease-out lerp (Fast explosive start, slows down at the end)
             float t = elapsed / rollDuration;
             float easeOut = 1f - (1f - t) * (1f - t);
 
@@ -681,7 +735,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             yield return null;
         }
 
-        // 5. Reattach to NavMesh safely
         if (!isDead)
         {
             transform.position = targetPos;
@@ -694,11 +747,9 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             }
         }
 
-        // 6. Disable I-Frames and resume normal combat logic
         if (Health != null) Health.isInvulnerable = false;
         IsInActionSequence = false;
     }
-    // ------------------------------------
 
     private void HandleCastStarted(string n, float d) { enemyHealthUI?.StartCast(n, d); SetAIStatus("Combat", "Casting"); if (NavAgent.isOnNavMesh && !isStationary) NavAgent.ResetPath(); }
     private void HandleCastFinished() { enemyHealthUI?.StopCast(); recoveryTimer = Time.time + attackRecoveryDelay; }

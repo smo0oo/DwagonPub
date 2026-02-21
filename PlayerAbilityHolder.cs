@@ -11,6 +11,13 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     public static event Action<float, float, Vector3> OnCameraShakeRequest;
 
+    // --- AAA FIX: Wrapper to allow enemies to shake the camera ---
+    public static void TriggerCameraShake(float intensity, float duration, Vector3 position)
+    {
+        OnCameraShakeRequest?.Invoke(intensity, duration, position);
+    }
+    // -------------------------------------------------------------
+
     public event Action<string, float> OnCastStarted;
     public event Action OnCastFinished;
 

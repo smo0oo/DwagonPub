@@ -8,7 +8,6 @@ public class EnemyAbilityHolder : MonoBehaviour
     public event Action<string, float> OnCastStarted;
     public event Action OnCastFinished;
 
-    // --- NEW: Broadcasts Major Threats ---
     public static event Action<EnemyAbilityHolder, Ability, Vector3> OnMajorThreatTelegraphed;
 
     [Header("Component References")]
@@ -44,7 +43,6 @@ public class EnemyAbilityHolder : MonoBehaviour
     private GameObject activeTelegraphInstance;
     private Collider[] hitBuffer = new Collider[20];
 
-    // Debug Gizmos
     private Vector3 debugBoxCenter;
     private Vector3 debugBoxSize;
     private Quaternion debugBoxRotation;
@@ -125,9 +123,9 @@ public class EnemyAbilityHolder : MonoBehaviour
                 spawnPos += Vector3.up * 0.05f;
                 activeTelegraphInstance = Instantiate(telegraphToSpawn, spawnPos, spawnRot);
 
-                if (ability.abilityType == AbilityType.GroundAOE)
+                if (ability.abilityType == AbilityType.GroundAOE || ability.abilityType == AbilityType.GroundPlacement)
                 {
-                    float diameter = ability.aoeRadius * 2f;
+                    float diameter = ability.aoeRadius > 0 ? ability.aoeRadius * 2f : 2f;
                     activeTelegraphInstance.transform.localScale = new Vector3(diameter, 1f, diameter);
                 }
             }
@@ -195,6 +193,13 @@ public class EnemyAbilityHolder : MonoBehaviour
             }
         }
 
+        // --- AAA FIX: Link Enemy Ability screen shake right here ---
+        if (ability.screenShakeIntensity > 0)
+        {
+            PlayerAbilityHolder.TriggerCameraShake(ability.screenShakeIntensity, ability.screenShakeDuration, transform.position);
+        }
+        // -----------------------------------------------------------
+
         switch (ability.abilityType)
         {
             case AbilityType.TargetedMelee:
@@ -203,8 +208,9 @@ public class EnemyAbilityHolder : MonoBehaviour
                 activeCastCoroutine = StartCoroutine(PerformSmartMeleeAttack(ability));
                 break;
             case AbilityType.TargetedProjectile:
-            case AbilityType.ForwardProjectile: HandleProjectile(ability, target); break;
+            case AbilityType.ForwardProjectile: HandleProjectile(ability, target, position); break;
             case AbilityType.GroundAOE: HandleGroundAOE(ability, position); break;
+            case AbilityType.GroundPlacement: HandleGroundPlacement(ability, position); break;
             case AbilityType.Self: HandleSelfCast(ability); break;
             case AbilityType.ChanneledBeam: HandleChanneledBeam(ability, target); break;
             case AbilityType.Leap: if (movementHandler != null) movementHandler.ExecuteLeap(position, () => HandleGroundAOE(ability, position)); break;
@@ -257,28 +263,26 @@ public class EnemyAbilityHolder : MonoBehaviour
         int hitCount = Physics.OverlapBoxNonAlloc(center, halfExtents, hitBuffer, transform.rotation, aoeTargetLayers);
         HashSet<GameObject> hitTargets = new HashSet<GameObject>();
         CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
+        GameObject myCasterObj = myRoot != null ? myRoot.gameObject : (enemyAI != null ? enemyAI.gameObject : this.gameObject);
 
         for (int i = 0; i < hitCount; i++)
         {
             Collider hit = hitBuffer[i];
-
             if (hit.gameObject.layer == 21) continue;
 
             CharacterRoot targetRoot = hit.GetComponentInParent<CharacterRoot>();
-
-            if (myRoot != null && targetRoot != null && myRoot == targetRoot) continue;
-
             GameObject uniqueTargetObj = (targetRoot != null) ? targetRoot.gameObject : hit.gameObject;
 
+            if (myCasterObj == uniqueTargetObj) continue;
             if (hitTargets.Contains(uniqueTargetObj)) continue;
             hitTargets.Add(uniqueTargetObj);
 
             Health targetHealth = uniqueTargetObj.GetComponentInChildren<Health>();
             if (targetHealth != null)
             {
-                if (myRoot != null && myRoot.gameObject.layer != uniqueTargetObj.layer)
+                if (myCasterObj.layer != uniqueTargetObj.layer)
                 {
-                    foreach (var effect in ability.hostileEffects) effect.Apply(myRoot.gameObject, uniqueTargetObj);
+                    foreach (var effect in ability.hostileEffects) effect.Apply(myCasterObj, uniqueTargetObj);
                 }
             }
         }
@@ -292,8 +296,9 @@ public class EnemyAbilityHolder : MonoBehaviour
             if (vfx != null) vfx.SetActive(true);
         }
         int hitCount = Physics.OverlapSphereNonAlloc(position, ability.aoeRadius, hitBuffer, aoeTargetLayers);
-        List<CharacterRoot> affectedCharacters = new List<CharacterRoot>();
+        HashSet<GameObject> affectedObjects = new HashSet<GameObject>();
         CharacterRoot casterRoot = this.GetComponentInParent<CharacterRoot>();
+        GameObject myCasterObj = casterRoot != null ? casterRoot.gameObject : (enemyAI != null ? enemyAI.gameObject : this.gameObject);
 
         for (int i = 0; i < hitCount; i++)
         {
@@ -302,20 +307,38 @@ public class EnemyAbilityHolder : MonoBehaviour
             if (Vector3.Distance(position, hit.transform.position) > ability.aoeRadius + 1.0f) continue;
 
             CharacterRoot hitCharacter = hit.GetComponentInParent<CharacterRoot>();
+            GameObject hitObj = hitCharacter != null ? hitCharacter.gameObject : hit.gameObject;
 
-            if (hitCharacter == null || affectedCharacters.Contains(hitCharacter)) continue;
-            if (casterRoot != null && hitCharacter == casterRoot) continue;
+            if (myCasterObj == hitObj || affectedObjects.Contains(hitObj)) continue;
+            affectedObjects.Add(hitObj);
 
-            affectedCharacters.Add(hitCharacter);
-
-            if (casterRoot == null) return;
-            if (casterRoot.gameObject.layer != hitCharacter.gameObject.layer)
+            if (myCasterObj.layer != hitObj.layer)
             {
-                foreach (var effect in ability.hostileEffects) effect.Apply(casterRoot.gameObject, hitCharacter.gameObject);
+                foreach (var effect in ability.hostileEffects) effect.Apply(myCasterObj, hitObj);
             }
             else
             {
-                foreach (var effect in ability.friendlyEffects) effect.Apply(casterRoot.gameObject, hitCharacter.gameObject);
+                foreach (var effect in ability.friendlyEffects) effect.Apply(myCasterObj, hitObj);
+            }
+        }
+    }
+
+    private void HandleGroundPlacement(Ability ability, Vector3 position)
+    {
+        if (ability.placementPrefab != null)
+        {
+            GameObject placedObject = Instantiate(ability.placementPrefab, position, Quaternion.identity);
+
+            CharacterRoot casterRoot = GetComponentInParent<CharacterRoot>();
+            GameObject myCasterObj = casterRoot != null ? casterRoot.gameObject : (enemyAI != null ? enemyAI.gameObject : this.gameObject);
+
+            if (placedObject.TryGetComponent<AreaBombardmentController>(out var bombardment))
+            {
+                bombardment.Initialize(myCasterObj, ability);
+            }
+            else if (placedObject.TryGetComponent<PlaceableTrap>(out var trap))
+            {
+                trap.owner = myCasterObj;
             }
         }
     }
@@ -324,7 +347,7 @@ public class EnemyAbilityHolder : MonoBehaviour
     public bool CanUseAbility(Ability ability, GameObject target) { if (ability == null || IsCasting) return false; if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false; if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false; return true; }
     private void HandleChanneledBeam(Ability ability, GameObject target) { GameObject prefab = ability.enemyProjectilePrefab ?? ability.playerProjectilePrefab; if (prefab != null) { GameObject beam = Instantiate(prefab, transform.position, transform.rotation); if (beam.TryGetComponent<ChanneledBeamController>(out var b)) { b.Initialize(ability, gameObject, target); ActiveBeam = b; } } }
     private void HandleSelfCast(Ability ability) { foreach (var effect in ability.friendlyEffects) effect.Apply(gameObject, gameObject); }
-    private void HandleProjectile(Ability ability, GameObject target)
+    private void HandleProjectile(Ability ability, GameObject target, Vector3 fallbackPosition)
     {
         GameObject prefab = ability.enemyProjectilePrefab ?? ability.playerProjectilePrefab;
         if (prefab == null) return;
@@ -332,6 +355,7 @@ public class EnemyAbilityHolder : MonoBehaviour
         Vector3 spawnPos = spawnT.position;
         if (spawnT == transform) spawnPos += Vector3.up * 1.5f;
         Quaternion spawnRot = spawnT.rotation;
+
         if (target != null)
         {
             Vector3 tPos = target.transform.position;
@@ -339,14 +363,27 @@ public class EnemyAbilityHolder : MonoBehaviour
             Vector3 dir = tPos - spawnPos; dir.y = 0;
             if (dir.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(dir);
         }
+        else
+        {
+            Vector3 dir = fallbackPosition - spawnPos; dir.y = 0;
+            if (dir.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(dir);
+        }
+
         GameObject pGO = ObjectPooler.instance.Get(prefab, spawnPos, spawnRot);
         if (pGO == null) return;
         pGO.layer = LayerMask.NameToLayer("HostileRanged");
         Collider pCol = pGO.GetComponent<Collider>();
-        if (pCol != null) foreach (Collider c in GetComponentInParent<CharacterRoot>().GetComponentsInChildren<Collider>()) Physics.IgnoreCollision(pCol, c);
-        if (pGO.TryGetComponent<Projectile>(out var p)) p.Initialize(ability, gameObject, GetComponentInParent<CharacterRoot>().gameObject.layer);
+        if (pCol != null) foreach (Collider c in GetComponentsInParent<Collider>()) Physics.IgnoreCollision(pCol, c);
+
+        if (pGO.TryGetComponent<Projectile>(out var p))
+        {
+            CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
+            int layer = myRoot != null ? myRoot.gameObject.layer : gameObject.layer;
+            p.Initialize(ability, gameObject, layer);
+        }
         pGO.SetActive(true);
     }
+
     private Transform GetAnchorTransform(VFXAnchor anchor)
     {
         if (anchor == VFXAnchor.LeftHand && leftHandAnchor) return leftHandAnchor;
