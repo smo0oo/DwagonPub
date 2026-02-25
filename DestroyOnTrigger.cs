@@ -25,6 +25,9 @@ public class DestroyOnTrigger : MonoBehaviour
 
     private void OnTriggerEnter(Collider other)
     {
+        // AAA FIX: Explicitly ignore ClothPhysics so the trigger doesn't double-fire if the mask ever overlaps
+        if (other.gameObject.layer == LayerMask.NameToLayer("ClothPhysics")) return;
+
         if (IsInLayerMask(other.gameObject.layer, targetLayer))
         {
             if (!string.IsNullOrEmpty(questName))

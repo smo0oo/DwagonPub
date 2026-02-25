@@ -47,6 +47,9 @@ public class MeleeHitbox : MonoBehaviour
 
     void OnTriggerEnter(Collider other)
     {
+        // AAA FIX: Ignore cloth physics layer so swords don't hit capes
+        if (other.gameObject.layer == LayerMask.NameToLayer("ClothPhysics")) return;
+
         if (debugMode) Debug.Log($"[MeleeHitbox] Hit: {other.name} on Layer: {LayerMask.LayerToName(other.gameObject.layer)}");
 
         // 1. Find Health (Check Parent to handle Colliders on child meshes)

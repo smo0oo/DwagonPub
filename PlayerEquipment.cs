@@ -2,6 +2,7 @@ using UnityEngine;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using MagicaCloth2;
 
 [System.Serializable]
 public class DefaultLoadoutItem
@@ -11,12 +12,11 @@ public class DefaultLoadoutItem
     public int quantity = 1;
 }
 
-// 1. NEW: A structure to define your "Naked" parts
 [System.Serializable]
 public class BodyPartDefault
 {
     public EquipmentType slot;
-    public GameObject prefab; // Drag your "Naked Hands", "Naked Feet" here
+    public GameObject prefab;
 }
 
 public class PlayerEquipment : MonoBehaviour
@@ -35,12 +35,14 @@ public class PlayerEquipment : MonoBehaviour
     public List<DefaultLoadoutItem> startingLoadout;
 
     [Header("Naked Body Parts")]
-    [Tooltip("If a slot is empty, these prefabs will be shown (Purely visual, no stats).")]
-    public List<BodyPartDefault> defaultBodyParts; // <--- 2. NEW FIELD
+    public List<BodyPartDefault> defaultBodyParts;
 
     private Dictionary<EquipmentType, GameObject> equippedVisuals = new Dictionary<EquipmentType, GameObject>();
     private Inventory playerInventory;
     private PlayerStats playerStats;
+
+    // Cache the exact bones found on your player character for 1:1 matching
+    private Dictionary<string, Transform> boneMap = new Dictionary<string, Transform>();
 
     void Awake()
     {
@@ -56,22 +58,39 @@ public class PlayerEquipment : MonoBehaviour
             equippedItems[slot] = null;
             equippedVisuals.Add(slot, null);
         }
+
+        CacheSkeletonBones();
     }
 
     void Start()
     {
-        // 3. First, ensure the body is fully "Naked"
         InitializeNakedBody();
-
-        // Then equip any starting gear on top
         EquipDefaults();
+    }
+
+    private void CacheSkeletonBones()
+    {
+        if (targetMesh == null) return;
+
+        boneMap.Clear();
+        foreach (Transform bone in targetMesh.bones)
+        {
+            if (bone != null && !boneMap.ContainsKey(bone.name))
+            {
+                boneMap.Add(bone.name, bone);
+            }
+        }
+
+        if (targetMesh.rootBone != null && !boneMap.ContainsKey(targetMesh.rootBone.name))
+        {
+            boneMap.Add(targetMesh.rootBone.name, targetMesh.rootBone);
+        }
     }
 
     private void InitializeNakedBody()
     {
         foreach (EquipmentType slot in Enum.GetValues(typeof(EquipmentType)))
         {
-            // If the slot is empty, show the naked part
             if (!equippedItems.ContainsKey(slot) || equippedItems[slot] == null)
             {
                 RestoreNakedPart(slot);
@@ -93,33 +112,24 @@ public class PlayerEquipment : MonoBehaviour
         playerStats?.CalculateFinalStats();
     }
 
-    // --- VISUAL LOGIC ---
-
     private void EquipVisual(EquipmentType slot, ItemData itemData)
     {
         if (itemData == null || itemData.equippedPrefab == null) return;
-
-        // Delegate to the shared internal method
         CreateAndBindVisual(slot, itemData.equippedPrefab, itemData.itemType == ItemType.Weapon);
     }
 
-    // 4. NEW: Logic to restore the default part
     private void RestoreNakedPart(EquipmentType slot)
     {
-        // Find the matching default prefab
         var defaultPart = defaultBodyParts.Find(x => x.slot == slot);
 
         if (defaultPart != null && defaultPart.prefab != null)
         {
-            // Treat it like Armour (Skinned Mesh)
             CreateAndBindVisual(slot, defaultPart.prefab, false);
         }
     }
 
-    // 5. REFACTORED: Shared logic for Items AND Naked parts
     private void CreateAndBindVisual(EquipmentType slot, GameObject prefab, bool isWeapon)
     {
-        // Always clean up the old visual first (whether it was armor or a naked arm)
         DestroyVisual(slot);
 
         if (isWeapon)
@@ -129,22 +139,110 @@ public class PlayerEquipment : MonoBehaviour
             GameObject visual = Instantiate(prefab, attachPoint);
             visual.transform.localPosition = Vector3.zero;
             visual.transform.localRotation = Quaternion.identity;
+            visual.transform.localScale = Vector3.one;
             equippedVisuals[slot] = visual;
         }
         else
         {
-            // ARMOUR / BODY PART LOGIC
             if (targetMesh == null) return;
+            if (boneMap.Count == 0) CacheSkeletonBones();
 
             GameObject visual = Instantiate(prefab, targetMesh.transform.parent);
-            SkinnedMeshRenderer[] renderers = visual.GetComponentsInChildren<SkinnedMeshRenderer>();
+            visual.transform.localPosition = Vector3.zero;
+            visual.transform.localRotation = Quaternion.identity;
+            visual.transform.localScale = Vector3.one;
 
-            // Support multiple meshes (e.g., Left Boot + Right Boot in one prefab)
+            // --- AAA CLOTH FIX STEP 1: HALT AUTOMATIC BUILD ---
+            MagicaCloth[] clothComponents = visual.GetComponentsInChildren<MagicaCloth>(true);
+            foreach (var cloth in clothComponents)
+            {
+                // Force it to pause its startup sequence so it doesn't build on the dummy bones
+                cloth.enabled = false;
+            }
+
+            SkinnedMeshRenderer[] renderers = visual.GetComponentsInChildren<SkinnedMeshRenderer>();
+            List<GameObject> skeletonRootsToCleanup = new List<GameObject>();
+
             foreach (var renderer in renderers)
             {
-                renderer.bones = targetMesh.bones;
-                renderer.rootBone = targetMesh.rootBone;
+                renderer.updateWhenOffscreen = true;
+
+                if (renderer.rootBone != null)
+                {
+                    Transform prefabSkeletonRoot = renderer.rootBone;
+                    while (prefabSkeletonRoot.parent != null && prefabSkeletonRoot.parent != visual.transform)
+                    {
+                        prefabSkeletonRoot = prefabSkeletonRoot.parent;
+                    }
+                    if (!skeletonRootsToCleanup.Contains(prefabSkeletonRoot.gameObject))
+                        skeletonRootsToCleanup.Add(prefabSkeletonRoot.gameObject);
+                }
+
+                Transform[] newBones = new Transform[renderer.bones.Length];
+                for (int i = 0; i < renderer.bones.Length; i++)
+                {
+                    Transform originalBone = renderer.bones[i];
+                    if (originalBone == null) continue;
+
+                    if (boneMap.TryGetValue(originalBone.name, out Transform matchingBone))
+                    {
+                        newBones[i] = matchingBone;
+                    }
+                    else
+                    {
+                        newBones[i] = originalBone;
+                        Debug.LogWarning($"[Skinning] Could not find bone '{originalBone.name}' on player rig!");
+                    }
+                }
+
+                renderer.bones = newBones;
+
+                if (renderer.rootBone != null && boneMap.TryGetValue(renderer.rootBone.name, out Transform matchingRoot))
+                    renderer.rootBone = matchingRoot;
+                else
+                    renderer.rootBone = targetMesh.rootBone;
+
+                renderer.localBounds = targetMesh.localBounds;
             }
+
+            // AAA CLEANUP: Destroy redundant zombie bones
+            foreach (var root in skeletonRootsToCleanup)
+            {
+                Destroy(root);
+            }
+
+            // --- AAA CLOTH COLLIDER INJECTION & REBUILD ---
+
+            // 1. Gather all valid Magica colliders currently on the player's rig
+            List<ColliderComponent> playerColliders = new List<ColliderComponent>();
+            ColliderComponent[] allCols = targetMesh.transform.parent.GetComponentsInChildren<ColliderComponent>(true);
+
+            foreach (var col in allCols)
+            {
+                // Ignore the dead colliders sitting inside the newly spawned armor visual
+                if (!col.transform.IsChildOf(visual.transform))
+                {
+                    playerColliders.Add(col);
+                }
+            }
+
+            foreach (var cloth in clothComponents)
+            {
+                // 2. Prevent stretching by updating internal transform references to the new player bones
+                cloth.ReplaceTransform(boneMap);
+
+                // 3. Inject the global collision hull into the simulation parameters
+                if (cloth.SerializeData != null && cloth.SerializeData.colliderCollisionConstraint != null)
+                {
+                    cloth.SerializeData.colliderCollisionConstraint.colliderList.Clear();
+                    cloth.SerializeData.colliderCollisionConstraint.colliderList.AddRange(playerColliders);
+                }
+
+                // 4. Safely wake up the physics and compile the updated constraints
+                cloth.enabled = true;
+                cloth.BuildAndRun();
+            }
+
             equippedVisuals[slot] = visual;
         }
     }
@@ -168,28 +266,14 @@ public class PlayerEquipment : MonoBehaviour
         }
     }
 
-    // --- EQUIPMENT LOGIC ---
-
     public ItemStack EquipItem(EquipmentType slot, ItemStack itemToEquip)
     {
         ItemStack previouslyEquippedItem = equippedItems[slot];
-
-        // 1. Remove old visual
         DestroyVisual(slot);
-
-        // 2. Set Data
         equippedItems[slot] = itemToEquip;
 
-        // 3. Create new visual OR Restore Default
-        if (itemToEquip != null)
-        {
-            EquipVisual(slot, itemToEquip.itemData);
-        }
-        else
-        {
-            // 6. CRITICAL FIX: If we equipped "Nothing", show Naked Part
-            RestoreNakedPart(slot);
-        }
+        if (itemToEquip != null) EquipVisual(slot, itemToEquip.itemData);
+        else RestoreNakedPart(slot);
 
         playerStats?.CalculateFinalStats();
         OnEquipmentChanged?.Invoke(slot);
@@ -203,8 +287,6 @@ public class PlayerEquipment : MonoBehaviour
         if (removedItem != null)
         {
             equippedItems[slot] = null;
-
-            // 7. CRITICAL FIX: Destroy armor -> Restore Naked Part immediately
             DestroyVisual(slot);
             RestoreNakedPart(slot);
 
@@ -213,8 +295,6 @@ public class PlayerEquipment : MonoBehaviour
         }
         return removedItem;
     }
-
-    // ... (Rest of the class methods like UnequipItem, RestoreEquipment remain the same) ...
 
     public void EquipItem(ItemData item, int quantity = 1)
     {
@@ -225,7 +305,6 @@ public class PlayerEquipment : MonoBehaviour
     public bool UnequipItem(EquipmentType slot)
     {
         if (playerInventory == null || equippedItems[slot] == null) return false;
-
         ItemStack itemToUnequip = equippedItems[slot];
 
         if (playerInventory.AddItem(itemToUnequip.itemData, itemToUnequip.quantity))
@@ -252,15 +331,12 @@ public class PlayerEquipment : MonoBehaviour
         }
         if (item.stats is ItemWeaponStats) return EquipmentType.RightHand;
         if (item.stats is ItemTrinketStats) return EquipmentType.Ring1;
-
         return EquipmentType.RightHand;
     }
 
     public void RestoreEquipment(Dictionary<EquipmentType, ItemStack> savedEquipment)
     {
-        // Clear everything first (sets to naked)
         InitializeNakedBody();
-
         foreach (var kvp in savedEquipment)
         {
             if (kvp.Value != null && kvp.Value.itemData != null)

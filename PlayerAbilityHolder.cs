@@ -193,6 +193,7 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         if (animator != null)
         {
+            // PHASE 1: WIND-UP / CASTING (Strictly uses telegraphAnimationTrigger or castTriggerHash)
             if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger)) animator.SetTrigger(ability.telegraphAnimationTrigger);
             else if (hasCastTrigger) animator.SetTrigger(castTriggerHash);
         }
@@ -293,9 +294,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (ability.screenShakeIntensity > 0)
             OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration, transform.position);
 
-        // --- AAA FIX: Broadcast exactly WHERE and WHO this ability is aiming at ---
         OnPlayerAbilityUsed?.Invoke(this, ability, target, position);
-        // -------------------------------------------------------------------------
 
         if (triggerAnimation) TriggerAttackAnimation(ability);
 
@@ -410,6 +409,8 @@ public class PlayerAbilityHolder : MonoBehaviour
             animator.ResetTrigger(attackHash);
             float animSpeed = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
             animator.SetFloat(attackSpeedHash, animSpeed);
+
+            // PHASE 2: EXECUTION / ATTACK (Strictly uses overrideTriggerName, otherwise defaults to standard Attack combo)
             if (!string.IsNullOrEmpty(ability.overrideTriggerName)) animator.SetTrigger(ability.overrideTriggerName);
             else { animator.SetInteger(attackStyleHash, ability.attackStyleIndex); animator.SetTrigger(attackHash); }
         }

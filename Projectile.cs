@@ -55,6 +55,9 @@ public class Projectile : MonoBehaviour
 
     private void OnTriggerEnter(Collider other)
     {
+        // AAA FIX: Ignore cloth physics layer to prevent projectiles hitting capes
+        if (other.gameObject.layer == LayerMask.NameToLayer("ClothPhysics")) return;
+
         // 1. Explicitly ignore ActivationTrigger (Layer 21)
         if (other.gameObject.layer == 21) return;
 
@@ -111,6 +114,9 @@ public class Projectile : MonoBehaviour
 
         foreach (var hit in hits)
         {
+            // AAA FIX: Ignore cloth physics layer in AoE explosions
+            if (hit.gameObject.layer == LayerMask.NameToLayer("ClothPhysics")) continue;
+
             if (hit.gameObject.layer == 21) continue;
 
             CharacterRoot target = hit.GetComponentInParent<CharacterRoot>();

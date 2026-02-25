@@ -89,8 +89,12 @@ public class EnemyAbilityHolder : MonoBehaviour
         IsCasting = true;
         try
         {
-            if (ability.telegraphDuration > 0 && animator != null && !string.IsNullOrEmpty(ability.telegraphAnimationTrigger))
-                animator.SetTrigger(ability.telegraphAnimationTrigger);
+            // PHASE 1: WIND-UP / CASTING (Strictly uses telegraphAnimationTrigger)
+            if ((ability.telegraphDuration > 0 || ability.castTime > 0) && animator != null)
+            {
+                if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger))
+                    animator.SetTrigger(ability.telegraphAnimationTrigger);
+            }
 
             if (ability.castingVFX != null)
             {
@@ -193,12 +197,14 @@ public class EnemyAbilityHolder : MonoBehaviour
             }
         }
 
-        // --- AAA FIX: Link Enemy Ability screen shake right here ---
         if (ability.screenShakeIntensity > 0)
         {
             PlayerAbilityHolder.TriggerCameraShake(ability.screenShakeIntensity, ability.screenShakeDuration, transform.position);
         }
-        // -----------------------------------------------------------
+
+        // PHASE 2: EXECUTION / ATTACK
+        // EnemyAI.cs handles the execution animation trigger when it calls PerformAttack. 
+        // We let the AI state machine trigger `overrideTriggerName` there so we don't double-fire.
 
         switch (ability.abilityType)
         {
