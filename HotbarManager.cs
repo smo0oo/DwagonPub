@@ -251,7 +251,6 @@ public class HotbarManager : MonoBehaviour
         RefreshHotbarSlot(hotbarIndex);
     }
 
-    // [FIX] NEW: Handles swapping two hotbar slots (Swaps the data assignment and refreshes visuals)
     public void SwapHotbarSlots(int indexA, int indexB)
     {
         if (currentPlayerHotbar == null) return;
@@ -259,12 +258,10 @@ public class HotbarManager : MonoBehaviour
         if (indexB < 0 || indexB >= hotbarSlots.Count) return;
         if (indexA == indexB) return;
 
-        // Swap the actual data in the PlayerHotbar (Persistent Data)
         HotbarAssignment temp = currentPlayerHotbar.hotbarSlotAssignments[indexA];
         currentPlayerHotbar.hotbarSlotAssignments[indexA] = currentPlayerHotbar.hotbarSlotAssignments[indexB];
         currentPlayerHotbar.hotbarSlotAssignments[indexB] = temp;
 
-        // Update the visual slots
         RefreshHotbarSlot(indexA);
         RefreshHotbarSlot(indexB);
     }
@@ -305,5 +302,31 @@ public class HotbarManager : MonoBehaviour
 
         HotbarAssignment assignment = currentPlayerHotbar.hotbarSlotAssignments[hotbarIndex];
         h_slot.UpdateSlot(assignment);
+    }
+
+    // --- NEW: AAA Auto-Assign Logic ---
+    public void AutoAssignAbility(Ability ability)
+    {
+        if (currentPlayerHotbar == null || ability == null) return;
+
+        // 1. Prevent duplicates: Check if this exact ability is already on the hotbar
+        for (int i = 0; i < currentPlayerHotbar.hotbarSlotAssignments.Length; i++)
+        {
+            if (currentPlayerHotbar.hotbarSlotAssignments[i].type == HotbarAssignment.AssignmentType.Ability &&
+                currentPlayerHotbar.hotbarSlotAssignments[i].ability == ability)
+            {
+                return; // Already on the hotbar
+            }
+        }
+
+        // 2. Find the first empty slot and assign it
+        for (int i = 0; i < currentPlayerHotbar.hotbarSlotAssignments.Length; i++)
+        {
+            if (currentPlayerHotbar.hotbarSlotAssignments[i].type == HotbarAssignment.AssignmentType.Unassigned)
+            {
+                SetHotbarSlotWithAbility(i, ability);
+                break; // Stop after assigning to the first available slot
+            }
+        }
     }
 }

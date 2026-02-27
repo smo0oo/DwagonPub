@@ -38,32 +38,35 @@ public class NPCInteraction : MonoBehaviour, IInteractable
 
     public void Interact(GameObject interactor)
     {
-        if (dialogueSystemTrigger != null)
+        if (dialogueSystemTrigger != null && !string.IsNullOrEmpty(dialogueSystemTrigger.conversation))
         {
-            // --- FIX FOR INCORRECT NAMES ---
-            // 1. Identify the ACTOR (The Active Player)
-            GameObject playerObj = PartyManager.instance != null ? PartyManager.instance.ActivePlayer : interactor;
-            Transform actorTransform = playerObj.transform;
+            GameObject activePlayer = PartyManager.instance != null ? PartyManager.instance.ActivePlayer : interactor;
 
-            // 2. Identify the CONVERSANT (This NPC)
-            Transform conversantTransform = this.transform;
+            // --- EXPOSE THE IMPOSTOR ---
+            // 'true' forces Unity to search even hidden/disabled objects in your prefab hierarchy
+            DialogueActor[] allHiddenActors = activePlayer.GetComponentsInChildren<DialogueActor>(true);
 
-            // 3. Check if this trigger is configured for a Conversation
-            if (!string.IsNullOrEmpty(dialogueSystemTrigger.conversation))
+            Debug.Log($"<color=cyan>--- SEARCHING PLAYER: {activePlayer.name} ---</color>");
+            foreach (DialogueActor actor in allHiddenActors)
             {
-                // 4. Force Start with Explicit Transforms
-                // This guarantees the Dialogue System knows exactly who is talking to whom.
-                DialogueManager.StartConversation(
-                    dialogueSystemTrigger.conversation,
-                    actorTransform,
-                    conversantTransform
-                );
+                Debug.Log($"<color=yellow>Found ID:</color> '{actor.actor}' attached to the child object: <color=orange>'{actor.gameObject.name}'</color>");
             }
-            else
-            {
-                // Fallback for Barks, Lua-Only triggers, or Sequences
-                dialogueSystemTrigger.OnUse(actorTransform);
-            }
+            Debug.Log($"<color=cyan>--------------------------------------</color>");
+
+            // Grab the very first one it finds (This mimics what Pixel Crushers does internally)
+            DialogueActor pActor = allHiddenActors.Length > 0 ? allHiddenActors[0] : null;
+            DialogueActor nActor = this.GetComponentInChildren<DialogueActor>();
+
+            Transform pTransform = pActor != null ? pActor.transform : activePlayer.transform;
+            Transform nTransform = nActor != null ? nActor.transform : this.transform;
+
+            // Bypass the trigger's inspector and force the conversation with these exact transforms
+            DialogueManager.StartConversation(dialogueSystemTrigger.conversation, pTransform, nTransform);
+        }
+        else if (dialogueSystemTrigger != null)
+        {
+            // Fallback for Barks (Floating text without a conversation)
+            dialogueSystemTrigger.OnUse(interactor.transform);
         }
     }
 

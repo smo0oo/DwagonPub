@@ -280,9 +280,8 @@ public class GameManager : MonoBehaviour
     {
         if (isInDialogue)
         {
+            // Only disable movement so they don't walk away during dialogue
             SetPlayerMovementComponentsActive(false);
-            if (sharedCanvasGroup != null) ConfigureGroup(sharedCanvasGroup, false);
-            if (battleCanvasGroup != null) ConfigureGroup(battleCanvasGroup, false);
         }
         else
         {
@@ -396,7 +395,6 @@ public class GameManager : MonoBehaviour
         isTransitioning = true;
         IsSequenceModeActive = false;
 
-        // [FIX] Disable controls IMMEDIATELY to prevent input bleed while fading out
         SetPlayerMovementComponentsActive(false);
 
         if (currentSceneType == SceneType.WorldMap) CaptureWagonState();
@@ -408,8 +406,6 @@ public class GameManager : MonoBehaviour
 
         float startTime = Time.realtimeSinceStartup;
 
-        // --- CONTEXT-AWARE LOADING SCREEN LOGIC ---
-        // Guess the SceneType based on name (allows showing specific lore cards)
         SceneType guessedType = SceneType.Dungeon;
         if (sceneName.Contains("WorldMap")) guessedType = SceneType.WorldMap;
         else if (sceneName.Contains("Town")) guessedType = SceneType.Town;
@@ -418,7 +414,6 @@ public class GameManager : MonoBehaviour
         {
             LoadingScreenManager.instance.SetLoadContext(sceneName, guessedType);
         }
-        // ------------------------------------------
 
         yield return LoadingScreenManager.instance.ShowLoadingScreen(fadeDuration);
 
@@ -586,7 +581,6 @@ public class GameManager : MonoBehaviour
         isTransitioning = true;
         IsSequenceModeActive = false;
 
-        // [FIX] Disable controls IMMEDIATELY
         SetPlayerMovementComponentsActive(false);
 
         NodeType typeBeforeExit = lastLocationType;
@@ -594,7 +588,6 @@ public class GameManager : MonoBehaviour
         lastLocationType = NodeType.Scene;
         float startTime = Time.realtimeSinceStartup;
 
-        // Pass World Map context
         if (LoadingScreenManager.instance != null)
         {
             LoadingScreenManager.instance.SetLoadContext(worldMapSceneName, SceneType.WorldMap);
@@ -678,10 +671,8 @@ public class GameManager : MonoBehaviour
         isTransitioning = true;
         IsSequenceModeActive = false;
 
-        // Disable controls immediately for load too
         SetPlayerMovementComponentsActive(false);
 
-        // Pass generic load context
         if (LoadingScreenManager.instance != null)
         {
             LoadingScreenManager.instance.SetLoadContext(startingSceneName, SceneType.MainMenu);

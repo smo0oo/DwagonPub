@@ -18,9 +18,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public Animator Animator { get; private set; }
     public CharacterMovementHandler MovementHandler { get; private set; }
 
-    // --- AAA FIX: Status Effect Tracking ---
     public StatusEffectHolder StatusEffects { get; private set; }
-    // ---------------------------------------
 
     public float LastExecutionTimeMs { get; private set; }
     private Stopwatch _perfWatch = new Stopwatch();
@@ -107,7 +105,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         Targeting = GetComponent<AITargeting>();
         AbilitySelector = GetComponent<AIAbilitySelector>();
         MovementHandler = GetComponent<CharacterMovementHandler>();
-        StatusEffects = GetComponent<StatusEffectHolder>(); // Hook up CC
+        StatusEffects = GetComponent<StatusEffectHolder>();
 
         velocityXHash = Animator.StringToHash("VelocityX");
         velocityZHash = Animator.StringToHash("VelocityZ");
@@ -189,7 +187,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
         while (!isDead && this.enabled)
         {
-            // --- AAA FIX: Suspend thinking if Stunned ---
             if (StatusEffects != null && StatusEffects.IsStunned)
             {
                 yield return wait;
@@ -215,13 +212,12 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             return;
         }
 
-        // --- AAA FIX: Check for Crowd Control ---
         if (StatusEffects != null)
         {
             if (StatusEffects.IsStunned)
             {
                 StopMovement();
-                if (Animator != null) Animator.speed = 0f; // Freeze animation beautifully
+                if (Animator != null) Animator.speed = 0f;
 
                 _perfWatch.Stop();
                 LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
@@ -229,12 +225,10 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             }
             else
             {
-                if (Animator != null && Animator.speed == 0f) Animator.speed = 1f; // Unfreeze
-
-                if (StatusEffects.IsRooted) StopMovement(); // Block movement but allow attacks
+                if (Animator != null && Animator.speed == 0f) Animator.speed = 1f;
+                if (StatusEffects.IsRooted) StopMovement();
             }
         }
-        // ----------------------------------------
 
         HandleRotation();
 
@@ -318,20 +312,10 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     public void PerformAttack(Ability ability)
     {
-        if (StatusEffects != null && StatusEffects.IsStunned) return; // Cant attack if stunned
+        if (StatusEffects != null && StatusEffects.IsStunned) return;
 
-        if (Animator != null)
-        {
-            if (!string.IsNullOrEmpty(ability.overrideTriggerName))
-            {
-                Animator.SetTrigger(ability.overrideTriggerName);
-            }
-            else
-            {
-                Animator.SetInteger(attackIndexHash, ability.attackStyleIndex > 0 ? ability.attackStyleIndex : UnityEngine.Random.Range(0, 3));
-                Animator.SetTrigger(attackTriggerHash);
-            }
-        }
+        // Animation logic has been entirely shifted to EnemyAbilityHolder.cs
+        // to match the AAA player pipeline and ensure casting perfectly syncs with execution.
         AbilityHolder.UseAbility(ability, currentTarget?.gameObject ?? gameObject);
     }
 
@@ -486,7 +470,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
         if (Animator != null)
         {
-            Animator.speed = 1f; // Failsafe so death animation always plays even if they die while stunned
+            Animator.speed = 1f;
             Animator.SetFloat(velocityXHash, 0f);
             Animator.SetFloat(velocityZHash, 0f);
             Animator.ResetTrigger(attackTriggerHash);
@@ -526,7 +510,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
                 {
                     triggeredHealthPhases.Add(trigger);
 
-                    // --- AAA FIX: Support Phase Transitions ---
                     if (trigger.isPhaseTransition)
                     {
                         StartCoroutine(PerformPhaseTransition(trigger));
@@ -536,24 +519,22 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
                         GameObject targetObj = (currentTarget != null) ? currentTarget.gameObject : gameObject;
                         AbilityHolder.UseAbility(trigger.abilityToUse, targetObj, true);
                     }
-                    // ------------------------------------------
                     break;
                 }
             }
         }
     }
 
-    // --- AAA FIX: Phase Transition Logic ---
     private IEnumerator PerformPhaseTransition(HealthThresholdTrigger trigger)
     {
-        IsInActionSequence = true; // Locks out normal AI thinking/rotation
+        IsInActionSequence = true;
 
         if (Health != null) Health.isInvulnerable = true;
         if (StatusEffects != null && trigger.clearDebuffsOnPhase) StatusEffects.ClearAllNegativeEffects();
 
         if (Animator != null && !string.IsNullOrEmpty(trigger.phaseAnimationTrigger))
         {
-            Animator.ResetTrigger(attackTriggerHash); // Clear pending attacks
+            Animator.ResetTrigger(attackTriggerHash);
             Animator.SetTrigger(trigger.phaseAnimationTrigger);
         }
 
@@ -570,7 +551,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         if (Health != null) Health.isInvulnerable = false;
         IsInActionSequence = false;
     }
-    // ---------------------------------------
 
     private void HandlePlayerAbilityUsed(PlayerAbilityHolder player, Ability usedAbility, GameObject target, Vector3 targetPosition)
     {
@@ -650,13 +630,11 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     private void ExecuteReaction(ReactiveTrigger trigger, Transform playerTransform)
     {
-        // --- AAA FIX: Block Dodging if Crowd Controlled! ---
         if (StatusEffects != null && (StatusEffects.IsStunned || StatusEffects.IsRooted))
         {
             UnityEngine.Debug.Log($"<color=grey>[Enemy Reaction] Blocked: Enemy is Stunned or Rooted.</color>");
             return;
         }
-        // ---------------------------------------------------
 
         switch (trigger.reactionAction)
         {

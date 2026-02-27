@@ -48,6 +48,9 @@ public class EnemyAbilityHolder : MonoBehaviour
     private Quaternion debugBoxRotation;
     private float debugDisplayTime;
 
+    private int attackTriggerHash;
+    private int attackIndexHash;
+
     public bool IsOnGlobalCooldown() => Time.time < globalCooldownTimer;
 
     void Awake()
@@ -56,6 +59,9 @@ public class EnemyAbilityHolder : MonoBehaviour
         enemyAI = GetComponentInParent<EnemyAI>();
         animator = GetComponentInParent<Animator>();
         if (projectileSpawnPoint == null) projectileSpawnPoint = transform;
+
+        attackTriggerHash = Animator.StringToHash("AttackTrigger");
+        attackIndexHash = Animator.StringToHash("AttackIndex");
     }
 
     void OnDisable() => CancelCast();
@@ -76,22 +82,39 @@ public class EnemyAbilityHolder : MonoBehaviour
         if (!CanUseAbility(ability, target)) return;
         Vector3 position = (target != null) ? target.transform.position : transform.position;
 
+        // --- AAA RANDOMIZATION LOGIC (Calculated at the exact moment the cast starts) ---
+        int styleIndex = ability.attackStyleIndex;
+        if (ability.randomizeAttackStyle && ability.maxRandomVariants > 0)
+        {
+            styleIndex = UnityEngine.Random.Range(0, ability.maxRandomVariants);
+        }
+        else if (ability.attackStyleIndex <= 0 && string.IsNullOrEmpty(ability.overrideTriggerName))
+        {
+            styleIndex = UnityEngine.Random.Range(0, 3); // Fallback for basic enemies
+        }
+        // -------------------------------------------------------------------------------
+
         if (ability.castTime > 0 || ability.telegraphDuration > 0)
         {
             if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
-            activeCastCoroutine = StartCoroutine(PerformCast(ability, target, position, bypassCooldown));
+            activeCastCoroutine = StartCoroutine(PerformCast(ability, target, position, bypassCooldown, styleIndex));
         }
-        else ExecuteAbility(ability, target, position, bypassCooldown);
+        else
+        {
+            ExecuteAbility(ability, target, position, bypassCooldown, true, styleIndex);
+        }
     }
 
-    private IEnumerator PerformCast(Ability ability, GameObject target, Vector3 position, bool bypassCooldown)
+    private IEnumerator PerformCast(Ability ability, GameObject target, Vector3 position, bool bypassCooldown, int styleIndex)
     {
         IsCasting = true;
         try
         {
-            // PHASE 1: WIND-UP / CASTING (Strictly uses telegraphAnimationTrigger)
             if ((ability.telegraphDuration > 0 || ability.castTime > 0) && animator != null)
             {
+                // Inject the rolled style index immediately so the wind-up animation can read it
+                animator.SetInteger(attackIndexHash, styleIndex);
+
                 if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger))
                     animator.SetTrigger(ability.telegraphAnimationTrigger);
             }
@@ -146,7 +169,8 @@ public class EnemyAbilityHolder : MonoBehaviour
 
             if (enemyAI != null && (enemyAI.Health.currentHealth <= 0 || !enemyAI.enabled)) yield break;
 
-            ExecuteAbility(ability, target, position, bypassCooldown);
+            // Pass the generated style index down to the execution phase
+            ExecuteAbility(ability, target, position, bypassCooldown, true, styleIndex);
         }
         finally
         {
@@ -178,7 +202,7 @@ public class EnemyAbilityHolder : MonoBehaviour
         if (activeTelegraphInstance != null) { Destroy(activeTelegraphInstance); activeTelegraphInstance = null; }
     }
 
-    private void ExecuteAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown = false)
+    private void ExecuteAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown = false, bool triggerAnimation = true, int styleIndex = 0)
     {
         if (enemyAI != null && enemyAI.Health.currentHealth <= 0) return;
 
@@ -202,9 +226,7 @@ public class EnemyAbilityHolder : MonoBehaviour
             PlayerAbilityHolder.TriggerCameraShake(ability.screenShakeIntensity, ability.screenShakeDuration, transform.position);
         }
 
-        // PHASE 2: EXECUTION / ATTACK
-        // EnemyAI.cs handles the execution animation trigger when it calls PerformAttack. 
-        // We let the AI state machine trigger `overrideTriggerName` there so we don't double-fire.
+        if (triggerAnimation) TriggerAttackAnimation(ability, styleIndex);
 
         switch (ability.abilityType)
         {
@@ -230,6 +252,24 @@ public class EnemyAbilityHolder : MonoBehaviour
                         movementHandler.ExecuteTeleport(hit.position);
                 }
                 break;
+        }
+    }
+
+    private void TriggerAttackAnimation(Ability ability, int styleIndex)
+    {
+        if (animator != null)
+        {
+            animator.ResetTrigger(attackTriggerHash);
+
+            if (!string.IsNullOrEmpty(ability.overrideTriggerName))
+            {
+                animator.SetTrigger(ability.overrideTriggerName);
+            }
+            else
+            {
+                animator.SetInteger(attackIndexHash, styleIndex);
+                animator.SetTrigger(attackTriggerHash);
+            }
         }
     }
 

@@ -39,7 +39,6 @@ public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
     public float currentMana;
     public int maxMana;
 
-    // --- NEW: Exposed Regen Settings ---
     [Header("Mana Regen Settings")]
     [Tooltip("Base mana regenerated per second (before Intelligence scaling).")]
     public float baseManaRegen = 1.0f;
@@ -51,10 +50,8 @@ public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
     [Range(1, 60)]
     public int regenTickInterval = 8;
 
-    // Internal tracker (read-only in inspector for debug)
     [SerializeField, ReadOnlyInspector] private float calculatedManaRegen;
     private float accumulatedRegenTime = 0f;
-    // -----------------------------------
 
     [SerializeField]
     private List<Ability> unlockedAbilityBase = new List<Ability>();
@@ -103,19 +100,15 @@ public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
 
     void Update()
     {
-        // 1. Accumulate time delta every frame
         accumulatedRegenTime += Time.deltaTime;
 
-        // 2. Only execute the logic every Nth frame (Configurable)
         if (Time.frameCount % regenTickInterval == 0)
         {
             if (currentMana < maxMana && calculatedManaRegen > 0)
             {
-                // Apply the accumulated time chunk
                 RestoreMana(calculatedManaRegen * accumulatedRegenTime);
             }
 
-            // Reset the accumulator
             accumulatedRegenTime = 0f;
         }
     }
@@ -154,7 +147,28 @@ public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
 
     public void AddSkillPoints(int amount) { unspentSkillPoints += amount; OnSkillPointsChanged?.Invoke(); }
 
-    public void LearnSkill(SkillNode skillToLearn) { if (skillToLearn == null || skillToLearn.skillRanks.Count == 0) return; Ability baseAbility = skillToLearn.skillRanks[0]; unlockedAbilityRanks.TryGetValue(baseAbility, out int currentRank); unspentSkillPoints--; unlockedAbilityRanks[baseAbility] = currentRank + 1; UpdateKnownAbilities(); OnSkillPointsChanged?.Invoke(); }
+    public void LearnSkill(SkillNode skillToLearn)
+    {
+        if (skillToLearn == null || skillToLearn.skillRanks.Count == 0) return;
+
+        Ability baseAbility = skillToLearn.skillRanks[0];
+
+        // --- NEW: Check if this is the very first time we are unlocking this ability ---
+        bool isNewUnlock = !unlockedAbilityRanks.ContainsKey(baseAbility) || unlockedAbilityRanks[baseAbility] == 0;
+
+        unlockedAbilityRanks.TryGetValue(baseAbility, out int currentRank);
+        unspentSkillPoints--;
+        unlockedAbilityRanks[baseAbility] = currentRank + 1;
+
+        UpdateKnownAbilities();
+        OnSkillPointsChanged?.Invoke();
+
+        // --- NEW: Trigger the Auto-Assign if it's a new unlock ---
+        if (isNewUnlock && HotbarManager.instance != null)
+        {
+            HotbarManager.instance.AutoAssignAbility(baseAbility);
+        }
+    }
 
     private void UpdateKnownAbilities() { knownAbilities.Clear(); if (characterClass == null || characterClass.classSkillTree == null) return; foreach (var skillNode in characterClass.classSkillTree.skillNodes) { if (skillNode.skillRanks.Count == 0) continue; Ability baseAbility = skillNode.skillRanks[0]; if (unlockedAbilityRanks.TryGetValue(baseAbility, out int currentRank)) { for (int i = 0; i < currentRank; i++) { if (i < skillNode.skillRanks.Count) { knownAbilities.Add(skillNode.skillRanks[i]); } } } } OnAbilitiesChanged?.Invoke(); }
 
@@ -207,9 +221,7 @@ public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
         if (playerHealth != null) { playerHealth.UpdateMaxHealth(100 + (finalStrength * 10)); }
         maxMana = 50 + (finalFaith * 10);
 
-        // --- NEW: Configurable Regen Formula ---
         calculatedManaRegen = baseManaRegen + (finalIntelligence * intelligenceRegenScaling);
-        // ---------------------------------------
 
         if (currentMana > maxMana) currentMana = maxMana;
     }

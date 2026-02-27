@@ -6,17 +6,13 @@ using System;
 [RequireComponent(typeof(AudioSource))]
 public class PlayerAbilityHolder : MonoBehaviour
 {
-    // --- AAA FIX: Added Target and Position to the payload so enemies can filter efficiently ---
     public static event Action<PlayerAbilityHolder, Ability, GameObject, Vector3> OnPlayerAbilityUsed;
-
     public static event Action<float, float, Vector3> OnCameraShakeRequest;
 
-    // --- AAA FIX: Wrapper to allow enemies to shake the camera ---
     public static void TriggerCameraShake(float intensity, float duration, Vector3 position)
     {
         OnCameraShakeRequest?.Invoke(intensity, duration, position);
     }
-    // -------------------------------------------------------------
 
     public event Action<string, float> OnCastStarted;
     public event Action OnCastFinished;
@@ -159,17 +155,25 @@ public class PlayerAbilityHolder : MonoBehaviour
             return;
         }
 
+        // --- AAA RANDOMIZATION LOGIC (Calculated at the exact moment the cast starts) ---
+        int styleIndex = ability.attackStyleIndex;
+        if (ability.randomizeAttackStyle && ability.maxRandomVariants > 0)
+        {
+            styleIndex = UnityEngine.Random.Range(0, ability.maxRandomVariants);
+        }
+        // -------------------------------------------------------------------------------
+
         float finalCastTime = ability.castTime;
         if (playerStats != null) finalCastTime /= playerStats.secondaryStats.attackSpeed;
 
         if (finalCastTime > 0 || ability.telegraphDuration > 0)
         {
             if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
-            activeCastCoroutine = StartCoroutine(PerformCast(ability, target, position, finalCastTime, bypassCooldown));
+            activeCastCoroutine = StartCoroutine(PerformCast(ability, target, position, finalCastTime, bypassCooldown, styleIndex));
         }
         else
         {
-            ExecuteAbility(ability, target, position, bypassCooldown);
+            ExecuteAbility(ability, target, position, bypassCooldown, true, styleIndex);
         }
     }
 
@@ -184,7 +188,7 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     private void ClearInputBuffer() { hasQueuedAction = false; queuedAbility = null; queuedTarget = null; }
 
-    private IEnumerator PerformCast(Ability ability, GameObject target, Vector3 position, float castTime, bool bypassCooldown)
+    private IEnumerator PerformCast(Ability ability, GameObject target, Vector3 position, float castTime, bool bypassCooldown, int styleIndex)
     {
         IsCasting = true;
         currentCastingAbility = ability;
@@ -193,7 +197,9 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         if (animator != null)
         {
-            // PHASE 1: WIND-UP / CASTING (Strictly uses telegraphAnimationTrigger or castTriggerHash)
+            // Inject the rolled style index immediately so the wind-up animation can read it
+            animator.SetInteger(attackStyleHash, styleIndex);
+
             if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger)) animator.SetTrigger(ability.telegraphAnimationTrigger);
             else if (hasCastTrigger) animator.SetTrigger(castTriggerHash);
         }
@@ -242,7 +248,8 @@ public class PlayerAbilityHolder : MonoBehaviour
                 }
             }
 
-            ExecuteAbility(ability, target, position, bypassCooldown, (ability.abilityType != AbilityType.ChanneledBeam));
+            // Pass the generated style index down to the execution phase
+            ExecuteAbility(ability, target, position, bypassCooldown, (ability.abilityType != AbilityType.ChanneledBeam), styleIndex);
         }
         finally
         {
@@ -272,7 +279,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    private void ExecuteAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown = false, bool triggerAnimation = true)
+    private void ExecuteAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown = false, bool triggerAnimation = true, int styleIndex = 0)
     {
         if (ActiveBeam != null) ActiveBeam.Interrupt();
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
@@ -296,7 +303,7 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         OnPlayerAbilityUsed?.Invoke(this, ability, target, position);
 
-        if (triggerAnimation) TriggerAttackAnimation(ability);
+        if (triggerAnimation) TriggerAttackAnimation(ability, styleIndex);
 
         if (ability.movementLockDuration > 0)
         {
@@ -402,7 +409,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         activeMeleeCoroutine = null;
     }
 
-    private void TriggerAttackAnimation(Ability ability)
+    private void TriggerAttackAnimation(Ability ability, int styleIndex)
     {
         if (animator != null)
         {
@@ -410,9 +417,15 @@ public class PlayerAbilityHolder : MonoBehaviour
             float animSpeed = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
             animator.SetFloat(attackSpeedHash, animSpeed);
 
-            // PHASE 2: EXECUTION / ATTACK (Strictly uses overrideTriggerName, otherwise defaults to standard Attack combo)
-            if (!string.IsNullOrEmpty(ability.overrideTriggerName)) animator.SetTrigger(ability.overrideTriggerName);
-            else { animator.SetInteger(attackStyleHash, ability.attackStyleIndex); animator.SetTrigger(attackHash); }
+            if (!string.IsNullOrEmpty(ability.overrideTriggerName))
+            {
+                animator.SetTrigger(ability.overrideTriggerName);
+            }
+            else
+            {
+                animator.SetInteger(attackStyleHash, styleIndex);
+                animator.SetTrigger(attackHash);
+            }
         }
     }
 

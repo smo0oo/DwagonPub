@@ -71,6 +71,14 @@ public class Ability : ScriptableObject
     public string overrideTriggerName;
     public float movementLockDuration = 0f;
 
+    // --- NEW: AAA Randomization ---
+    [Header("Randomization")]
+    [Tooltip("If true, ignores attackStyleIndex and picks a random number from 0 to maxRandomVariants - 1")]
+    public bool randomizeAttackStyle = false;
+    [Tooltip("If set to 3, it will randomly send 0, 1, or 2 to the Animator.")]
+    public int maxRandomVariants = 3;
+    // ------------------------------
+
     [Header("Behavior Type")]
     public AbilityType abilityType = AbilityType.TargetedMelee;
     public bool locksPlayerActivity = false;
@@ -119,17 +127,10 @@ public class Ability : ScriptableObject
     public bool attachCastVFX = true;
     public float castVFXDelay = 0f;
 
-    // --- AAA UPGRADE: Impact Visuals ---
     [Header("Hit / Impact VFX Settings")]
-    [Tooltip("VFX played at the target location or impact point.")]
     public GameObject hitVFX;
-
-    [Tooltip("Use this to fix VFX that spawn too high or too low. Positive Y moves it up.")]
     public Vector3 hitVFXPositionOffset;
-
-    [Tooltip("Allows you to tilt the impact VFX (useful for ground decals or directional bursts).")]
     public Vector3 hitVFXRotationOffset;
-    // -----------------------------------
 
     [Header("Audio Layering (AAA)")]
     public AudioClip windupSound;
@@ -140,14 +141,9 @@ public class Ability : ScriptableObject
     [Range(0f, 2f)] public float screenShakeIntensity = 0f;
     [Range(0f, 1f)] public float screenShakeDuration = 0f;
 
-    // --- NEW: Enemy AI Telegraphing ---
     [Header("Enemy AI Settings")]
-    [Tooltip("The specific warning decal to spawn for this ability (e.g. Green Splat for Poison). If null, uses the default Red Circle.")]
     public GameObject enemyTelegraphPrefab;
-
-    [Tooltip("If TRUE, this ability is treated as a Raid-Wipe/Major mechanic. Party AI will attempt to find a Tactical Node (Safe Spot) when this cast begins.")]
     public bool isMajorTacticalThreat = false;
-    // ----------------------------------
 
     [Header("Legacy / Simple Effects")]
     public List<string> effects = new List<string>();
