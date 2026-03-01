@@ -57,7 +57,6 @@ public class UIPartyPortraitsManager : MonoBehaviour
         if (allPlayers != null) { foreach (var player in allPlayers) { if (player != null && player.TryGetComponent<PartyMemberAI>(out var ai)) { ai.OnStatusChanged -= HandleAIStatusChanged; } } }
     }
 
-    // --- THIS METHOD IS NOW COMPLETE AND CORRECT ---
     public void RefreshAllPortraits()
     {
         if (partyManager == null) return;
@@ -68,13 +67,55 @@ public class UIPartyPortraitsManager : MonoBehaviour
         playerToUIMap.Clear();
         holderToUIMap.Clear();
 
+        SceneInfo currentSceneInfo = FindAnyObjectByType<SceneInfo>();
+
         for (int i = 0; i < playerPortraits.Count; i++)
         {
+            PlayerPortraitUI ui = playerPortraits[i];
+
             if (i < allPlayers.Count)
             {
                 GameObject player = allPlayers[i];
-                PlayerPortraitUI ui = playerPortraits[i];
                 playerToUIMap[player] = ui;
+
+                // --- SCENE INFO LOGIC ---
+                PlayerSceneState sceneState = PlayerSceneState.Active;
+                if (currentSceneInfo != null && i < currentSceneInfo.playerConfigs.Count)
+                {
+                    sceneState = currentSceneInfo.playerConfigs[i].state;
+                }
+
+                // Ensure the frame is universally active in the layout group
+                ui.portraitFrame.SetActive(true);
+
+                if (ui.canvasGroup != null)
+                {
+                    if (sceneState == PlayerSceneState.Hidden)
+                    {
+                        // Completely invisible, but preserves layout space
+                        ui.canvasGroup.alpha = 0f;
+                        ui.canvasGroup.interactable = false;
+                        ui.canvasGroup.blocksRaycasts = false;
+                    }
+                    else
+                    {
+                        // Visible and functional
+                        ui.canvasGroup.alpha = 1f;
+                        ui.canvasGroup.interactable = true;
+                        ui.canvasGroup.blocksRaycasts = true;
+                    }
+                }
+
+                // If inactive, darken the portrait to visually indicate they cannot be controlled
+                if (sceneState == PlayerSceneState.Inactive || sceneState == PlayerSceneState.SpawnAtMarker)
+                {
+                    ui.portraitImage.color = new Color(0.3f, 0.3f, 0.3f, 1f); // Dark Gray
+                }
+                else
+                {
+                    ui.portraitImage.color = Color.white; // Full brightness
+                }
+                // -------------------------
 
                 CharacterRoot root = player.GetComponent<CharacterRoot>();
                 if (root == null) continue;
@@ -84,7 +125,6 @@ public class UIPartyPortraitsManager : MonoBehaviour
                 StatusEffectHolder statusHolder = root.GetComponentInChildren<StatusEffectHolder>();
                 PartyMemberAI ai = root.GetComponent<PartyMemberAI>();
 
-                // --- THIS LOGIC BLOCK WAS MISSING AND IS NOW RESTORED ---
                 if (stats != null)
                 {
                     string characterDisplayName = player.name;
@@ -110,23 +150,31 @@ public class UIPartyPortraitsManager : MonoBehaviour
                         }
                     }
                 }
-                // --- END OF RESTORED BLOCK ---
 
                 if (health != null) { health.OnHealthChanged -= () => UpdateHealthBar(ui, health); health.OnHealthChanged += () => UpdateHealthBar(ui, health); UpdateHealthBar(ui, health); }
                 if (statusHolder != null) { holderToUIMap[statusHolder] = ui; statusHolder.OnEffectsChanged -= RefreshStatusEffects; statusHolder.OnEffectsChanged += RefreshStatusEffects; RefreshStatusEffects(statusHolder); }
                 if (ai != null) { ai.OnStatusChanged += HandleAIStatusChanged; ui.stanceButton.onClick.RemoveAllListeners(); ui.stanceButton.onClick.AddListener(() => CycleStance(player)); UpdateStanceIcon(ui, PartyAIManager.instance.GetStanceForCharacter(player)); }
-
-                ui.portraitFrame.SetActive(true);
             }
             else
             {
-                playerPortraits[i].portraitFrame.SetActive(false);
+                // Empty party slots (e.g., Slot 4 and 5 if you only have 3 players)
+                if (ui.canvasGroup != null)
+                {
+                    ui.canvasGroup.alpha = 0f;
+                    ui.canvasGroup.interactable = false;
+                    ui.canvasGroup.blocksRaycasts = false;
+                }
+                else
+                {
+                    // Fallback just in case you forgot to assign a Canvas Group
+                    ui.portraitFrame.SetActive(false);
+                }
             }
         }
         HandleActivePlayerChanged(partyManager.ActivePlayer);
     }
 
-    #region Unchanged Code
+    #region Unchanged Code + Stance Visibility Protection
     private void HandleAIStatusChanged(PartyMemberAI ai, string newStatus) { if (playerToUIMap.TryGetValue(ai.gameObject, out PlayerPortraitUI ui)) { if (ui.statusText != null) { ui.statusText.text = newStatus; } } }
     private void HandleStanceChanged(GameObject character, AIStance newStance) { if (playerToUIMap.TryGetValue(character, out PlayerPortraitUI ui)) { UpdateStanceIcon(ui, newStance); } }
     private void CycleStance(GameObject character) { if (PartyAIManager.instance == null) return; AIStance currentStance = PartyAIManager.instance.GetStanceForCharacter(character); AIStance nextStance = (AIStance)(((int)currentStance + 1) % 3); PartyAIManager.instance.SetStanceForCharacter(character, nextStance); }
@@ -134,7 +182,43 @@ public class UIPartyPortraitsManager : MonoBehaviour
     private IEnumerator DelayedInitialRefresh() { yield return new WaitForEndOfFrame(); RefreshAllPortraits(); }
     private void UpdateHealthBar(PlayerPortraitUI ui, Health health) { if (ui == null || health == null) return; if (health.maxHealth > 0) ui.hpSlider.value = (float)health.currentHealth / health.maxHealth; else ui.hpSlider.value = 0; }
     private void RefreshStatusEffects(StatusEffectHolder holder) { if (holder == null || !holderToUIMap.ContainsKey(holder)) return; PlayerPortraitUI portraitUI = holderToUIMap[holder]; foreach (Transform child in portraitUI.statusEffectContainer) { Destroy(child.gameObject); } foreach (ActiveStatusEffect effect in holder.GetActiveEffects()) { GameObject iconGO = Instantiate(statusEffectIconPrefab, portraitUI.statusEffectContainer); iconGO.GetComponent<StatusEffectIconUI>().Initialize(effect); } }
-    private void HandleActivePlayerChanged(GameObject activePlayer) { if (allPlayers == null) return; foreach (var player in allPlayers) { if (playerToUIMap.TryGetValue(player, out var ui)) { float targetScale = (player == activePlayer) ? activeScale : inactiveScale; ui.portraitFrame.transform.DOScale(targetScale, scaleDuration); if (ui.statusText != null) { ui.statusText.text = (player == activePlayer) ? "Player Controlled" : player.GetComponent<PartyMemberAI>()?.CurrentStatus ?? ""; } if (ui.stanceButton != null) { ui.stanceButton.gameObject.SetActive(player != activePlayer); } } } }
+
+    private void HandleActivePlayerChanged(GameObject activePlayer)
+    {
+        if (allPlayers == null) return;
+
+        SceneInfo currentSceneInfo = FindAnyObjectByType<SceneInfo>();
+
+        for (int i = 0; i < allPlayers.Count; i++)
+        {
+            var player = allPlayers[i];
+            if (playerToUIMap.TryGetValue(player, out var ui))
+            {
+                float targetScale = (player == activePlayer) ? activeScale : inactiveScale;
+                ui.portraitFrame.transform.DOScale(targetScale, scaleDuration);
+
+                if (ui.statusText != null)
+                {
+                    ui.statusText.text = (player == activePlayer) ? "Player Controlled" : player.GetComponent<PartyMemberAI>()?.CurrentStatus ?? "";
+                }
+
+                if (ui.stanceButton != null)
+                {
+                    bool isControllable = true;
+                    if (currentSceneInfo != null && i < currentSceneInfo.playerConfigs.Count)
+                    {
+                        var state = currentSceneInfo.playerConfigs[i].state;
+                        if (state == PlayerSceneState.Inactive || state == PlayerSceneState.SpawnAtMarker || state == PlayerSceneState.Hidden)
+                        {
+                            isControllable = false;
+                        }
+                    }
+                    ui.stanceButton.gameObject.SetActive(player != activePlayer && isControllable);
+                }
+            }
+        }
+    }
+
     private void HandleStatsPanelToggle(bool isPanelOpen) { if (rectTransform == null || statsOpenPositionAnchor == null) return; Vector3 targetPosition = isPanelOpen ? statsOpenPositionAnchor.anchoredPosition : originalPosition; rectTransform.DOAnchorPos(targetPosition, moveDuration).SetEase(Ease.OutCubic); }
     private void HandlePartyInventoryToggle(bool isPanelOpen) { canvasGroup.alpha = isPanelOpen ? 0 : 1; canvasGroup.interactable = !isPanelOpen; canvasGroup.blocksRaycasts = !isPanelOpen; }
     public PlayerPortraitUI GetPortraitUIForPlayer(GameObject player) { playerToUIMap.TryGetValue(player, out var ui); return ui; }
