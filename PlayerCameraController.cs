@@ -78,6 +78,10 @@ public class PlayerCameraController : MonoBehaviour
         {
             gameplayCamera.Follow = newPlayer.transform;
             gameplayCamera.LookAt = newPlayer.transform;
+
+            // --- THE FIX: Instant Snap ---
+            // Forces the camera to instantly teleport to the new player instead of panning across the map
+            gameplayCamera.PreviousStateIsValid = false;
         }
     }
 

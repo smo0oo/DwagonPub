@@ -4,6 +4,7 @@ using System.Linq;
 using UnityEngine.SceneManagement;
 using UnityEngine.AI;
 using System;
+using System.Collections;
 
 public class DualModeManager : MonoBehaviour
 {
@@ -38,10 +39,8 @@ public class DualModeManager : MonoBehaviour
     [Header("Scene Config")]
     public string defenseSceneName = "DomeBattle";
 
-    // --- UPDATED: Runtime Config ---
     [Header("Runtime Config")]
-    public string queuedDungeonScene; // Stores the dungeon scene passed from the LocationNode
-    // -------------------------------
+    public string queuedDungeonScene;
 
     private string pendingDungeonScene;
     private string pendingDungeonSpawn;
@@ -96,7 +95,6 @@ public class DualModeManager : MonoBehaviour
 
     public void CompleteDungeonRun()
     {
-        // Safety check, but we log if it fails to help debug
         if (!isDualModeActive)
         {
             Debug.LogWarning("CompleteDungeonRun called, but Dual Mode is NOT active. Aborting.");
@@ -109,7 +107,6 @@ public class DualModeManager : MonoBehaviour
         {
             GameManager.instance.SetJustExitedDungeon(true);
 
-            // Verify it was set
             if (GameManager.instance.justExitedDungeon == false)
                 Debug.LogError("DualModeManager: Failed to set justExitedDungeon flag!");
 
@@ -212,10 +209,9 @@ public class DualModeManager : MonoBehaviour
         dungeonTeamIndices.Clear();
         wagonTeamIndices.Clear();
         fallenHeroes.Clear();
-        queuedDungeonScene = ""; // Reset queued scene
+        queuedDungeonScene = "";
         OnLootBagChanged?.Invoke();
 
-        // Reactivate visually just in case ApplyTeamState didn't catch it
         if (PartyManager.instance != null)
         {
             for (int i = 1; i < PartyManager.instance.partyMembers.Count; i++)
@@ -335,7 +331,9 @@ public class DualModeManager : MonoBehaviour
             {
                 foreach (int index in dungeonTeamIndices) if (ValidateIndex(index)) allMembers[index].SetActive(true);
                 foreach (int index in wagonTeamIndices) if (ValidateIndex(index)) allMembers[index].SetActive(false);
-                if (dungeonTeamIndices.Count > 0) PartyManager.instance.SetActivePlayer(dungeonTeamIndices[0]);
+
+                if (dungeonTeamIndices.Count > 0)
+                    StartCoroutine(ForceHandoverRoutine(dungeonTeamIndices[0]));
             }
             else
             {
@@ -369,28 +367,32 @@ public class DualModeManager : MonoBehaviour
                 }
 
                 foreach (int index in wagonTeamIndices) if (ValidateIndex(index)) allMembers[index].SetActive(true);
-                if (wagonTeamIndices.Count > 0) PartyManager.instance.SetActivePlayer(wagonTeamIndices[0]);
+
+                if (wagonTeamIndices.Count > 0)
+                {
+                    Debug.Log($"[DualModeManager] Forcing rescue handover to {allMembers[wagonTeamIndices[0]].name}");
+                    StartCoroutine(ForceHandoverRoutine(wagonTeamIndices[0]));
+                }
             }
         }
         else if (currentScene == SceneType.DomeBattle)
         {
             bool justReturned = (GameManager.instance != null && GameManager.instance.justExitedDungeon);
 
-            if (allMembers.Count > 0 && allMembers[0] != null) allMembers[0].SetActive(false); // Player 0 (Wagon) always hidden in Dome?
+            if (allMembers.Count > 0 && allMembers[0] != null) allMembers[0].SetActive(false);
 
             if (justReturned)
             {
-                // Force VISUAL reunion immediately upon scene load
                 for (int i = 1; i < allMembers.Count; i++)
                 {
                     if (allMembers[i] != null) allMembers[i].SetActive(true);
                 }
 
-                if (allMembers.Count > 1) PartyManager.instance.SetActivePlayer(1);
+                if (allMembers.Count > 1)
+                    StartCoroutine(ForceHandoverRoutine(1));
             }
             else
             {
-                // Standard Split Behavior (Dungeon team away, Wagon team defending)
                 foreach (int index in dungeonTeamIndices)
                     if (ValidateIndex(index)) allMembers[index].SetActive(false);
 
@@ -398,10 +400,42 @@ public class DualModeManager : MonoBehaviour
                     if (ValidateIndex(index)) allMembers[index].SetActive(true);
 
                 if (wagonTeamIndices.Count > 0)
-                    PartyManager.instance.SetActivePlayer(wagonTeamIndices[0]);
+                    StartCoroutine(ForceHandoverRoutine(wagonTeamIndices[0]));
                 else
-                    PartyManager.instance.SetActivePlayer(0);
+                    StartCoroutine(ForceHandoverRoutine(0));
             }
+        }
+    }
+
+    // --- THE FIX: Absolute Bulletproof Handover Routine ---
+    private IEnumerator ForceHandoverRoutine(int targetIndex)
+    {
+        // 1. Wait until PartyManager exists and has enough members
+        yield return new WaitUntil(() => PartyManager.instance != null && PartyManager.instance.partyMembers.Count > targetIndex);
+
+        // 2. Wait a solid 0.25 seconds. This guarantees all UIs have run Start(),
+        // SaveManagers have loaded health stats, and the scene is stable.
+        yield return new WaitForSeconds(0.25f);
+
+        GameObject newLeader = PartyManager.instance.partyMembers[targetIndex];
+
+        // 3. Safety Check: If the system temporarily thinks they are downed due to loading lag, wake them up!
+        Health h = newLeader.GetComponentInChildren<Health>();
+        if (h != null && h.isDowned)
+        {
+            h.Revive(1f);
+        }
+
+        Debug.Log($"[DualModeManager] Executing Absolute Handover to {newLeader.name}");
+
+        // 4. Force the broadcast to all UIs and Camera
+        PartyManager.instance.SetActivePlayer(targetIndex);
+
+        // 5. Hard-enable movement so the player isn't stuck
+        if (PartyManager.instance.ActivePlayer != null)
+        {
+            PlayerMovement pm = PartyManager.instance.ActivePlayer.GetComponent<PlayerMovement>();
+            if (pm != null) pm.enabled = true;
         }
     }
 
