@@ -6,7 +6,7 @@ using System;
 using System.Linq;
 using Unity.VisualScripting;
 using System.Diagnostics;
-using System.Collections.Generic; // Added for List<RaycastResult>
+using System.Collections.Generic;
 
 public class PlayerMovement : MonoBehaviour, IMovementHandler
 {
@@ -188,8 +188,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         if (isFacingLocked && (TargetObject == null || IsTargetDead(TargetObject))) isFacingLocked = false;
 
-        // [FIX] Changed IsPointerOverGameObject check to use a custom filter
-        // This allows inputs to pass through specific UI elements like LootLabels
         if (UIInteractionState.IsUIBlockingInput || IsPointerOverBlockingUI() || IsUIDragInProgress())
         {
             _perfWatch.Stop();
@@ -211,13 +209,10 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
     }
 
-    // --- NEW HELPER: Filter out Loot Labels ---
     private bool IsPointerOverBlockingUI()
     {
-        // 1. Quick check: Is mouse over ANY GameObject?
         if (!EventSystem.current.IsPointerOverGameObject()) return false;
 
-        // 2. It IS over something. Now we check WHAT it is.
         PointerEventData pointerData = new PointerEventData(EventSystem.current)
         {
             position = Input.mousePosition
@@ -228,20 +223,16 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         foreach (var result in results)
         {
-            // If we hit a LootLabel, we ignore it (it's transparent to movement logic)
-            // You can add other world-space UI tags here if needed.
             if (result.gameObject.GetComponentInParent<LootLabel>() != null)
             {
                 continue;
             }
 
-            // If we hit anything else (Inventory, Pause Menu, etc.), it BLOCKS input.
             return true;
         }
 
         return false;
     }
-    // ------------------------------------------
 
     void LateUpdate()
     {
@@ -404,6 +395,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     }
 
     void OnDisable() { if (navMeshAgent != null && navMeshAgent.isOnNavMesh) { navMeshAgent.isStopped = true; navMeshAgent.ResetPath(); navMeshAgent.updatePosition = true; } StopAllCoroutines(); IsMovingToAttack = false; if (playerEquipment != null) playerEquipment.OnEquipmentChanged -= HandleEquipmentChanged; }
+
     private void UpdateAnimator() { if (animator == null) return; Vector3 worldVelocity = (currentMode == MovementMode.WASD && wasdVelocity.sqrMagnitude > 0.01f) ? wasdVelocity : navMeshAgent.velocity; Vector3 localVelocity = transform.InverseTransformDirection(worldVelocity); float speed = navMeshAgent.speed; float vZ = localVelocity.z / speed; float vX = localVelocity.x / speed; if (Mathf.Abs(vZ) < 0.05f) vZ = 0f; if (Mathf.Abs(vX) < 0.05f) vX = 0f; animator.SetFloat(velocityZHash, vZ, animationDampTime, Time.deltaTime); animator.SetFloat(velocityXHash, vX, animationDampTime, Time.deltaTime); }
 
     private IEnumerator DodgeRollCoroutine()
@@ -590,15 +582,41 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         navMeshAgent.stoppingDistance = currentInteractionRange;
         navMeshAgent.SetDestination(destination);
 
-        while (Vector3.Distance(transform.position, destination) > currentInteractionRange)
+        // --- THE FIX: WAIT FOR NAVMESH TO WAKE UP ---
+        // Give Unity 1 frame to actually compute the path. 
+        // Without this, remainingDistance is technically 0 for a split second!
+        yield return null;
+
+        while (true)
         {
             if (targetObject == null)
             {
                 navMeshAgent.ResetPath();
                 yield break;
             }
+
+            // Wait until the agent finishes computing the path
+            if (!navMeshAgent.pathPending)
+            {
+                // Check if we have entered the stopping distance radius (+0.1f buffer for safety)
+                if (navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance + 0.1f)
+                {
+                    // Ensure the physical velocity has actually stopped
+                    if (!navMeshAgent.hasPath || navMeshAgent.velocity.sqrMagnitude < 0.01f)
+                    {
+                        break; // WE SUCCESSFULLY ARRIVED!
+                    }
+                }
+
+                // Fallback: If NavMesh randomly drops the path, but we are physically close enough
+                if (!navMeshAgent.hasPath && Vector3.Distance(transform.position, destination) <= currentInteractionRange + 0.5f)
+                {
+                    break;
+                }
+            }
             yield return null;
         }
+        // ---------------------------------------------
 
         Vector3 dir = (targetObject.transform.position - transform.position).normalized;
         dir.y = 0;
@@ -606,6 +624,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         navMeshAgent.ResetPath();
 
+        // Now that the loop successfully ends, Interact() will finally be called!
         if (targetObject.TryGetComponent<IInteractable>(out var interactable))
             interactable.Interact(this.gameObject);
         else if (targetObject.TryGetComponent<DoorController>(out var doorComponent))

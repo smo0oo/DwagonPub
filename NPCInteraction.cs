@@ -40,27 +40,22 @@ public class NPCInteraction : MonoBehaviour, IInteractable
     {
         if (dialogueSystemTrigger != null && !string.IsNullOrEmpty(dialogueSystemTrigger.conversation))
         {
+            // 1. Identify the true player that arrived at the NPC
             GameObject activePlayer = PartyManager.instance != null ? PartyManager.instance.ActivePlayer : interactor;
 
-            // --- EXPOSE THE IMPOSTOR ---
-            // 'true' forces Unity to search even hidden/disabled objects in your prefab hierarchy
+            // 2. Safely extract their exact ID badges
             DialogueActor[] allHiddenActors = activePlayer.GetComponentsInChildren<DialogueActor>(true);
-
-            Debug.Log($"<color=cyan>--- SEARCHING PLAYER: {activePlayer.name} ---</color>");
-            foreach (DialogueActor actor in allHiddenActors)
-            {
-                Debug.Log($"<color=yellow>Found ID:</color> '{actor.actor}' attached to the child object: <color=orange>'{actor.gameObject.name}'</color>");
-            }
-            Debug.Log($"<color=cyan>--------------------------------------</color>");
-
-            // Grab the very first one it finds (This mimics what Pixel Crushers does internally)
             DialogueActor pActor = allHiddenActors.Length > 0 ? allHiddenActors[0] : null;
             DialogueActor nActor = this.GetComponentInChildren<DialogueActor>();
 
             Transform pTransform = pActor != null ? pActor.transform : activePlayer.transform;
             Transform nTransform = nActor != null ? nActor.transform : this.transform;
 
-            // Bypass the trigger's inspector and force the conversation with these exact transforms
+            Debug.Log($"<color=cyan>STARTING DIALOGUE:</color> The Actor (Player) is <color=orange>{pTransform.name}</color> | The Conversant (NPC) is <color=yellow>{nTransform.name}</color>");
+
+            // --- THE FINAL FIX ---
+            // We pass them in the standard Pixel Crushers order: Player First, NPC Second.
+            // This perfectly routes the text to the correct UI panels without flipping roles.
             DialogueManager.StartConversation(dialogueSystemTrigger.conversation, pTransform, nTransform);
         }
         else if (dialogueSystemTrigger != null)

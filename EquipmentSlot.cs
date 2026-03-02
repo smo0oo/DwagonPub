@@ -11,6 +11,9 @@ public class EquipmentSlot : MonoBehaviour, IPointerClickHandler, IDropHandler, 
     [Header("UI References")]
     public Image iconImage;
 
+    // THE HARD LOCK (Working for Equipment)
+    public bool isLocked = false;
+
     public EquipmentManager equipmentManager { get; private set; }
     public PlayerEquipment parentEquipment { get; private set; }
     private UIDragDropController dragDropController;
@@ -33,12 +36,10 @@ public class EquipmentSlot : MonoBehaviour, IPointerClickHandler, IDropHandler, 
         canvasGroup = GetComponent<CanvasGroup>();
     }
 
-    // --- FIX: Required for OnBeginDrag to fire reliably ---
     public void OnPointerDown(PointerEventData eventData)
     {
-        // Claims the pointer press so Unity knows to send Drag events here
+        if (isLocked) return;
     }
-    // -----------------------------------------------------
 
     public void UpdateSlot(ItemStack item)
     {
@@ -56,39 +57,49 @@ public class EquipmentSlot : MonoBehaviour, IPointerClickHandler, IDropHandler, 
 
     public object GetItem()
     {
+        if (isLocked) return null;
         if (parentEquipment == null) return null;
         parentEquipment.equippedItems.TryGetValue(slotType, out ItemStack item);
         return item;
     }
 
-    // --- DRAG IMPLEMENTATION ---
+    public bool CanReceiveDrop(object item)
+    {
+        if (isLocked) return false;
+        if (parentEquipment == null) return false;
+        return item is ItemStack itemStack && equipmentManager.IsItemValidForSlot(parentEquipment.gameObject, itemStack.itemData, slotType);
+    }
+
+    public void OnDrop(object item)
+    {
+        if (isLocked) return;
+        if (parentEquipment == null) return;
+        if (item is ItemStack itemStack)
+        {
+            equipmentManager.EquipItem(this.parentEquipment, slotType, itemStack);
+        }
+    }
 
     public void OnBeginDrag(PointerEventData eventData)
     {
+        if (isLocked) return;
+
         if (parentEquipment == null) return;
         if (eventData.button != PointerEventData.InputButton.Left) return;
 
-        // Safety check
         if (dragDropController == null) dragDropController = Object.FindFirstObjectByType<UIDragDropController>();
 
         parentEquipment.equippedItems.TryGetValue(slotType, out ItemStack item);
         if (item != null && item.itemData != null)
         {
             if (canvasGroup != null) canvasGroup.blocksRaycasts = false;
-
-            // Pass the source (this) and the icon sprite to the controller
             dragDropController.OnBeginDrag(this, item.itemData.icon);
 
-            // Optional: Hide tooltip
             if (equipmentManager != null) equipmentManager.HideTooltip();
         }
     }
 
-    public void OnDrag(PointerEventData eventData)
-    {
-        // INTENTIONALLY EMPTY
-        // Movement is handled by UIDragDropController.LateUpdate
-    }
+    public void OnDrag(PointerEventData eventData) { }
 
     public void OnEndDrag(PointerEventData eventData)
     {
@@ -99,10 +110,10 @@ public class EquipmentSlot : MonoBehaviour, IPointerClickHandler, IDropHandler, 
         }
     }
 
-    // ---------------------------
-
     public void OnDrop(PointerEventData eventData)
     {
+        if (isLocked) return;
+
         if (dragDropController == null || dragDropController.currentSource == null) return;
 
         object draggedItem = dragDropController.currentSource.GetItem();
@@ -114,28 +125,12 @@ public class EquipmentSlot : MonoBehaviour, IPointerClickHandler, IDropHandler, 
         }
     }
 
-    public bool CanReceiveDrop(object item)
-    {
-        if (parentEquipment == null) return false;
-        return item is ItemStack itemStack && equipmentManager.IsItemValidForSlot(parentEquipment.gameObject, itemStack.itemData, slotType);
-    }
-
-    public void OnDrop(object item)
-    {
-        if (parentEquipment == null) return;
-        if (item is ItemStack itemStack)
-        {
-            equipmentManager.EquipItem(this.parentEquipment, slotType, itemStack);
-        }
-    }
-
-    public void OnDropSuccess(IDropTarget target)
-    {
-        // Logic usually handled by the target slot (e.g., swapping items)
-    }
+    public void OnDropSuccess(IDropTarget target) { }
 
     public void OnPointerClick(PointerEventData eventData)
     {
+        if (isLocked) return;
+
         if (parentEquipment == null) return;
         if (eventData.button == PointerEventData.InputButton.Right && parentEquipment.equippedItems.ContainsKey(slotType) && parentEquipment.equippedItems[slotType] != null)
         {
@@ -145,9 +140,9 @@ public class EquipmentSlot : MonoBehaviour, IPointerClickHandler, IDropHandler, 
 
     public void OnPointerEnter(PointerEventData eventData)
     {
-        if (equipmentManager == null) return;
+        if (isLocked) return;
 
-        // Don't show tooltip if dragging
+        if (equipmentManager == null) return;
         if (dragDropController != null && dragDropController.currentSource != null) return;
 
         equipmentManager.ShowTooltip(this);

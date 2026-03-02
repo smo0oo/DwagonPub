@@ -39,8 +39,22 @@ public class InventorySlot : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
         equipmentManager = EquipmentManager.instance;
     }
 
+    // --- THE FIX: Forces raw interfaces to obey CanvasGroup rules ---
+    private bool IsInteractable()
+    {
+        CanvasGroup[] groups = GetComponentsInParent<CanvasGroup>();
+        foreach (var group in groups)
+        {
+            if (!group.interactable) return false;
+            if (group.ignoreParentGroups) break;
+        }
+        return true;
+    }
+    // ----------------------------------------------------------------
+
     public void OnPointerDown(PointerEventData eventData)
     {
+        if (!IsInteractable()) return;
         // Claims the click so OnBeginDrag fires reliably
     }
 
@@ -66,41 +80,31 @@ public class InventorySlot : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
         return parentInventory.items[slotIndex];
     }
 
-    // --- DROP LOGIC ---
-
-    // 1. Event Handler (Standardized)
     public void OnDrop(PointerEventData eventData)
     {
+        if (!IsInteractable()) return;
+
         if (dragDropController == null) dragDropController = Object.FindFirstObjectByType<UIDragDropController>();
         if (dragDropController == null || dragDropController.currentSource == null) return;
 
-        // Resolve the item from the source
         object draggedItem = dragDropController.currentSource.GetItem();
 
-        // Validate using the interface method
         if (CanReceiveDrop(draggedItem))
         {
-            // Execute the specific logic
             OnDrop(draggedItem);
-
-            // Notify the controller
             dragDropController.NotifyDropSuccessful(this);
         }
     }
 
     public bool CanReceiveDrop(object item)
     {
-        // Only accept ItemStacks (Inventory can't hold Abilities directly)
         return item is ItemStack;
     }
 
-    // 2. Logic Handler (Now contains the logic previously stuck in the Event Handler)
     public void OnDrop(object item)
     {
-        // We still check the source via the controller to handle context (like swapping indexes)
         if (dragDropController.currentSource is InventorySlot sourceSlot)
         {
-            // Inventory <-> Inventory Swap
             Inventory sourceInventory = sourceSlot.parentInventory;
             Inventory targetInventory = this.parentInventory;
             int fromIndex = sourceSlot.slotIndex;
@@ -114,15 +118,13 @@ public class InventorySlot : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
         }
         else if (dragDropController.currentSource is EquipmentSlot sourceEquipSlot)
         {
-            // Equipment -> Inventory Unequip
             equipmentManager.UnequipItemToSpecificSlot(sourceEquipSlot.slotType, this.parentInventory, this.slotIndex);
         }
     }
-    // ------------------
 
     public void OnDropSuccess(IDropTarget target)
     {
-        if (target is EquipmentSlot) return; // Logic handled by Equipment Manager
+        if (target is EquipmentSlot) return;
 
         if (target is TrashSlot)
         {
@@ -132,6 +134,8 @@ public class InventorySlot : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
 
     public void OnPointerClick(PointerEventData eventData)
     {
+        if (!IsInteractable()) return;
+
         if (parentInventory != null && eventData.button == PointerEventData.InputButton.Right && parentInventory.items[slotIndex]?.itemData != null)
         {
             inventoryManager.OpenContextMenu(this);
@@ -140,6 +144,8 @@ public class InventorySlot : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
 
     public void OnBeginDrag(PointerEventData eventData)
     {
+        if (!IsInteractable()) return;
+
         if (parentInventory == null || eventData.button != PointerEventData.InputButton.Left) return;
 
         if (dragDropController == null) dragDropController = Object.FindFirstObjectByType<UIDragDropController>();
@@ -166,6 +172,8 @@ public class InventorySlot : MonoBehaviour, IPointerEnterHandler, IPointerExitHa
 
     public void OnPointerEnter(PointerEventData eventData)
     {
+        if (!IsInteractable()) return;
+
         if (dragDropController == null) dragDropController = Object.FindFirstObjectByType<UIDragDropController>();
 
         bool isDragging = dragDropController != null && dragDropController.currentSource != null;

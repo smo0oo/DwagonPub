@@ -33,7 +33,11 @@ public class PartyInventoryManager : MonoBehaviour
             if (i < allPlayers.Count && allPlayers[i] != null)
             {
                 characterSheets[i].gameObject.SetActive(true);
-                characterSheets[i].DisplayCharacter(allPlayers[i]);
+
+                // --- THE FIX ---
+                // We now pass 'i' as the slot index so the Character Sheet knows 
+                // who to check in the SceneInfo rules!
+                characterSheets[i].DisplayCharacter(allPlayers[i], i);
             }
             else
             {
