@@ -270,18 +270,46 @@ public class DualModeManager : MonoBehaviour
         if (h != null)
         {
             member.SetActive(true);
+
+            if (NavMesh.SamplePosition(revivePosition, out NavMeshHit hit, 10.0f, NavMesh.AllAreas))
+            {
+                revivePosition = hit.position;
+            }
+
+            revivePosition.y += 1.0f;
+            member.transform.position = revivePosition;
+
             NavMeshAgent agent = member.GetComponent<NavMeshAgent>();
             if (agent != null)
             {
+                agent.enabled = false;
+                agent.transform.position = revivePosition;
                 agent.enabled = true;
                 agent.Warp(revivePosition);
+
+                // Wipe agent history so it doesn't run back to where it died!
+                if (agent.isOnNavMesh) agent.ResetPath();
+                agent.velocity = Vector3.zero;
             }
-            else
+
+            // Wipe animator velocity so they don't moonwalk!
+            Animator anim = member.GetComponentInChildren<Animator>();
+            if (anim != null)
             {
-                member.transform.position = revivePosition;
+                anim.SetFloat("VelocityX", 0f);
+                anim.SetFloat("VelocityZ", 0f);
             }
 
             h.Revive(0.25f);
+
+            // --- THE 'TAB' FIX ---
+            // Let PartyManager securely handle what scripts get turned on/off so they never fight!
+            if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
+            {
+                int activeIndex = PartyManager.instance.partyMembers.IndexOf(PartyManager.instance.ActivePlayer);
+                if (activeIndex == -1) activeIndex = 0;
+                PartyManager.instance.SetActivePlayer(activeIndex);
+            }
         }
         CheckRescueProgress();
     }
@@ -331,12 +359,15 @@ public class DualModeManager : MonoBehaviour
             {
                 foreach (int index in dungeonTeamIndices) if (ValidateIndex(index)) allMembers[index].SetActive(true);
                 foreach (int index in wagonTeamIndices) if (ValidateIndex(index)) allMembers[index].SetActive(false);
-
-                if (dungeonTeamIndices.Count > 0)
-                    StartCoroutine(ForceHandoverRoutine(dungeonTeamIndices[0]));
             }
             else
             {
+                SoulOrb[] oldOrbs = FindObjectsByType<SoulOrb>(FindObjectsSortMode.None);
+                foreach (var oldOrb in oldOrbs)
+                {
+                    if (oldOrb != null) Destroy(oldOrb.gameObject);
+                }
+
                 foreach (int index in dungeonTeamIndices)
                 {
                     if (ValidateIndex(index))
@@ -348,8 +379,14 @@ public class DualModeManager : MonoBehaviour
 
                         if (wasKilled)
                         {
+                            NavMeshAgent victimAgent = victim.GetComponent<NavMeshAgent>();
+                            if (victimAgent != null) victimAgent.enabled = false;
+
+                            victim.transform.position = fallenData.position;
+                            victim.transform.rotation = fallenData.rotation;
+
+                            victim.SetActive(true);
                             if (h != null) h.ForceDownedState();
-                            victim.SetActive(false);
 
                             if (soulOrbPrefab != null)
                             {
@@ -366,12 +403,13 @@ public class DualModeManager : MonoBehaviour
                     }
                 }
 
-                foreach (int index in wagonTeamIndices) if (ValidateIndex(index)) allMembers[index].SetActive(true);
-
-                if (wagonTeamIndices.Count > 0)
+                foreach (int index in wagonTeamIndices)
                 {
-                    Debug.Log($"[DualModeManager] Forcing rescue handover to {allMembers[wagonTeamIndices[0]].name}");
-                    StartCoroutine(ForceHandoverRoutine(wagonTeamIndices[0]));
+                    if (ValidateIndex(index))
+                    {
+                        GameObject member = allMembers[index];
+                        member.SetActive(true);
+                    }
                 }
             }
         }
@@ -387,9 +425,6 @@ public class DualModeManager : MonoBehaviour
                 {
                     if (allMembers[i] != null) allMembers[i].SetActive(true);
                 }
-
-                if (allMembers.Count > 1)
-                    StartCoroutine(ForceHandoverRoutine(1));
             }
             else
             {
@@ -398,44 +433,7 @@ public class DualModeManager : MonoBehaviour
 
                 foreach (int index in wagonTeamIndices)
                     if (ValidateIndex(index)) allMembers[index].SetActive(true);
-
-                if (wagonTeamIndices.Count > 0)
-                    StartCoroutine(ForceHandoverRoutine(wagonTeamIndices[0]));
-                else
-                    StartCoroutine(ForceHandoverRoutine(0));
             }
-        }
-    }
-
-    // --- THE FIX: Absolute Bulletproof Handover Routine ---
-    private IEnumerator ForceHandoverRoutine(int targetIndex)
-    {
-        // 1. Wait until PartyManager exists and has enough members
-        yield return new WaitUntil(() => PartyManager.instance != null && PartyManager.instance.partyMembers.Count > targetIndex);
-
-        // 2. Wait a solid 0.25 seconds. This guarantees all UIs have run Start(),
-        // SaveManagers have loaded health stats, and the scene is stable.
-        yield return new WaitForSeconds(0.25f);
-
-        GameObject newLeader = PartyManager.instance.partyMembers[targetIndex];
-
-        // 3. Safety Check: If the system temporarily thinks they are downed due to loading lag, wake them up!
-        Health h = newLeader.GetComponentInChildren<Health>();
-        if (h != null && h.isDowned)
-        {
-            h.Revive(1f);
-        }
-
-        Debug.Log($"[DualModeManager] Executing Absolute Handover to {newLeader.name}");
-
-        // 4. Force the broadcast to all UIs and Camera
-        PartyManager.instance.SetActivePlayer(targetIndex);
-
-        // 5. Hard-enable movement so the player isn't stuck
-        if (PartyManager.instance.ActivePlayer != null)
-        {
-            PlayerMovement pm = PartyManager.instance.ActivePlayer.GetComponent<PlayerMovement>();
-            if (pm != null) pm.enabled = true;
         }
     }
 

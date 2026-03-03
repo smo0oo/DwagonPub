@@ -237,19 +237,29 @@ public class GameManager : MonoBehaviour
         }
     }
 
+    // --- THE TAB FIX ---
+    // Stop blindly turning on movement scripts! Let PartyManager.SetActivePlayer handle it.
     private void SetMemberControl(GameObject member, bool enabled)
     {
         var agent = member.GetComponent<NavMeshAgent>();
-        var movement = member.GetComponent<PlayerMovement>();
-        var ai = member.GetComponent<PartyMemberAI>();
-
         if (agent != null) agent.enabled = enabled;
-        if (movement != null) movement.enabled = enabled;
 
-        bool shouldAIBeActive = enabled;
-        if (cachedSceneType == SceneType.Town) shouldAIBeActive = false;
+        // If inactive, forcefully shut them down
+        if (!enabled)
+        {
+            var movement = member.GetComponent<PlayerMovement>();
+            var ai = member.GetComponent<PartyMemberAI>();
+            if (movement != null) movement.enabled = false;
+            if (ai != null) ai.enabled = false;
+        }
 
-        if (ai != null) ai.enabled = shouldAIBeActive;
+        // Always wipe the animator velocity to stop them from moonwalking!
+        Animator anim = member.GetComponentInChildren<Animator>();
+        if (anim != null)
+        {
+            anim.SetFloat("VelocityX", 0f);
+            anim.SetFloat("VelocityZ", 0f);
+        }
     }
 
     public void SetSequenceMode(bool isSequenceActive)
@@ -280,7 +290,6 @@ public class GameManager : MonoBehaviour
     {
         if (isInDialogue)
         {
-            // Only disable movement so they don't walk away during dialogue
             SetPlayerMovementComponentsActive(false);
         }
         else
@@ -378,7 +387,6 @@ public class GameManager : MonoBehaviour
         RestoreControlsSafely();
     }
 
-    // --- LOADING & TRANSITIONS ---
     public void LoadLevel(string sceneName, string spawnPointID = null, string fromNodeID = null)
     {
         if (isTransitioning) return;
@@ -429,8 +437,6 @@ public class GameManager : MonoBehaviour
 
         ApplySceneRules();
 
-        if (DualModeManager.instance != null) DualModeManager.instance.ApplyTeamState(currentSceneType);
-
         if (currentSceneType != SceneType.MainMenu && currentSceneType != SceneType.WorldMap)
         {
             if (InventoryUIController.instance != null && PartyManager.instance != null)
@@ -458,6 +464,8 @@ public class GameManager : MonoBehaviour
 
             MovePartyToSpawnPoint(spawnPointID);
         }
+
+        StartCoroutine(ExecuteSceneHandover());
 
         float elapsedTime = Time.realtimeSinceStartup - startTime;
         if (elapsedTime < minimumLoadingScreenTime) yield return new WaitForSeconds(minimumLoadingScreenTime - elapsedTime);
@@ -499,8 +507,26 @@ public class GameManager : MonoBehaviour
             if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
             {
                 if (i == 0) { member.SetActive(false); continue; }
-                if (currentSceneType == SceneType.Dungeon) { if (!DualModeManager.instance.dungeonTeamIndices.Contains(i)) { member.SetActive(false); continue; } }
-                else if (currentSceneType == SceneType.DomeBattle) { if (!justExitedDungeon) { if (DualModeManager.instance.dungeonTeamIndices.Contains(i)) { member.SetActive(false); continue; } } }
+                if (currentSceneType == SceneType.Dungeon)
+                {
+                    if (DualModeManager.instance.isRescueMissionActive)
+                    {
+                        bool inWagon = DualModeManager.instance.wagonTeamIndices.Contains(i);
+                        bool inDungeon = DualModeManager.instance.dungeonTeamIndices.Contains(i);
+                        if (!inWagon && !inDungeon) { member.SetActive(false); continue; }
+                    }
+                    else
+                    {
+                        if (!DualModeManager.instance.dungeonTeamIndices.Contains(i)) { member.SetActive(false); continue; }
+                    }
+                }
+                else if (currentSceneType == SceneType.DomeBattle)
+                {
+                    if (!justExitedDungeon)
+                    {
+                        if (!DualModeManager.instance.wagonTeamIndices.Contains(i)) { member.SetActive(false); continue; }
+                    }
+                }
             }
 
             PlayerSceneState state = PlayerSceneState.Active;
@@ -517,14 +543,31 @@ public class GameManager : MonoBehaviour
 
             bool positioned = false;
 
-            if (i != 0 && (state == PlayerSceneState.SpawnAtMarker || (townSpawns != null && townSpawns.Length > 0)))
+            if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive && DualModeManager.instance.isRescueMissionActive)
             {
-                TownCharacterSpawnPoint mySpawn = townSpawns.FirstOrDefault(t => t.partyMemberIndex == i);
-                if (mySpawn != null)
+                if (DualModeManager.instance.dungeonTeamIndices.Contains(i))
                 {
-                    member.transform.position = mySpawn.transform.position;
-                    member.transform.rotation = mySpawn.transform.rotation;
-                    positioned = true;
+                    var fallenData = DualModeManager.instance.fallenHeroes.FirstOrDefault(f => f.memberIndex == i);
+                    if (fallenData != null)
+                    {
+                        member.transform.position = fallenData.position;
+                        member.transform.rotation = fallenData.rotation;
+                        positioned = true;
+                    }
+                }
+            }
+
+            if (!positioned)
+            {
+                if (i != 0 && (state == PlayerSceneState.SpawnAtMarker || (townSpawns != null && townSpawns.Length > 0)))
+                {
+                    TownCharacterSpawnPoint mySpawn = townSpawns.FirstOrDefault(t => t.partyMemberIndex == i);
+                    if (mySpawn != null)
+                    {
+                        member.transform.position = mySpawn.transform.position;
+                        member.transform.rotation = mySpawn.transform.rotation;
+                        positioned = true;
+                    }
                 }
             }
 
@@ -536,13 +579,107 @@ public class GameManager : MonoBehaviour
 
             bool shouldBeActive = true;
             bool shouldHaveControl = (state == PlayerSceneState.Active);
+
+            if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive && DualModeManager.instance.isRescueMissionActive)
+            {
+                if (DualModeManager.instance.dungeonTeamIndices.Contains(i))
+                {
+                    shouldHaveControl = false;
+                }
+            }
+
             member.SetActive(shouldBeActive);
 
             if (agent != null)
             {
-                if (shouldHaveControl) { agent.enabled = true; agent.Warp(member.transform.position); }
-                else { agent.enabled = false; }
+                if (shouldHaveControl)
+                {
+                    agent.enabled = false;
+
+                    Vector3 snapPos = member.transform.position;
+                    if (NavMesh.SamplePosition(snapPos, out NavMeshHit hit, 10.0f, NavMesh.AllAreas))
+                    {
+                        snapPos = hit.position;
+                    }
+
+                    snapPos.y += 1.0f;
+
+                    member.transform.position = snapPos;
+                    agent.enabled = true;
+                    agent.Warp(snapPos);
+
+                    // Wipe agent history so they don't walk back to the door
+                    if (agent.isOnNavMesh) agent.ResetPath();
+                    agent.velocity = Vector3.zero;
+
+                    // Wipe animator velocity so they don't moonwalk!
+                    Animator anim = member.GetComponentInChildren<Animator>();
+                    if (anim != null) { anim.SetFloat("VelocityX", 0f); anim.SetFloat("VelocityZ", 0f); }
+                }
+                else
+                {
+                    agent.enabled = false;
+                }
             }
+        }
+    }
+
+    private IEnumerator ExecuteSceneHandover()
+    {
+        if (PartyManager.instance != null)
+        {
+            int targetIndex = 0;
+            bool allowSwitching = false;
+
+            if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
+            {
+                if (currentSceneType == SceneType.Dungeon)
+                {
+                    if (DualModeManager.instance.isRescueMissionActive && DualModeManager.instance.wagonTeamIndices.Count > 0)
+                        targetIndex = DualModeManager.instance.wagonTeamIndices[0];
+                    else if (DualModeManager.instance.dungeonTeamIndices.Count > 0)
+                        targetIndex = DualModeManager.instance.dungeonTeamIndices[0];
+                    allowSwitching = true;
+                }
+                else if (currentSceneType == SceneType.DomeBattle)
+                {
+                    if (justExitedDungeon) targetIndex = 1;
+                    else if (DualModeManager.instance.wagonTeamIndices.Count > 0) targetIndex = DualModeManager.instance.wagonTeamIndices[0];
+                    allowSwitching = true;
+                }
+            }
+            else if (currentSceneType != SceneType.Town && currentSceneType != SceneType.WorldMap)
+            {
+                allowSwitching = true;
+            }
+
+            // --- INSTANT TAB LOGIC ---
+            // Run it immediately to resolve component conflicts!
+            PartyManager.instance.SetActivePlayer(targetIndex);
+
+            yield return new WaitForSeconds(0.25f);
+
+            // Re-fire for the newly initialized UIs
+            PartyManager.instance.SetActivePlayer(targetIndex);
+
+            yield return new WaitForSeconds(0.1f);
+
+            GameObject leader = PartyManager.instance.partyMembers[targetIndex];
+
+            PlayerCameraController cam = FindAnyObjectByType<PlayerCameraController>();
+            if (cam != null && cam.gameplayCamera != null && leader != null)
+            {
+                cam.gameplayCamera.Follow = leader.transform;
+                cam.gameplayCamera.LookAt = leader.transform;
+                cam.gameplayCamera.PreviousStateIsValid = false;
+            }
+
+            if (leader != null)
+            {
+                PlayerMovement pm = leader.GetComponent<PlayerMovement>();
+                if (pm != null) pm.enabled = true;
+            }
+            PartyManager.instance.SetPlayerSwitching(allowSwitching);
         }
     }
 

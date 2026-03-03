@@ -71,29 +71,31 @@ public class PartyManager : MonoBehaviour
 
     void Update()
     {
+        // --- AAA FIX: THE SELF-HEALING PROTOCOL ---
+        // If the current ActivePlayer is disabled by SceneInfo rules or killed, 
+        // the manager instantly auto-corrects to a valid character.
+        if (ActivePlayer != null)
+        {
+            bool isInvalid = !ActivePlayer.activeInHierarchy;
+
+            if (!isInvalid)
+            {
+                Health h = ActivePlayer.GetComponentInChildren<Health>();
+                if (h != null && h.isDowned) isInvalid = true;
+            }
+
+            if (isInvalid)
+            {
+                SwitchToNextLivingMember();
+            }
+        }
+        // ------------------------------------------
+
         if (!playerSwitchingEnabled) return;
 
         if (Input.GetKeyDown(KeyCode.Tab))
         {
-            int nextIndex = (activePlayerIndex + 1) % partyMembers.Count;
-            int loopCount = 0;
-
-            // Loop until we find a living member or check everyone
-            while (loopCount < partyMembers.Count)
-            {
-                GameObject candidate = partyMembers[nextIndex];
-                if (candidate != null && candidate.activeInHierarchy)
-                {
-                    Health h = candidate.GetComponentInChildren<Health>();
-                    if (h != null && !h.isDowned && h.currentHealth > 0)
-                    {
-                        SetActivePlayer(nextIndex);
-                        return;
-                    }
-                }
-                nextIndex = (nextIndex + 1) % partyMembers.Count;
-                loopCount++;
-            }
+            SwitchToNextLivingMember();
         }
     }
 
@@ -134,10 +136,11 @@ public class PartyManager : MonoBehaviour
 
     private void SwitchToNextLivingMember()
     {
-        int startIndex = activePlayerIndex;
         int nextIndex = (activePlayerIndex + 1) % partyMembers.Count;
+        int loopCount = 0;
 
-        while (nextIndex != startIndex)
+        // Loop until we find a living, active member or check everyone
+        while (loopCount < partyMembers.Count)
         {
             GameObject candidate = partyMembers[nextIndex];
             if (candidate != null && candidate.activeInHierarchy)
@@ -145,12 +148,12 @@ public class PartyManager : MonoBehaviour
                 Health h = candidate.GetComponentInChildren<Health>();
                 if (h != null && !h.isDowned && h.currentHealth > 0)
                 {
-                    Debug.Log($"Active player down! Auto-switching to {candidate.name}");
                     SetActivePlayer(nextIndex);
                     return;
                 }
             }
             nextIndex = (nextIndex + 1) % partyMembers.Count;
+            loopCount++;
         }
     }
 
@@ -194,14 +197,14 @@ public class PartyManager : MonoBehaviour
         if (index < 0 || index >= partyMembers.Count) return;
 
         GameObject candidate = partyMembers[index];
-        if (candidate != null)
-        {
-            Health h = candidate.GetComponentInChildren<Health>();
-            if (h != null && h.isDowned)
-            {
-                return;
-            }
-        }
+
+        // --- AAA FIX: DATA VALIDATION ---
+        // Prevents external scripts from explicitly forcing an invalid character to be active
+        if (candidate == null || !candidate.activeInHierarchy) return;
+
+        Health h = candidate.GetComponentInChildren<Health>();
+        if (h != null && h.isDowned) return;
+        // --------------------------------
 
         activePlayerIndex = index;
         ActivePlayer = partyMembers[activePlayerIndex];
@@ -260,6 +263,15 @@ public class PartyManager : MonoBehaviour
     {
         playerSwitchingEnabled = isEnabled;
         if (!isEnabled && activePlayerIndex != 0) SetActivePlayer(0);
+    }
+
+    // Explicit broadcast method for late-loading UIs
+    public void ForceBroadcastActivePlayer()
+    {
+        if (ActivePlayer != null && ActivePlayer.activeInHierarchy)
+        {
+            OnActivePlayerChanged?.Invoke(ActivePlayer);
+        }
     }
 
     #region Leveling Methods

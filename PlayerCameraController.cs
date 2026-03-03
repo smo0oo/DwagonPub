@@ -87,6 +87,24 @@ public class PlayerCameraController : MonoBehaviour
 
     void Update()
     {
+        // --- AAA FIX: THE SELF-HEALING CAMERA ---
+        // If the camera misses an event broadcast during a scene load, it instantly detects 
+        // that it is looking at the wrong thing and corrects itself!
+        if (gameplayCamera != null && PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
+        {
+            Transform expectedTarget = PartyManager.instance.ActivePlayer.transform;
+
+            if (gameplayCamera.Follow != expectedTarget)
+            {
+                // Only snap if the target is actually physically alive/active in the hierarchy
+                if (expectedTarget.gameObject.activeInHierarchy)
+                {
+                    HandleActivePlayerChanged(PartyManager.instance.ActivePlayer);
+                }
+            }
+        }
+        // ----------------------------------------
+
         if (transposer == null) return;
 
         float scrollInput = Input.GetAxis("Mouse ScrollWheel");
