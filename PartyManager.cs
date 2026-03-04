@@ -71,9 +71,6 @@ public class PartyManager : MonoBehaviour
 
     void Update()
     {
-        // --- AAA FIX: THE SELF-HEALING PROTOCOL ---
-        // If the current ActivePlayer is disabled by SceneInfo rules or killed, 
-        // the manager instantly auto-corrects to a valid character.
         if (ActivePlayer != null)
         {
             bool isInvalid = !ActivePlayer.activeInHierarchy;
@@ -89,7 +86,6 @@ public class PartyManager : MonoBehaviour
                 SwitchToNextLivingMember();
             }
         }
-        // ------------------------------------------
 
         if (!playerSwitchingEnabled) return;
 
@@ -139,7 +135,6 @@ public class PartyManager : MonoBehaviour
         int nextIndex = (activePlayerIndex + 1) % partyMembers.Count;
         int loopCount = 0;
 
-        // Loop until we find a living, active member or check everyone
         while (loopCount < partyMembers.Count)
         {
             GameObject candidate = partyMembers[nextIndex];
@@ -198,54 +193,38 @@ public class PartyManager : MonoBehaviour
 
         GameObject candidate = partyMembers[index];
 
-        // --- AAA FIX: DATA VALIDATION ---
-        // Prevents external scripts from explicitly forcing an invalid character to be active
         if (candidate == null || !candidate.activeInHierarchy) return;
 
         Health h = candidate.GetComponentInChildren<Health>();
         if (h != null && h.isDowned) return;
-        // --------------------------------
 
         activePlayerIndex = index;
         ActivePlayer = partyMembers[activePlayerIndex];
 
-        // --- COMPONENT TOGGLE LOGIC ---
         foreach (GameObject member in partyMembers)
         {
             if (member == null) continue;
 
             bool isMemberActive = (member == ActivePlayer);
 
-            // 1. Toggle PlayerMovement
+            // --- THE FIX: STRICT CORPSE CHECK ---
+            // Verify if this specific character is downed so we don't accidentally revive their AI!
+            Health memberHealth = member.GetComponentInChildren<Health>();
+            bool isDead = memberHealth != null && (memberHealth.isDowned || memberHealth.currentHealth <= 0);
+
             PlayerMovement pm = member.GetComponent<PlayerMovement>();
-            if (pm != null)
-            {
-                pm.enabled = isMemberActive;
-            }
+            if (pm != null) pm.enabled = isMemberActive && !isDead;
 
-            // 2. Toggle PartyMemberAI
             PartyMemberAI ai = member.GetComponent<PartyMemberAI>();
-            if (ai != null)
-            {
-                ai.enabled = !isMemberActive;
-            }
+            if (ai != null) ai.enabled = !isMemberActive && !isDead;
 
-            // 3. Toggle PartyMemberTargeting
             PartyMemberTargeting targeting = member.GetComponent<PartyMemberTargeting>();
-            if (targeting != null)
-            {
-                targeting.enabled = !isMemberActive;
-            }
+            if (targeting != null) targeting.enabled = !isMemberActive && !isDead;
 
-            // 4. Toggle PartyMemberAbilitySelector
             PartyMemberAbilitySelector selector = member.GetComponent<PartyMemberAbilitySelector>();
-            if (selector != null)
-            {
-                selector.enabled = !isMemberActive;
-            }
+            if (selector != null) selector.enabled = !isMemberActive && !isDead;
 
-            // 5. Safety: Reset path when becoming the active player to prevent ghost-walking
-            if (isMemberActive)
+            if (isMemberActive && !isDead)
             {
                 NavMeshAgent agent = member.GetComponent<NavMeshAgent>();
                 if (agent != null && agent.isOnNavMesh && agent.hasPath)
@@ -254,7 +233,6 @@ public class PartyManager : MonoBehaviour
                 }
             }
         }
-        // -----------------------------
 
         OnActivePlayerChanged?.Invoke(ActivePlayer);
     }
@@ -265,7 +243,6 @@ public class PartyManager : MonoBehaviour
         if (!isEnabled && activePlayerIndex != 0) SetActivePlayer(0);
     }
 
-    // Explicit broadcast method for late-loading UIs
     public void ForceBroadcastActivePlayer()
     {
         if (ActivePlayer != null && ActivePlayer.activeInHierarchy)

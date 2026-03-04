@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.VFX;
 using System;
+using System.Collections;
 
 public class Health : MonoBehaviour
 {
@@ -24,11 +25,9 @@ public class Health : MonoBehaviour
     public bool isInvulnerable = false;
     public bool debugGodMode = false;
 
-    // --- AAA VISUAL FX SYSTEM ---
     [Header("Visual Effects (Surface System)")]
     public SurfaceDefinition surfaceDefinition;
     public Vector3 hitVFXOffset = new Vector3(0, 1.5f, 0);
-    // ----------------------------
 
     // --- State ---
     public bool isDowned { get; private set; } = false;
@@ -126,7 +125,6 @@ public class Health : MonoBehaviour
 
         currentHealth -= damageToDeal;
 
-        // --- 4. AAA VISUAL FX IMPLEMENTATION ---
         if (surfaceDefinition != null && damageToDeal > 0)
         {
             surfaceDefinition.GetReaction(damageType, out GameObject prefab, out VisualEffectAsset graph, out AudioClip sound);
@@ -151,14 +149,12 @@ public class Health : MonoBehaviour
                         vfxComp.visualEffectAsset = graph;
                         vfxComp.Play();
                     }
-                    // AAA FIX: Activate the container!
                     vfxInstance.SetActive(true);
                 }
             }
             else if (prefab != null)
             {
                 vfxInstance = ObjectPooler.instance.Get(prefab, transform.position + hitVFXOffset, rotation);
-                // AAA FIX: Activate the prefab!
                 if (vfxInstance != null) vfxInstance.SetActive(true);
             }
 
@@ -167,7 +163,6 @@ public class Health : MonoBehaviour
                 AudioSource.PlayClipAtPoint(sound, transform.position);
             }
         }
-        // ------------------------------------
 
         OnDamageTaken?.Invoke(new DamageInfo { Caster = caster, Target = this.gameObject, Amount = damageToDeal, IsCrit = isCrit, DamageType = damageType });
 
@@ -195,35 +190,50 @@ public class Health : MonoBehaviour
     private void BecomeDowned()
     {
         if (isDowned) return;
-        isDowned = true;
+        isDowned = true; // Set game state immediately
         currentHealth = 0;
 
         Debug.Log($"{name} is DOWNED!");
-
-        if (root != null && root.Animator != null)
-        {
-            root.Animator.SetBool(IsDownedHash, true);
-            root.Animator.SetTrigger(DeathHash);
-        }
 
         ToggleCombatCapability(false);
 
         if (root != null)
         {
             var agent = root.GetComponent<UnityEngine.AI.NavMeshAgent>();
-            if (agent != null && agent.enabled)
+            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
             {
                 agent.isStopped = true;
                 agent.ResetPath();
+                agent.velocity = Vector3.zero;
             }
         }
 
         gameObject.layer = ignoreRaycastLayer;
 
+        if (root != null && root.Animator != null)
+        {
+            root.Animator.SetFloat("VelocityX", 0f);
+            root.Animator.SetFloat("VelocityZ", 0f);
+
+            // --- THE FIX: Match Enemy Animation Logic ---
+            // Only fire the trigger immediately so the AnyState blend tree doesn't skip it
+            root.Animator.SetTrigger(DeathHash);
+
+            // Delay the boolean so the Death animation actually gets to play!
+            StartCoroutine(ApplyDownedBoolDelayed(root.Animator));
+        }
+
         OnDowned?.Invoke();
         OnHealthChanged?.Invoke();
 
         if (PartyManager.instance != null) PartyManager.instance.CheckPartyStatus();
+    }
+
+    private IEnumerator ApplyDownedBoolDelayed(Animator anim)
+    {
+        // Wait 1.5 seconds for the Death animation to physically play and finish
+        yield return new WaitForSeconds(1.5f);
+        if (anim != null) anim.SetBool(IsDownedHash, true);
     }
 
     public void Revive(float healthPercentage = 0.25f)
@@ -270,10 +280,11 @@ public class Health : MonoBehaviour
         if (root != null)
         {
             var agent = root.GetComponent<UnityEngine.AI.NavMeshAgent>();
-            if (agent != null)
+            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
             {
                 agent.isStopped = true;
                 agent.ResetPath();
+                agent.velocity = Vector3.zero;
             }
         }
 
@@ -281,7 +292,12 @@ public class Health : MonoBehaviour
 
         if (root != null && root.Animator != null)
         {
+            root.Animator.SetFloat("VelocityX", 0f);
+            root.Animator.SetFloat("VelocityZ", 0f);
             root.Animator.SetBool(IsDownedHash, true);
+
+            // Instantly evaluate the animation at the final frame so they are lying down on load
+            root.Animator.Play("Death", 0, 1.0f);
         }
 
         Debug.Log($"{name} forcibly set to DOWNED state.");
@@ -321,14 +337,36 @@ public class Health : MonoBehaviour
 
         OnDeath?.Invoke();
 
+        ToggleCombatCapability(false);
+
+        if (root != null)
+        {
+            var agent = root.GetComponent<UnityEngine.AI.NavMeshAgent>();
+            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
+            {
+                agent.isStopped = true;
+                agent.ResetPath();
+                agent.velocity = Vector3.zero;
+            }
+        }
+
         if (root != null && root.Animator != null)
         {
+            root.Animator.SetFloat("VelocityX", 0f);
+            root.Animator.SetFloat("VelocityZ", 0f);
+
+            // Notice how the enemy DOES NOT set the IsDowned boolean here!
             root.Animator.SetTrigger(DeathHash);
         }
         else
         {
             Animator anim = GetComponentInChildren<Animator>();
-            if (anim != null) anim.SetTrigger(DeathHash);
+            if (anim != null)
+            {
+                anim.SetFloat("VelocityX", 0f);
+                anim.SetFloat("VelocityZ", 0f);
+                anim.SetTrigger(DeathHash);
+            }
         }
 
         if (lootGenerator != null) lootGenerator.DropLoot();
