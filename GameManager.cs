@@ -90,7 +90,8 @@ public class GameManager : MonoBehaviour
     {
         if (!Debug.isDebugBuild) return;
 
-        float height = isDebugExpanded ? 250 : 30;
+        // Increased height to accommodate the new Aiming telemetry
+        float height = isDebugExpanded ? 340 : 30;
         GUILayout.BeginArea(new Rect(10, 10, 350, height));
         if (GUILayout.Button(isDebugExpanded ? "Game State Debugger (▼)" : "Game State Debugger (▶)"))
         {
@@ -99,7 +100,7 @@ public class GameManager : MonoBehaviour
 
         if (isDebugExpanded)
         {
-            GUI.Box(new Rect(0, 25, 350, 225), "");
+            GUI.Box(new Rect(0, 25, 350, height - 25), "");
             GUILayout.Label($"Scene: {currentLevelScene} ({currentSceneType})");
             GUILayout.Label($"Sequence Mode: {IsSequenceModeActive}");
             GUILayout.Label($"Just Exited Dungeon: {justExitedDungeon}");
@@ -115,6 +116,40 @@ public class GameManager : MonoBehaviour
                     GUILayout.Label($"Wagon Team: {dmm.wagonTeamIndices.Count}");
                 }
             }
+
+            // --- AAA FIX: LIVE PROJECTILE AIM TELEMETRY ---
+            if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
+            {
+                GameObject activePlayer = PartyManager.instance.ActivePlayer;
+                PlayerMovement pm = activePlayer.GetComponent<PlayerMovement>();
+                PlayerAbilityHolder pah = activePlayer.GetComponentInChildren<PlayerAbilityHolder>();
+
+                if (pm != null && pah != null)
+                {
+                    GUILayout.Space(10);
+
+                    GUIStyle boldStyle = new GUIStyle(GUI.skin.label) { fontStyle = FontStyle.Bold };
+                    GUILayout.Label("--- Active Player Aim Data ---", boldStyle);
+
+                    Vector3 groundTarget = pm.CurrentGroundTarget;
+                    Transform spawnPoint = pah.projectileSpawnPoint != null ? pah.projectileSpawnPoint : pah.transform;
+
+                    // Exact math from PlayerAbilityHolder.cs
+                    float playerFloorY = activePlayer.transform.position.y;
+                    if (UnityEngine.AI.NavMesh.SamplePosition(activePlayer.transform.position, out UnityEngine.AI.NavMeshHit hit, 2f, UnityEngine.AI.NavMesh.AllAreas))
+                    {
+                        playerFloorY = hit.position.y;
+                    }
+
+                    float spawnHeightOffset = spawnPoint.position.y - playerFloorY;
+                    float finalAimHeight = groundTarget.y + spawnHeightOffset;
+
+                    GUILayout.Label($"Mouse Terrain Height: <color=yellow>{groundTarget.y:F2}m</color>");
+                    GUILayout.Label($"Spawn Offset: <color=yellow>+{spawnHeightOffset:F2}m</color>");
+                    GUILayout.Label($"Final Aim Height: <color=green>{finalAimHeight:F2}m</color>");
+                }
+            }
+            // ----------------------------------------------
         }
         GUILayout.EndArea();
     }
@@ -237,14 +272,11 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    // --- THE TAB FIX ---
-    // Stop blindly turning on movement scripts! Let PartyManager.SetActivePlayer handle it.
     private void SetMemberControl(GameObject member, bool enabled)
     {
         var agent = member.GetComponent<NavMeshAgent>();
         if (agent != null) agent.enabled = enabled;
 
-        // If inactive, forcefully shut them down
         if (!enabled)
         {
             var movement = member.GetComponent<PlayerMovement>();
@@ -253,7 +285,6 @@ public class GameManager : MonoBehaviour
             if (ai != null) ai.enabled = false;
         }
 
-        // Always wipe the animator velocity to stop them from moonwalking!
         Animator anim = member.GetComponentInChildren<Animator>();
         if (anim != null)
         {
@@ -608,11 +639,9 @@ public class GameManager : MonoBehaviour
                     agent.enabled = true;
                     agent.Warp(snapPos);
 
-                    // Wipe agent history so they don't walk back to the door
                     if (agent.isOnNavMesh) agent.ResetPath();
                     agent.velocity = Vector3.zero;
 
-                    // Wipe animator velocity so they don't moonwalk!
                     Animator anim = member.GetComponentInChildren<Animator>();
                     if (anim != null) { anim.SetFloat("VelocityX", 0f); anim.SetFloat("VelocityZ", 0f); }
                 }
@@ -653,13 +682,10 @@ public class GameManager : MonoBehaviour
                 allowSwitching = true;
             }
 
-            // --- INSTANT TAB LOGIC ---
-            // Run it immediately to resolve component conflicts!
             PartyManager.instance.SetActivePlayer(targetIndex);
 
             yield return new WaitForSeconds(0.25f);
 
-            // Re-fire for the newly initialized UIs
             PartyManager.instance.SetActivePlayer(targetIndex);
 
             yield return new WaitForSeconds(0.1f);

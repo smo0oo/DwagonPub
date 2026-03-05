@@ -45,6 +45,10 @@ public class UIPartyPortraitsManager : MonoBehaviour
         StatsUIManager.OnStatsPanelToggled += HandleStatsPanelToggle;
         InventoryUIController.OnPartyInventoryToggled += HandlePartyInventoryToggle;
         PartyAIManager.OnStanceChanged += HandleStanceChanged;
+
+        // Listen to global stat changes
+        PlayerStats.OnStatsChanged += HandleAnyPointsChanged;
+
         StartCoroutine(DelayedInitialRefresh());
     }
 
@@ -54,14 +58,37 @@ public class UIPartyPortraitsManager : MonoBehaviour
         StatsUIManager.OnStatsPanelToggled -= HandleStatsPanelToggle;
         InventoryUIController.OnPartyInventoryToggled -= HandlePartyInventoryToggle;
         PartyAIManager.OnStanceChanged -= HandleStanceChanged;
-        if (allPlayers != null) { foreach (var player in allPlayers) { if (player != null && player.TryGetComponent<PartyMemberAI>(out var ai)) { ai.OnStatusChanged -= HandleAIStatusChanged; } } }
+
+        PlayerStats.OnStatsChanged -= HandleAnyPointsChanged;
+
+        UnsubscribeAllInstanceEvents();
+    }
+
+    private void UnsubscribeAllInstanceEvents()
+    {
+        if (allPlayers != null)
+        {
+            foreach (var player in allPlayers)
+            {
+                if (player != null)
+                {
+                    if (player.TryGetComponent<PartyMemberAI>(out var ai)) ai.OnStatusChanged -= HandleAIStatusChanged;
+                    if (player.TryGetComponent<Health>(out var h)) h.OnHealthChanged -= HandleAnyHealthChanged;
+                    var stats = player.GetComponentInChildren<PlayerStats>();
+                    if (stats != null) stats.OnSkillPointsChanged -= HandleAnyPointsChanged;
+                    var holder = player.GetComponentInChildren<StatusEffectHolder>();
+                    if (holder != null) holder.OnEffectsChanged -= RefreshStatusEffects;
+                }
+            }
+        }
     }
 
     public void RefreshAllPortraits()
     {
         if (partyManager == null) return;
 
-        if (allPlayers != null) { foreach (var player in allPlayers) { if (player != null && player.TryGetComponent<PartyMemberAI>(out var ai)) { ai.OnStatusChanged -= HandleAIStatusChanged; } } }
+        // Clean up old listeners before rebuilding to prevent memory leaks
+        UnsubscribeAllInstanceEvents();
 
         allPlayers = partyManager.partyMembers;
         playerToUIMap.Clear();
@@ -78,44 +105,38 @@ public class UIPartyPortraitsManager : MonoBehaviour
                 GameObject player = allPlayers[i];
                 playerToUIMap[player] = ui;
 
-                // --- SCENE INFO LOGIC ---
                 PlayerSceneState sceneState = PlayerSceneState.Active;
                 if (currentSceneInfo != null && i < currentSceneInfo.playerConfigs.Count)
                 {
                     sceneState = currentSceneInfo.playerConfigs[i].state;
                 }
 
-                // Ensure the frame is universally active in the layout group
                 ui.portraitFrame.SetActive(true);
 
                 if (ui.canvasGroup != null)
                 {
                     if (sceneState == PlayerSceneState.Hidden)
                     {
-                        // Completely invisible, but preserves layout space
                         ui.canvasGroup.alpha = 0f;
                         ui.canvasGroup.interactable = false;
                         ui.canvasGroup.blocksRaycasts = false;
                     }
                     else
                     {
-                        // Visible and functional
                         ui.canvasGroup.alpha = 1f;
                         ui.canvasGroup.interactable = true;
                         ui.canvasGroup.blocksRaycasts = true;
                     }
                 }
 
-                // If inactive, darken the portrait to visually indicate they cannot be controlled
                 if (sceneState == PlayerSceneState.Inactive || sceneState == PlayerSceneState.SpawnAtMarker)
                 {
-                    ui.portraitImage.color = new Color(0.3f, 0.3f, 0.3f, 1f); // Dark Gray
+                    ui.portraitImage.color = new Color(0.3f, 0.3f, 0.3f, 1f);
                 }
                 else
                 {
-                    ui.portraitImage.color = Color.white; // Full brightness
+                    ui.portraitImage.color = Color.white;
                 }
-                // -------------------------
 
                 CharacterRoot root = player.GetComponent<CharacterRoot>();
                 if (root == null) continue;
@@ -149,15 +170,35 @@ public class UIPartyPortraitsManager : MonoBehaviour
                             ui.portraitImage.sprite = Sprite.Create(portraitTex, new Rect(0, 0, portraitTex.width, portraitTex.height), new Vector2(0.5f, 0.5f));
                         }
                     }
+
+                    // Setup Unspent Points Notifications
+                    stats.OnSkillPointsChanged += HandleAnyPointsChanged;
+                    UpdateUnspentPoints(ui, stats);
                 }
 
-                if (health != null) { health.OnHealthChanged -= () => UpdateHealthBar(ui, health); health.OnHealthChanged += () => UpdateHealthBar(ui, health); UpdateHealthBar(ui, health); }
-                if (statusHolder != null) { holderToUIMap[statusHolder] = ui; statusHolder.OnEffectsChanged -= RefreshStatusEffects; statusHolder.OnEffectsChanged += RefreshStatusEffects; RefreshStatusEffects(statusHolder); }
-                if (ai != null) { ai.OnStatusChanged += HandleAIStatusChanged; ui.stanceButton.onClick.RemoveAllListeners(); ui.stanceButton.onClick.AddListener(() => CycleStance(player)); UpdateStanceIcon(ui, PartyAIManager.instance.GetStanceForCharacter(player)); }
+                if (health != null)
+                {
+                    health.OnHealthChanged += HandleAnyHealthChanged;
+                    UpdateHealthBar(ui, health);
+                }
+
+                if (statusHolder != null)
+                {
+                    holderToUIMap[statusHolder] = ui;
+                    statusHolder.OnEffectsChanged += RefreshStatusEffects;
+                    RefreshStatusEffects(statusHolder);
+                }
+
+                if (ai != null)
+                {
+                    ai.OnStatusChanged += HandleAIStatusChanged;
+                    ui.stanceButton.onClick.RemoveAllListeners();
+                    ui.stanceButton.onClick.AddListener(() => CycleStance(player));
+                    UpdateStanceIcon(ui, PartyAIManager.instance.GetStanceForCharacter(player));
+                }
             }
             else
             {
-                // Empty party slots (e.g., Slot 4 and 5 if you only have 3 players)
                 if (ui.canvasGroup != null)
                 {
                     ui.canvasGroup.alpha = 0f;
@@ -166,7 +207,6 @@ public class UIPartyPortraitsManager : MonoBehaviour
                 }
                 else
                 {
-                    // Fallback just in case you forgot to assign a Canvas Group
                     ui.portraitFrame.SetActive(false);
                 }
             }
@@ -174,7 +214,45 @@ public class UIPartyPortraitsManager : MonoBehaviour
         HandleActivePlayerChanged(partyManager.ActivePlayer);
     }
 
-    #region Unchanged Code + Stance Visibility Protection
+    #region Event Handlers
+
+    // --- NEW: Refresh Notification Icons ---
+    private void HandleAnyPointsChanged()
+    {
+        if (allPlayers == null) return;
+        foreach (var player in allPlayers)
+        {
+            if (player != null && playerToUIMap.TryGetValue(player, out var ui))
+            {
+                var stats = player.GetComponentInChildren<PlayerStats>();
+                if (stats != null) UpdateUnspentPoints(ui, stats);
+            }
+        }
+    }
+
+    private void UpdateUnspentPoints(PlayerPortraitUI ui, PlayerStats stats)
+    {
+        if (ui.unspentStatPointsIcon != null)
+            ui.unspentStatPointsIcon.SetActive(stats.unspentStatPoints > 0);
+
+        if (ui.unspentSkillPointsIcon != null)
+            ui.unspentSkillPointsIcon.SetActive(stats.unspentSkillPoints > 0);
+    }
+    // ---------------------------------------
+
+    private void HandleAnyHealthChanged()
+    {
+        if (allPlayers == null) return;
+        foreach (var player in allPlayers)
+        {
+            if (player != null && playerToUIMap.TryGetValue(player, out var ui))
+            {
+                var health = player.GetComponentInChildren<Health>();
+                if (health != null) UpdateHealthBar(ui, health);
+            }
+        }
+    }
+
     private void HandleAIStatusChanged(PartyMemberAI ai, string newStatus) { if (playerToUIMap.TryGetValue(ai.gameObject, out PlayerPortraitUI ui)) { if (ui.statusText != null) { ui.statusText.text = newStatus; } } }
     private void HandleStanceChanged(GameObject character, AIStance newStance) { if (playerToUIMap.TryGetValue(character, out PlayerPortraitUI ui)) { UpdateStanceIcon(ui, newStance); } }
     private void CycleStance(GameObject character) { if (PartyAIManager.instance == null) return; AIStance currentStance = PartyAIManager.instance.GetStanceForCharacter(character); AIStance nextStance = (AIStance)(((int)currentStance + 1) % 3); PartyAIManager.instance.SetStanceForCharacter(character, nextStance); }

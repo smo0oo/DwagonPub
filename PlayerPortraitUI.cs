@@ -1,5 +1,3 @@
-// PlayerPortraitUI.cs
-
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
@@ -10,7 +8,6 @@ public class PlayerPortraitUI
     [Tooltip("The parent object for this portrait, which will be scaled.")]
     public GameObject portraitFrame;
 
-    // --- NEW: Safe Hiding Reference ---
     [Tooltip("The Canvas Group on the portrait frame, used to hide it safely without disabling the GameObject.")]
     public CanvasGroup canvasGroup;
 
@@ -33,4 +30,11 @@ public class PlayerPortraitUI
     public Button stanceButton;
     [Tooltip("The Image component of the stance button, used to change the icon.")]
     public Image stanceIconImage;
+
+    [Header("Notifications")]
+    [Tooltip("Icon displayed when the character has unspent stat/attribute points.")]
+    public GameObject unspentStatPointsIcon;
+
+    [Tooltip("Icon displayed when the character has unspent skill/talent points.")]
+    public GameObject unspentSkillPointsIcon;
 }

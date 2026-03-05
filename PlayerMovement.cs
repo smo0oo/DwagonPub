@@ -32,6 +32,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
     public Vector3 CurrentHeadLookPosition { get; private set; }
     public Vector3 CurrentLookTarget { get; private set; }
+    public Vector3 CurrentGroundTarget { get; private set; }
     public float CurrentHeadLookWeight { get; private set; }
 
     [Header("Dodge Roll")]
@@ -85,6 +86,11 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     private int velocityZHash;
     private int velocityXHash;
     private int weaponTypeHash;
+
+    // --- NEW AAA FIX: Detailed Weapon Category Hash ---
+    private int weaponCategoryHash;
+    // -------------------------------------------------
+
     private int dodgeHash;
 
     private int frameSkipCounter = 0;
@@ -116,6 +122,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         velocityZHash = Animator.StringToHash("VelocityZ");
         velocityXHash = Animator.StringToHash("VelocityX");
         weaponTypeHash = Animator.StringToHash("WeaponType");
+        weaponCategoryHash = Animator.StringToHash("WeaponCategory"); // Added
         dodgeHash = Animator.StringToHash(!string.IsNullOrEmpty(dodgeAnimationTrigger) ? dodgeAnimationTrigger : "DodgeRoll");
 
         if (navMeshAgent != null)
@@ -223,11 +230,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         foreach (var result in results)
         {
-            if (result.gameObject.GetComponentInParent<LootLabel>() != null)
-            {
-                continue;
-            }
-
+            if (result.gameObject.GetComponentInParent<LootLabel>() != null) continue;
             return true;
         }
 
@@ -262,6 +265,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             targetLookPos = hit.point;
         }
 
+        CurrentGroundTarget = targetLookPos;
         targetLookPos.y = transform.position.y + headLookHeight;
         CurrentLookTarget = targetLookPos;
         CurrentHeadLookPosition = Vector3.Lerp(CurrentHeadLookPosition, CurrentLookTarget, Time.deltaTime * headLookSpeed);
@@ -410,18 +414,44 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         IsMovingToAttack = false;
         if (interactionCoroutine != null) StopCoroutine(interactionCoroutine);
         RotateTowardsMouse(true);
+
         if (animator != null) animator.SetTrigger(dodgeHash);
+
         Vector3 startPosition = transform.position;
         Vector3 destination = startPosition + transform.forward * dodgeDistance;
-        if (NavMesh.SamplePosition(destination, out NavMeshHit hit, 2.0f, NavMesh.AllAreas)) destination = new Vector3(hit.position.x, startPosition.y, hit.position.z); else destination = startPosition;
+
+        float yOffset = 0f;
+        if (NavMesh.SamplePosition(startPosition, out NavMeshHit startHit, 2.0f, NavMesh.AllAreas))
+        {
+            yOffset = startPosition.y - startHit.position.y;
+        }
+
+        if (NavMesh.SamplePosition(destination, out NavMeshHit hit, 2.0f, NavMesh.AllAreas))
+        {
+            destination = new Vector3(hit.position.x, hit.position.y + yOffset, hit.position.z);
+        }
+        else
+        {
+            destination = startPosition;
+        }
+
         if (navMeshAgent.isOnNavMesh) navMeshAgent.enabled = false;
         if (mainCollider != null) mainCollider.enabled = false;
+
         float elapsedTime = 0f;
-        while (elapsedTime < dodgeDuration) { transform.position = Vector3.Lerp(startPosition, destination, elapsedTime / dodgeDuration); elapsedTime += Time.deltaTime; yield return null; }
+        while (elapsedTime < dodgeDuration)
+        {
+            transform.position = Vector3.Lerp(startPosition, destination, elapsedTime / dodgeDuration);
+            elapsedTime += Time.deltaTime;
+            yield return null;
+        }
+
         transform.position = destination;
+
         if (mainCollider != null) mainCollider.enabled = true;
         navMeshAgent.enabled = true;
         if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(transform.position);
+
         isDodging = false;
     }
 
@@ -582,9 +612,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         navMeshAgent.stoppingDistance = currentInteractionRange;
         navMeshAgent.SetDestination(destination);
 
-        // --- THE FIX: WAIT FOR NAVMESH TO WAKE UP ---
-        // Give Unity 1 frame to actually compute the path. 
-        // Without this, remainingDistance is technically 0 for a split second!
         yield return null;
 
         while (true)
@@ -595,20 +622,16 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
                 yield break;
             }
 
-            // Wait until the agent finishes computing the path
             if (!navMeshAgent.pathPending)
             {
-                // Check if we have entered the stopping distance radius (+0.1f buffer for safety)
                 if (navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance + 0.1f)
                 {
-                    // Ensure the physical velocity has actually stopped
                     if (!navMeshAgent.hasPath || navMeshAgent.velocity.sqrMagnitude < 0.01f)
                     {
-                        break; // WE SUCCESSFULLY ARRIVED!
+                        break;
                     }
                 }
 
-                // Fallback: If NavMesh randomly drops the path, but we are physically close enough
                 if (!navMeshAgent.hasPath && Vector3.Distance(transform.position, destination) <= currentInteractionRange + 0.5f)
                 {
                     break;
@@ -616,7 +639,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             }
             yield return null;
         }
-        // ---------------------------------------------
 
         Vector3 dir = (targetObject.transform.position - transform.position).normalized;
         dir.y = 0;
@@ -624,7 +646,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         navMeshAgent.ResetPath();
 
-        // Now that the loop successfully ends, Interact() will finally be called!
         if (targetObject.TryGetComponent<IInteractable>(out var interactable))
             interactable.Interact(this.gameObject);
         else if (targetObject.TryGetComponent<DoorController>(out var doorComponent))
@@ -634,7 +655,46 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     }
 
     private void HandleEquipmentChanged(EquipmentType slotType) { if (slotType == EquipmentType.LeftHand || slotType == EquipmentType.RightHand) UpdateWeaponTypeParameter(); }
-    public void UpdateWeaponTypeParameter() { if (animator == null || playerEquipment == null) return; int weaponType = 0; playerEquipment.equippedItems.TryGetValue(EquipmentType.RightHand, out var rightHandItem); playerEquipment.equippedItems.TryGetValue(EquipmentType.LeftHand, out var leftHandItem); var rightWeaponStats = rightHandItem?.itemData.stats as ItemWeaponStats; var leftWeaponStats = leftHandItem?.itemData.stats as ItemWeaponStats; if ((rightWeaponStats != null && rightWeaponStats.handed == ItemWeaponStats.Handed.TwoHanded) || (leftWeaponStats != null && leftWeaponStats.handed == ItemWeaponStats.Handed.TwoHanded)) weaponType = 2; else if (rightWeaponStats != null || leftWeaponStats != null) weaponType = 1; animator.SetInteger(weaponTypeHash, weaponType); }
+
+    // --- UPDATED AAA WEAPON PARSING ---
+    public void UpdateWeaponTypeParameter()
+    {
+        if (animator == null || playerEquipment == null) return;
+
+        int weaponType = 0; // 0 = Unarmed, 1 = 1H, 2 = 2H
+        int weaponCategory = 0; // Maps directly to ItemWeaponStats.WeaponCategory Enum
+
+        playerEquipment.equippedItems.TryGetValue(EquipmentType.RightHand, out var rightHandItem);
+        playerEquipment.equippedItems.TryGetValue(EquipmentType.LeftHand, out var leftHandItem);
+
+        var rightWeaponStats = rightHandItem?.itemData.stats as ItemWeaponStats;
+        var leftWeaponStats = leftHandItem?.itemData.stats as ItemWeaponStats;
+
+        // Let the primary hand dictate the stance/category, falling back to offhand if primary is empty
+        ItemWeaponStats primaryWeapon = rightWeaponStats != null ? rightWeaponStats : leftWeaponStats;
+
+        if (primaryWeapon != null)
+        {
+            // Cast the enum to its integer value (e.g. Hands=0, Sword=1, Mace=2)
+            weaponCategory = (int)primaryWeapon.weaponCategory;
+
+            // Preserve old Blend Tree logic for combat attacks
+            if ((rightWeaponStats != null && rightWeaponStats.handed == ItemWeaponStats.Handed.TwoHanded) ||
+                (leftWeaponStats != null && leftWeaponStats.handed == ItemWeaponStats.Handed.TwoHanded))
+            {
+                weaponType = 2;
+            }
+            else
+            {
+                weaponType = 1;
+            }
+        }
+
+        animator.SetInteger(weaponTypeHash, weaponType);
+        animator.SetInteger(weaponCategoryHash, weaponCategory);
+    }
+    // ----------------------------------
+
     private bool IsUIDragInProgress() { if (uiManagerObject != null && Variables.Object(uiManagerObject).IsDefined(dragInProgressVariableName)) return Variables.Object(uiManagerObject).Get<bool>(dragInProgressVariableName); return false; }
     public void StopMovement() { if (navMeshAgent.hasPath) navMeshAgent.ResetPath(); }
     public IEnumerator ResetGroundTargetingFlag() { while (Input.GetMouseButton(0)) yield return null; yield return null; IsGroundTargeting = false; }

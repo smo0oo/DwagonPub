@@ -137,7 +137,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         Vector3 targetPosition;
         if (target != null) targetPosition = target.transform.position;
-        else if (playerMovement != null) targetPosition = playerMovement.CurrentLookTarget;
+        else if (playerMovement != null) targetPosition = playerMovement.CurrentGroundTarget;
         else targetPosition = transform.position + transform.forward * 5f;
 
         UseAbility(ability, target, targetPosition, bypassCooldown);
@@ -155,13 +155,11 @@ public class PlayerAbilityHolder : MonoBehaviour
             return;
         }
 
-        // --- AAA RANDOMIZATION LOGIC (Calculated at the exact moment the cast starts) ---
         int styleIndex = ability.attackStyleIndex;
         if (ability.randomizeAttackStyle && ability.maxRandomVariants > 0)
         {
             styleIndex = UnityEngine.Random.Range(0, ability.maxRandomVariants);
         }
-        // -------------------------------------------------------------------------------
 
         float finalCastTime = ability.castTime;
         if (playerStats != null) finalCastTime /= playerStats.secondaryStats.attackSpeed;
@@ -197,7 +195,6 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         if (animator != null)
         {
-            // Inject the rolled style index immediately so the wind-up animation can read it
             animator.SetInteger(attackStyleHash, styleIndex);
 
             if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger)) animator.SetTrigger(ability.telegraphAnimationTrigger);
@@ -244,11 +241,10 @@ public class PlayerAbilityHolder : MonoBehaviour
 
                 if (!isFixedGroundTarget)
                 {
-                    position = playerMovement.CurrentLookTarget;
+                    position = playerMovement.CurrentGroundTarget;
                 }
             }
 
-            // Pass the generated style index down to the execution phase
             ExecuteAbility(ability, target, position, bypassCooldown, (ability.abilityType != AbilityType.ChanneledBeam), styleIndex);
         }
         finally
@@ -314,7 +310,18 @@ public class PlayerAbilityHolder : MonoBehaviour
         switch (ability.abilityType)
         {
             case AbilityType.TargetedProjectile:
-            case AbilityType.ForwardProjectile: HandleProjectile(ability, target, position); break;
+            case AbilityType.ForwardProjectile:
+                // --- AAA FIX: ANIMATION SYNC / BIRTH DELAY ---
+                if (ability.projectileSpawnDelay > 0)
+                {
+                    StartCoroutine(SpawnProjectileWithDelay(ability, target, position));
+                }
+                else
+                {
+                    HandleProjectile(ability, target, position);
+                }
+                break;
+            // ---------------------------------------------
             case AbilityType.TargetedMelee:
             case AbilityType.DirectionalMelee:
                 if (activeMeleeCoroutine != null) { StopCoroutine(activeMeleeCoroutine); meleeHitbox.gameObject.SetActive(false); }
@@ -329,6 +336,21 @@ public class PlayerAbilityHolder : MonoBehaviour
             case AbilityType.Teleport: if (movementHandler != null) movementHandler.ExecuteTeleport(position); break;
         }
     }
+
+    // --- NEW: Projectile Birth Sync Coroutine ---
+    private IEnumerator SpawnProjectileWithDelay(Ability ability, GameObject target, Vector3 position)
+    {
+        // Scale the logical spawn delay by the animation's current playback speed
+        float speedMultiplier = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
+        yield return new WaitForSeconds(ability.projectileSpawnDelay / speedMultiplier);
+
+        // Failsafe: Make sure the character wasn't killed during the wind-up!
+        Health h = GetComponentInParent<Health>();
+        if (h != null && h.isDowned) yield break;
+
+        HandleProjectile(ability, target, position);
+    }
+    // --------------------------------------------
 
     private void SpawnCastVFX(Ability ability, Quaternion? overrideRotation = null)
     {
@@ -479,13 +501,22 @@ public class PlayerAbilityHolder : MonoBehaviour
             Vector3 targetCenter = target.transform.position;
             Collider targetCollider = target.GetComponent<Collider>() ?? target.GetComponentInChildren<Collider>();
             if (targetCollider != null) targetCenter = targetCollider.bounds.center;
+
             Vector3 direction = targetCenter - spawnPos;
             if (direction != Vector3.zero) spawnRot = Quaternion.LookRotation(direction);
         }
         else
         {
-            Vector3 direction = targetPos - spawnPos;
-            direction.y = 0;
+            float playerFloorY = transform.position.y;
+            if (UnityEngine.AI.NavMesh.SamplePosition(transform.position, out UnityEngine.AI.NavMeshHit myHit, 2f, UnityEngine.AI.NavMesh.AllAreas))
+            {
+                playerFloorY = myHit.position.y;
+            }
+
+            float spawnHeightAboveFloor = spawnPos.y - playerFloorY;
+            Vector3 adjustedTargetPos = new Vector3(targetPos.x, targetPos.y + spawnHeightAboveFloor, targetPos.z);
+
+            Vector3 direction = adjustedTargetPos - spawnPos;
             if (direction.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(direction);
         }
 
@@ -494,7 +525,8 @@ public class PlayerAbilityHolder : MonoBehaviour
         {
             projectileGO.layer = LayerMask.NameToLayer("FriendlyRanged");
             projectileGO.SetActive(true);
-            if (projectileGO.TryGetComponent<Projectile>(out var projectile)) projectile.Initialize(ability, this.gameObject, GetComponentInParent<CharacterRoot>().gameObject.layer);
+            if (projectileGO.TryGetComponent<Projectile>(out var projectile))
+                projectile.Initialize(ability, this.gameObject, GetComponentInParent<CharacterRoot>().gameObject.layer);
         }
     }
 

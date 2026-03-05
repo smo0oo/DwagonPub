@@ -71,13 +71,11 @@ public class Ability : ScriptableObject
     public string overrideTriggerName;
     public float movementLockDuration = 0f;
 
-    // --- NEW: AAA Randomization ---
     [Header("Randomization")]
     [Tooltip("If true, ignores attackStyleIndex and picks a random number from 0 to maxRandomVariants - 1")]
     public bool randomizeAttackStyle = false;
     [Tooltip("If set to 3, it will randomly send 0, 1, or 2 to the Animator.")]
     public int maxRandomVariants = 3;
-    // ------------------------------
 
     [Header("Behavior Type")]
     public AbilityType abilityType = AbilityType.TargetedMelee;
@@ -89,9 +87,13 @@ public class Ability : ScriptableObject
 
     [Header("Gameplay Properties")]
     public float range = 2f;
+    public bool canHitCaster = false;
+
+    [Header("Projectile Settings")]
     public GameObject playerProjectilePrefab;
     public GameObject enemyProjectilePrefab;
-    public bool canHitCaster = false;
+    [Tooltip("How long (in seconds) to wait before spawning the projectile, so it syncs perfectly with the animation's release frame.")]
+    public float projectileSpawnDelay = 0f;
 
     [Header("Melee Hitbox")]
     public Vector3 attackBoxSize = new Vector3(1, 2, 2);
