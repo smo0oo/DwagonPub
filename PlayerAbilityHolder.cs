@@ -18,7 +18,9 @@ public class PlayerAbilityHolder : MonoBehaviour
     public event Action OnCastFinished;
 
     [Header("Component References")]
+    [Tooltip("The default location projectiles spawn from (e.g. the player's chest).")]
     public Transform projectileSpawnPoint;
+    private Transform defaultProjectileSpawnPoint;
 
     [Header("VFX Anchors (Optional Overrides)")]
     public Transform leftHandAnchor;
@@ -65,12 +67,14 @@ public class PlayerAbilityHolder : MonoBehaviour
     private Coroutine activeCastCoroutine;
     private Coroutine activeMeleeCoroutine;
     private Coroutine activeLockCoroutine;
+    private Coroutine activeProjectileCoroutine;
 
     private GameObject currentCastingVFXInstance;
     private int attackHash;
     private int attackSpeedHash;
     private int attackStyleHash;
     private int castTriggerHash;
+    private int forceIdleHash;
     private bool hasCastTrigger = false;
     private bool isAnimationLockedInternal = false;
 
@@ -101,6 +105,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         attackSpeedHash = Animator.StringToHash(attackSpeedParam);
         attackStyleHash = Animator.StringToHash("AttackStyle");
         castTriggerHash = Animator.StringToHash("CastTrigger");
+        forceIdleHash = Animator.StringToHash("ForceIdle");
 
         if (animator != null)
         {
@@ -111,7 +116,19 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
 
         if (targetLayers.value == 0) targetLayers = LayerMask.GetMask("Default", "Player", "Enemy", "Destructible");
+
         if (projectileSpawnPoint == null) projectileSpawnPoint = transform;
+        defaultProjectileSpawnPoint = projectileSpawnPoint;
+    }
+
+    public void SetDynamicProjectileSpawnPoint(Transform newSpawnPoint)
+    {
+        projectileSpawnPoint = newSpawnPoint;
+    }
+
+    public void ClearDynamicProjectileSpawnPoint()
+    {
+        projectileSpawnPoint = defaultProjectileSpawnPoint;
     }
 
     void Update()
@@ -311,17 +328,16 @@ public class PlayerAbilityHolder : MonoBehaviour
         {
             case AbilityType.TargetedProjectile:
             case AbilityType.ForwardProjectile:
-                // --- AAA FIX: ANIMATION SYNC / BIRTH DELAY ---
                 if (ability.projectileSpawnDelay > 0)
                 {
-                    StartCoroutine(SpawnProjectileWithDelay(ability, target, position));
+                    if (activeProjectileCoroutine != null) StopCoroutine(activeProjectileCoroutine);
+                    activeProjectileCoroutine = StartCoroutine(SpawnProjectileWithDelay(ability, target, position));
                 }
                 else
                 {
                     HandleProjectile(ability, target, position);
                 }
                 break;
-            // ---------------------------------------------
             case AbilityType.TargetedMelee:
             case AbilityType.DirectionalMelee:
                 if (activeMeleeCoroutine != null) { StopCoroutine(activeMeleeCoroutine); meleeHitbox.gameObject.SetActive(false); }
@@ -337,20 +353,17 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    // --- NEW: Projectile Birth Sync Coroutine ---
     private IEnumerator SpawnProjectileWithDelay(Ability ability, GameObject target, Vector3 position)
     {
-        // Scale the logical spawn delay by the animation's current playback speed
         float speedMultiplier = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
         yield return new WaitForSeconds(ability.projectileSpawnDelay / speedMultiplier);
 
-        // Failsafe: Make sure the character wasn't killed during the wind-up!
         Health h = GetComponentInParent<Health>();
         if (h != null && h.isDowned) yield break;
 
         HandleProjectile(ability, target, position);
+        activeProjectileCoroutine = null;
     }
-    // --------------------------------------------
 
     private void SpawnCastVFX(Ability ability, Quaternion? overrideRotation = null)
     {
@@ -435,7 +448,6 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         if (animator != null)
         {
-            animator.ResetTrigger(attackHash);
             float animSpeed = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
             animator.SetFloat(attackSpeedHash, animSpeed);
 
@@ -453,18 +465,44 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     public void CancelCast(bool isMovementInterrupt = false)
     {
+        bool isBusy = IsCasting || isAnimationLockedInternal || activeCastCoroutine != null || activeProjectileCoroutine != null || activeMeleeCoroutine != null || activeLockCoroutine != null || ActiveBeam != null;
+        if (!isBusy) return;
+
         if (isMovementInterrupt && IsCasting && currentCastingAbility != null && currentCastingAbility.canMoveWhileCasting) return;
+
+        if (animator != null)
+        {
+            animator.ResetTrigger(attackHash);
+            if (hasCastTrigger) animator.ResetTrigger(castTriggerHash);
+
+            animator.SetInteger(attackStyleHash, -1);
+
+            if (currentCastingAbility != null)
+            {
+                if (!string.IsNullOrEmpty(currentCastingAbility.telegraphAnimationTrigger))
+                    animator.ResetTrigger(currentCastingAbility.telegraphAnimationTrigger);
+                if (!string.IsNullOrEmpty(currentCastingAbility.overrideTriggerName))
+                    animator.ResetTrigger(currentCastingAbility.overrideTriggerName);
+            }
+
+            animator.SetTrigger(forceIdleHash);
+        }
+
         if (activeCastCoroutine != null) { StopCoroutine(activeCastCoroutine); activeCastCoroutine = null; }
+        if (activeProjectileCoroutine != null) { StopCoroutine(activeProjectileCoroutine); activeProjectileCoroutine = null; }
+        if (activeLockCoroutine != null) { StopCoroutine(activeLockCoroutine); activeLockCoroutine = null; }
+        if (activeMeleeCoroutine != null) { StopCoroutine(activeMeleeCoroutine); activeMeleeCoroutine = null; if (meleeHitbox != null) meleeHitbox.gameObject.SetActive(false); }
+
         if (audioSource != null) { audioSource.Stop(); audioSource.clip = null; }
+
         IsCasting = false;
         currentCastingAbility = null;
         CleanupCastingVFX();
         ClearInputBuffer();
         isAnimationLockedInternal = false;
-        if (activeLockCoroutine != null) { StopCoroutine(activeLockCoroutine); activeLockCoroutine = null; }
+
         if (CastingBarUIManager.instance != null) CastingBarUIManager.instance.StopCast();
         if (ActiveBeam != null) { ActiveBeam.Interrupt(); ActiveBeam = null; }
-        if (activeMeleeCoroutine != null) { StopCoroutine(activeMeleeCoroutine); activeMeleeCoroutine = null; if (meleeHitbox != null) meleeHitbox.gameObject.SetActive(false); }
     }
 
     public void PayCostAndStartCooldown(Ability ability, bool bypassCooldown = false)
@@ -523,10 +561,29 @@ public class PlayerAbilityHolder : MonoBehaviour
         GameObject projectileGO = ObjectPooler.instance.Get(ability.playerProjectilePrefab, spawnPos, spawnRot);
         if (projectileGO != null)
         {
-            projectileGO.layer = LayerMask.NameToLayer("FriendlyRanged");
-            projectileGO.SetActive(true);
+            // Set layer to trigger physics
+            int layerId = LayerMask.NameToLayer("FriendlyRanged");
+            if (layerId != -1) projectileGO.layer = layerId;
+
             if (projectileGO.TryGetComponent<Projectile>(out var projectile))
-                projectile.Initialize(ability, this.gameObject, GetComponentInParent<CharacterRoot>().gameObject.layer);
+            {
+                CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
+                int myLayer = myRoot != null ? myRoot.gameObject.layer : gameObject.layer;
+
+                // Initialize projectile WITHOUT overwriting its physical collision masks!
+                projectile.Initialize(ability, this.gameObject, myLayer);
+            }
+
+            Collider pCol = projectileGO.GetComponent<Collider>();
+            if (pCol != null)
+            {
+                foreach (Collider c in GetComponentsInParent<Collider>())
+                {
+                    Physics.IgnoreCollision(pCol, c);
+                }
+            }
+
+            projectileGO.SetActive(true);
         }
     }
 

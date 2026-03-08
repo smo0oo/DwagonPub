@@ -29,7 +29,7 @@ public class AreaBombardmentController : MonoBehaviour
     [Header("Visuals & Audio")]
     public GameObject areaIndicatorVFX;
     [Tooltip("Optional: Overrides the impact VFX defined in the Ability for these projectiles.")]
-    public GameObject projectileImpactVFX; // --- NEW: Impact Override ---
+    public GameObject projectileImpactVFX;
 
     [Tooltip("Sound to play on loop while the storm is active.")]
     public AudioClip ambienceLoop;
@@ -41,16 +41,13 @@ public class AreaBombardmentController : MonoBehaviour
     private int casterLayer;
     private AudioSource audioSource;
     private float stopTime;
-    private bool isRuntimeClone = false; // --- NEW: Track cloning ---
+    private bool isRuntimeClone = false;
 
     public void Initialize(GameObject caster, Ability ability)
     {
         this.caster = caster;
         this.casterLayer = caster.GetComponentInParent<CharacterRoot>()?.gameObject.layer ?? caster.layer;
 
-        // --- NEW: Handle VFX Override ---
-        // If an override is set, we clone the ability so we can swap the hitVFX
-        // without affecting the original asset or needing to change the Projectile script.
         if (projectileImpactVFX != null && ability != null)
         {
             this.sourceAbility = Instantiate(ability);
@@ -63,11 +60,9 @@ public class AreaBombardmentController : MonoBehaviour
             this.sourceAbility = ability;
         }
 
-        // Override radius if the ability defines a specific AOE
         if (useAbilityRadius && this.sourceAbility != null && this.sourceAbility.aoeRadius > 0)
             this.radius = this.sourceAbility.aoeRadius;
 
-        // Setup Audio
         audioSource = GetComponent<AudioSource>();
         if (ambienceLoop != null)
         {
@@ -75,27 +70,21 @@ public class AreaBombardmentController : MonoBehaviour
             audioSource.loop = true;
             audioSource.volume = 0;
             audioSource.Play();
-            StartCoroutine(FadeAudio(0, 1, ambienceFadeDuration)); // Fade In
+            StartCoroutine(FadeAudio(0, 1, ambienceFadeDuration));
         }
 
-        // Setup Visuals
         if (areaIndicatorVFX != null)
         {
             var vfx = Instantiate(areaIndicatorVFX, transform.position, Quaternion.identity, transform);
-            // Assuming visuals are normalized to 1 unit size, scale them to match radius
             vfx.transform.localScale = new Vector3(radius * 2, 1, radius * 2);
         }
 
-        // Start Logic
         stopTime = Time.time + duration;
         StartCoroutine(BombardmentRoutine());
 
-        // Auto Cleanup: Destroy this controller object after duration + buffer
-        // INCREASED BUFFER: from 2.0f to 5.0f to ensure projectiles land before we destroy the runtime ability data
         Destroy(gameObject, duration + 5.0f);
     }
 
-    // --- NEW: Cleanup Runtime Data ---
     void OnDestroy()
     {
         if (isRuntimeClone && sourceAbility != null)
@@ -109,14 +98,11 @@ public class AreaBombardmentController : MonoBehaviour
         while (Time.time < stopTime)
         {
             SpawnProjectile();
-
-            // Calculate delay for next shot
             float baseDelay = 1f / spawnRate;
             float randomDelay = Random.Range(-timeVariance, timeVariance);
             yield return new WaitForSeconds(Mathf.Max(0.05f, baseDelay + randomDelay));
         }
 
-        // Fade out audio when finished
         if (audioSource.isPlaying)
             StartCoroutine(FadeAudio(1, 0, ambienceFadeDuration));
     }
@@ -125,14 +111,10 @@ public class AreaBombardmentController : MonoBehaviour
     {
         if (projectilePrefab == null) return;
 
-        // 1. Pick a random point within the circle (Horizontal Plane)
         Vector2 randomCircle = Random.insideUnitCircle * radius;
         Vector3 groundPos = transform.position + new Vector3(randomCircle.x, 0, randomCircle.y);
-
-        // 2. Spawn high above that point
         Vector3 spawnPos = groundPos + (Vector3.up * spawnHeight);
 
-        // 3. Rotation: Facing downwards with slight variance
         Quaternion rotation = Quaternion.Euler(90f, 0f, 0f);
         if (rotationVariance > 0)
         {
@@ -141,17 +123,39 @@ public class AreaBombardmentController : MonoBehaviour
             rotation *= Quaternion.Euler(randomX, 0, randomZ);
         }
 
-        // 4. Instantiate (Pooled)
         GameObject projObj = ObjectPooler.instance.Get(projectilePrefab, spawnPos, rotation);
 
         if (projObj != null)
         {
-            // IMPORTANT: Initialize the projectile with the ABILITY data.
-            // This ensures the projectile applies the correct Damage/Effects defined in the Ability ScriptableObject.
+            // --- AAA FIX: Set the proper physical layer so the Collision Matrix registers it! ---
+            int playerLayer = LayerMask.NameToLayer("Player");
+            int friendlyLayer = LayerMask.NameToLayer("Friendly");
+
+            int targetRangedLayer = (casterLayer == playerLayer || casterLayer == friendlyLayer)
+                ? LayerMask.NameToLayer("FriendlyRanged")
+                : LayerMask.NameToLayer("HostileRanged");
+
+            if (targetRangedLayer != -1)
+            {
+                projObj.layer = targetRangedLayer;
+            }
+            // -----------------------------------------------------------------------------------
+
             if (projObj.TryGetComponent<Projectile>(out var projComponent))
             {
                 projComponent.Initialize(sourceAbility, caster, casterLayer);
             }
+
+            // --- AAA FIX: Ignore the caster's colliders just in case ---
+            Collider pCol = projObj.GetComponent<Collider>();
+            if (pCol != null && caster != null)
+            {
+                foreach (Collider c in caster.GetComponentsInParent<Collider>())
+                {
+                    Physics.IgnoreCollision(pCol, c);
+                }
+            }
+            // -----------------------------------------------------------
 
             projObj.SetActive(true);
         }
@@ -171,10 +175,9 @@ public class AreaBombardmentController : MonoBehaviour
 
     private void OnDrawGizmosSelected()
     {
-        Gizmos.color = new Color(0, 1, 1, 0.5f); // Cyan
+        Gizmos.color = new Color(0, 1, 1, 0.5f);
         Gizmos.DrawWireSphere(transform.position, radius);
 
-        // Draw falling lines visualization
         Gizmos.color = new Color(0, 1, 1, 0.2f);
         for (int i = 0; i < 5; i++)
         {

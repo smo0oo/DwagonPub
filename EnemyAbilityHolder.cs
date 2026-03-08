@@ -82,7 +82,6 @@ public class EnemyAbilityHolder : MonoBehaviour
         if (!CanUseAbility(ability, target)) return;
         Vector3 position = (target != null) ? target.transform.position : transform.position;
 
-        // --- AAA RANDOMIZATION LOGIC (Calculated at the exact moment the cast starts) ---
         int styleIndex = ability.attackStyleIndex;
         if (ability.randomizeAttackStyle && ability.maxRandomVariants > 0)
         {
@@ -92,7 +91,6 @@ public class EnemyAbilityHolder : MonoBehaviour
         {
             styleIndex = UnityEngine.Random.Range(0, 3); // Fallback for basic enemies
         }
-        // -------------------------------------------------------------------------------
 
         if (ability.castTime > 0 || ability.telegraphDuration > 0)
         {
@@ -112,7 +110,6 @@ public class EnemyAbilityHolder : MonoBehaviour
         {
             if ((ability.telegraphDuration > 0 || ability.castTime > 0) && animator != null)
             {
-                // Inject the rolled style index immediately so the wind-up animation can read it
                 animator.SetInteger(attackIndexHash, styleIndex);
 
                 if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger))
@@ -169,7 +166,6 @@ public class EnemyAbilityHolder : MonoBehaviour
 
             if (enemyAI != null && (enemyAI.Health.currentHealth <= 0 || !enemyAI.enabled)) yield break;
 
-            // Pass the generated style index down to the execution phase
             ExecuteAbility(ability, target, position, bypassCooldown, true, styleIndex);
         }
         finally
@@ -393,6 +389,7 @@ public class EnemyAbilityHolder : MonoBehaviour
     public bool CanUseAbility(Ability ability, GameObject target) { if (ability == null || IsCasting) return false; if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false; if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false; return true; }
     private void HandleChanneledBeam(Ability ability, GameObject target) { GameObject prefab = ability.enemyProjectilePrefab ?? ability.playerProjectilePrefab; if (prefab != null) { GameObject beam = Instantiate(prefab, transform.position, transform.rotation); if (beam.TryGetComponent<ChanneledBeamController>(out var b)) { b.Initialize(ability, gameObject, target); ActiveBeam = b; } } }
     private void HandleSelfCast(Ability ability) { foreach (var effect in ability.friendlyEffects) effect.Apply(gameObject, gameObject); }
+
     private void HandleProjectile(Ability ability, GameObject target, Vector3 fallbackPosition)
     {
         GameObject prefab = ability.enemyProjectilePrefab ?? ability.playerProjectilePrefab;
@@ -417,16 +414,28 @@ public class EnemyAbilityHolder : MonoBehaviour
 
         GameObject pGO = ObjectPooler.instance.Get(prefab, spawnPos, spawnRot);
         if (pGO == null) return;
-        pGO.layer = LayerMask.NameToLayer("HostileRanged");
-        Collider pCol = pGO.GetComponent<Collider>();
-        if (pCol != null) foreach (Collider c in GetComponentsInParent<Collider>()) Physics.IgnoreCollision(pCol, c);
+
+        int hostileLayer = LayerMask.NameToLayer("HostileRanged");
+        if (hostileLayer != -1) pGO.layer = hostileLayer;
 
         if (pGO.TryGetComponent<Projectile>(out var p))
         {
             CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
             int layer = myRoot != null ? myRoot.gameObject.layer : gameObject.layer;
+
+            // Initialize WITHOUT overwriting collision masks so it hits walls!
             p.Initialize(ability, gameObject, layer);
         }
+
+        Collider pCol = pGO.GetComponent<Collider>();
+        if (pCol != null)
+        {
+            foreach (Collider c in GetComponentsInParent<Collider>())
+            {
+                Physics.IgnoreCollision(pCol, c);
+            }
+        }
+
         pGO.SetActive(true);
     }
 

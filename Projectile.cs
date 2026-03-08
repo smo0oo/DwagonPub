@@ -55,7 +55,10 @@ public class Projectile : MonoBehaviour
 
     private void OnTriggerEnter(Collider other)
     {
-        // AAA FIX: Ignore cloth physics layer to prevent projectiles hitting capes
+        // AAA FIX: If the projectile hasn't received its data yet, ignore the collision so it doesn't break!
+        if (sourceAbility == null) return;
+
+        // Ignore cloth physics layer to prevent projectiles hitting capes
         if (other.gameObject.layer == LayerMask.NameToLayer("ClothPhysics")) return;
 
         // 1. Explicitly ignore ActivationTrigger (Layer 21)

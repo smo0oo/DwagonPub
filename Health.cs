@@ -18,6 +18,14 @@ public class Health : MonoBehaviour
     public int maxHealth = 100;
     public int currentHealth;
 
+    // --- AAA GAME FEEL: POISE & KNOCKBACK ---
+    [Header("Poise & Knockback (AAA)")]
+    public float maxPoise = 100f;
+    public float currentPoise;
+    [Tooltip("How fast Poise recovers per second when not taking damage.")]
+    public float poiseRegenRate = 15f;
+    // ----------------------------------------
+
     [Header("Death Settings")]
     public bool destroyOnDeath = true;
 
@@ -52,6 +60,7 @@ public class Health : MonoBehaviour
     private static readonly int IsDownedHash = Animator.StringToHash("IsDowned");
     private static readonly int DeathHash = Animator.StringToHash("Death");
     private static readonly int IdleHash = Animator.StringToHash("Idle");
+    private static readonly int FlinchHash = Animator.StringToHash("Flinch");
 
     void Awake()
     {
@@ -67,6 +76,7 @@ public class Health : MonoBehaviour
         }
 
         currentHealth = maxHealth;
+        currentPoise = maxPoise;
         originalLayer = gameObject.layer;
 
         UpdateHelpThreshold();
@@ -75,6 +85,16 @@ public class Health : MonoBehaviour
     void Start()
     {
         OnHealthChanged?.Invoke();
+    }
+
+    void Update()
+    {
+        // Regenerate Poise
+        if (currentPoise < maxPoise && !isDead && !isDowned)
+        {
+            currentPoise += poiseRegenRate * Time.deltaTime;
+            if (currentPoise > maxPoise) currentPoise = maxPoise;
+        }
     }
 
     public void UpdateMaxHealth(int newMaxHealth)
@@ -92,15 +112,29 @@ public class Health : MonoBehaviour
         helpThresholdValue = Mathf.FloorToInt(maxHealth * callForHelpThreshold);
     }
 
-    public void TakeDamage(int amount, DamageEffect.DamageType damageType, bool isCrit, GameObject caster)
+    public void TakeDamage(int amount, DamageEffect.DamageType damageType, bool isCrit, GameObject caster, float knockback = 0f, int poiseDamage = 0)
     {
         if (forwardDamageTo != null)
         {
-            forwardDamageTo.TakeDamage(amount, damageType, isCrit, caster);
+            forwardDamageTo.TakeDamage(amount, damageType, isCrit, caster, knockback, poiseDamage);
             return;
         }
 
         if (isInvulnerable || debugGodMode || isDead || isDowned) return;
+
+        // --- AAA FIX: HIT STOP ---
+        // Inside Health.cs -> TakeDamage()
+        // Debug.Log("TakeDamage fired! Telling GameManager to Hit Stop...");
+
+        if (GameManager.instance != null)
+        {
+            GameManager.instance.TriggerHitStop(0.05f, 0.1f);
+        }
+        else
+        {
+            Debug.LogError("GameManager.instance is NULL! Hit Stop cannot fire.");
+        }
+        // -------------------------
 
         int healthBeforeDamage = currentHealth;
 
@@ -124,6 +158,39 @@ public class Health : MonoBehaviour
         int damageToDeal = Mathf.Max(0, Mathf.FloorToInt(finalDamage));
 
         currentHealth -= damageToDeal;
+
+        // --- AAA FIX: POISE & KNOCKBACK ---
+        currentPoise -= poiseDamage;
+
+        // ONLY Flinch and Knockback if the enemy survived the hit!
+        if (currentHealth > 0 && currentPoise <= 0)
+        {
+            currentPoise = maxPoise; // Shatter and reset
+
+            // Trigger the Flinch animation
+            if (root != null && root.Animator != null) root.Animator.SetTrigger(FlinchHash);
+            else
+            {
+                Animator anim = GetComponentInChildren<Animator>();
+                if (anim != null) anim.SetTrigger(FlinchHash);
+            }
+
+            // --- AAA TACTICAL COMBAT: INTERRUPT CASTING ---
+            // If the enemy is hit hard enough to flinch, cancel their attack!
+            if (root != null && root.PlayerAbilityHolder != null) root.PlayerAbilityHolder.CancelCast();
+            EnemyAbilityHolder enemyCaster = GetComponent<EnemyAbilityHolder>() ?? GetComponentInChildren<EnemyAbilityHolder>();
+            if (enemyCaster != null) enemyCaster.CancelCast();
+            // ----------------------------------------------
+
+            // Physically push them back if the attack has weight
+            if (knockback > 0f && caster != null)
+            {
+                Vector3 pushDir = (transform.position - caster.transform.position).normalized;
+                pushDir.y = 0;
+                StartCoroutine(ApplyKnockback(pushDir, knockback));
+            }
+        }
+        // ----------------------------------
 
         if (surfaceDefinition != null && damageToDeal > 0)
         {
@@ -187,10 +254,35 @@ public class Health : MonoBehaviour
         }
     }
 
+    private IEnumerator ApplyKnockback(Vector3 direction, float force, float duration = 0.2f)
+    {
+        float elapsed = 0f;
+        var agent = root != null ? root.GetComponent<UnityEngine.AI.NavMeshAgent>() : GetComponent<UnityEngine.AI.NavMeshAgent>();
+
+        if (agent != null && agent.isOnNavMesh)
+        {
+            bool wasStopped = agent.isStopped;
+            agent.isStopped = true;
+
+            while (elapsed < duration)
+            {
+                if (isDead || isDowned) break; // Abort pushback if they die mid-slide
+
+                elapsed += Time.deltaTime;
+                float t = elapsed / duration;
+                float strength = Mathf.Lerp(force, 0, t);
+                agent.Move(direction * strength * Time.deltaTime * 10f);
+                yield return null;
+            }
+
+            if (agent.isOnNavMesh && !isDead && !isDowned) agent.isStopped = wasStopped;
+        }
+    }
+
     private void BecomeDowned()
     {
         if (isDowned) return;
-        isDowned = true; // Set game state immediately
+        isDowned = true;
         currentHealth = 0;
 
         Debug.Log($"{name} is DOWNED!");
@@ -214,12 +306,8 @@ public class Health : MonoBehaviour
         {
             root.Animator.SetFloat("VelocityX", 0f);
             root.Animator.SetFloat("VelocityZ", 0f);
-
-            // --- THE FIX: Match Enemy Animation Logic ---
-            // Only fire the trigger immediately so the AnyState blend tree doesn't skip it
             root.Animator.SetTrigger(DeathHash);
 
-            // Delay the boolean so the Death animation actually gets to play!
             StartCoroutine(ApplyDownedBoolDelayed(root.Animator));
         }
 
@@ -231,7 +319,6 @@ public class Health : MonoBehaviour
 
     private IEnumerator ApplyDownedBoolDelayed(Animator anim)
     {
-        // Wait 1.5 seconds for the Death animation to physically play and finish
         yield return new WaitForSeconds(1.5f);
         if (anim != null) anim.SetBool(IsDownedHash, true);
     }
@@ -243,6 +330,7 @@ public class Health : MonoBehaviour
 
         currentHealth = Mathf.FloorToInt(maxHealth * Mathf.Clamp01(healthPercentage));
         if (currentHealth <= 0) currentHealth = 1;
+        currentPoise = maxPoise;
 
         Debug.Log($"{name} has REVIVED with {currentHealth} HP!");
 
@@ -296,7 +384,6 @@ public class Health : MonoBehaviour
             root.Animator.SetFloat("VelocityZ", 0f);
             root.Animator.SetBool(IsDownedHash, true);
 
-            // Instantly evaluate the animation at the final frame so they are lying down on load
             root.Animator.Play("Death", 0, 1.0f);
         }
 
@@ -354,8 +441,6 @@ public class Health : MonoBehaviour
         {
             root.Animator.SetFloat("VelocityX", 0f);
             root.Animator.SetFloat("VelocityZ", 0f);
-
-            // Notice how the enemy DOES NOT set the IsDowned boolean here!
             root.Animator.SetTrigger(DeathHash);
         }
         else

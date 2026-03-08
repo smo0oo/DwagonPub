@@ -10,7 +10,6 @@ using System.Collections.Generic;
 
 public class PlayerMovement : MonoBehaviour, IMovementHandler
 {
-    // --- Performance Monitoring ---
     public float LastExecutionTimeMs { get; private set; }
     private Stopwatch _perfWatch = new Stopwatch();
 
@@ -56,6 +55,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
     [Header("Configuration")]
     public LayerMask interactionLayers;
+    public LayerMask obstacleLayers;
     public float stoppingDistance = 1.0f;
     public float interactionRange = 3f;
 
@@ -86,11 +86,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     private int velocityZHash;
     private int velocityXHash;
     private int weaponTypeHash;
-
-    // --- NEW AAA FIX: Detailed Weapon Category Hash ---
     private int weaponCategoryHash;
-    // -------------------------------------------------
-
     private int dodgeHash;
 
     private int frameSkipCounter = 0;
@@ -122,7 +118,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         velocityZHash = Animator.StringToHash("VelocityZ");
         velocityXHash = Animator.StringToHash("VelocityX");
         weaponTypeHash = Animator.StringToHash("WeaponType");
-        weaponCategoryHash = Animator.StringToHash("WeaponCategory"); // Added
+        weaponCategoryHash = Animator.StringToHash("WeaponCategory");
         dodgeHash = Animator.StringToHash(!string.IsNullOrEmpty(dodgeAnimationTrigger) ? dodgeAnimationTrigger : "DodgeRoll");
 
         if (navMeshAgent != null)
@@ -202,9 +198,9 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             return;
         }
 
-        if (Input.GetKeyDown(KeyCode.Space) && Time.time >= nextDodgeTime)
+        if (Input.GetKeyDown(KeyCode.Space))
         {
-            StartCoroutine(DodgeRollCoroutine());
+            TriggerDodgeRoll();
             _perfWatch.Stop();
             LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
             return;
@@ -317,7 +313,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
                 return;
             }
 
-            if (interactionCoroutine != null) StopCoroutine(interactionCoroutine);
+            if (interactionCoroutine != null) { StopCoroutine(interactionCoroutine); interactionCoroutine = null; }
             IsMovingToAttack = false;
 
             if (target.GetComponent<DoorController>() != null || target.GetComponent<IInteractable>() != null)
@@ -330,8 +326,10 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             }
             else if (target.layer == LayerMask.NameToLayer("Terrain"))
             {
-                isFacingLocked = false;
+                if (interactionCoroutine != null) { StopCoroutine(interactionCoroutine); interactionCoroutine = null; }
                 TargetObject = null;
+
+                isFacingLocked = false;
                 navMeshAgent.stoppingDistance = 0f;
                 navMeshAgent.SetDestination(hitPoint);
                 clickLockoutFrames = 2;
@@ -352,7 +350,9 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         {
             if (hit.collider.gameObject.layer == LayerMask.NameToLayer("Terrain"))
             {
-                if (TargetObject != null) { StopAllCoroutines(); TargetObject = null; }
+                if (interactionCoroutine != null) { StopCoroutine(interactionCoroutine); interactionCoroutine = null; }
+                TargetObject = null;
+
                 isFacingLocked = false;
                 IsMovingToAttack = false;
                 navMeshAgent.stoppingDistance = 0f;
@@ -402,23 +402,43 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
     private void UpdateAnimator() { if (animator == null) return; Vector3 worldVelocity = (currentMode == MovementMode.WASD && wasdVelocity.sqrMagnitude > 0.01f) ? wasdVelocity : navMeshAgent.velocity; Vector3 localVelocity = transform.InverseTransformDirection(worldVelocity); float speed = navMeshAgent.speed; float vZ = localVelocity.z / speed; float vX = localVelocity.x / speed; if (Mathf.Abs(vZ) < 0.05f) vZ = 0f; if (Mathf.Abs(vX) < 0.05f) vX = 0f; animator.SetFloat(velocityZHash, vZ, animationDampTime, Time.deltaTime); animator.SetFloat(velocityXHash, vX, animationDampTime, Time.deltaTime); }
 
-    private IEnumerator DodgeRollCoroutine()
+    public void TriggerDodgeRoll(Vector3 explicitDestination = default)
+    {
+        if (Time.time >= nextDodgeTime && !isDodging && this.isActiveAndEnabled)
+        {
+            StartCoroutine(DodgeRollCoroutine(explicitDestination));
+        }
+    }
+
+    private IEnumerator DodgeRollCoroutine(Vector3 explicitDestination = default)
     {
         isDodging = true;
         nextDodgeTime = Time.time + dodgeDuration + dodgeCooldown;
 
-        abilityHolder.CancelCast(false);
+        if (abilityHolder != null) abilityHolder.CancelCast(false);
 
         StopMovement();
         isFacingLocked = false;
         IsMovingToAttack = false;
-        if (interactionCoroutine != null) StopCoroutine(interactionCoroutine);
-        RotateTowardsMouse(true);
+
+        TargetObject = null;
+        if (interactionCoroutine != null) { StopCoroutine(interactionCoroutine); interactionCoroutine = null; }
+
+        if (explicitDestination == default) RotateTowardsMouse(true);
+        else
+        {
+            Vector3 dir = (explicitDestination - transform.position).normalized;
+            dir.y = 0;
+            if (dir != Vector3.zero) transform.rotation = Quaternion.LookRotation(dir);
+        }
 
         if (animator != null) animator.SetTrigger(dodgeHash);
 
         Vector3 startPosition = transform.position;
-        Vector3 destination = startPosition + transform.forward * dodgeDistance;
+        Vector3 destination;
+
+        if (explicitDestination != default) destination = explicitDestination;
+        else destination = startPosition + transform.forward * dodgeDistance;
 
         float yOffset = 0f;
         if (NavMesh.SamplePosition(startPosition, out NavMeshHit startHit, 2.0f, NavMesh.AllAreas))
@@ -465,6 +485,10 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
             IsMovingToAttack = false;
             isFacingLocked = false;
+
+            if (interactionCoroutine != null) { StopCoroutine(interactionCoroutine); interactionCoroutine = null; }
+            TargetObject = null;
+
             if (abilityHolder != null) abilityHolder.CancelCast(true);
         }
 
@@ -532,7 +556,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         WaitForSeconds pathUpdateDelay = new WaitForSeconds(0.2f);
 
-        while (Vector3.Distance(transform.position, TargetObject.transform.position) > abilityToUse.range)
+        while (true)
         {
             if (IsTargetDead(TargetObject))
             {
@@ -541,6 +565,28 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
                 IsMovingToAttack = false;
                 isFacingLocked = false;
                 yield break;
+            }
+
+            float distance = Vector3.Distance(transform.position, TargetObject.transform.position);
+
+            bool hasLoS = true;
+            if (obstacleLayers != 0)
+            {
+                Vector3 startLoS = transform.position + Vector3.up * 1.2f;
+                Vector3 endLoS = TargetObject.transform.position + Vector3.up * 1.2f;
+
+                if (Physics.Linecast(startLoS, endLoS, out RaycastHit hit, obstacleLayers))
+                {
+                    if (hit.transform.root != TargetObject.transform.root && hit.transform.root != transform.root)
+                    {
+                        hasLoS = false;
+                    }
+                }
+            }
+
+            if (distance <= abilityToUse.range && hasLoS)
+            {
+                break;
             }
 
             navMeshAgent.SetDestination(TargetObject.transform.position);
@@ -578,7 +624,14 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         }
     }
 
-    public void StartFollowingTarget(GameObject newTarget, Ability abilityToQueue = null) { if (newTarget == null) return; TargetObject = newTarget; queuedAbility = abilityToQueue; if (interactionCoroutine != null) StopCoroutine(interactionCoroutine); StartCoroutine(FollowAndUseAbility()); }
+    public void StartFollowingTarget(GameObject newTarget, Ability abilityToQueue = null)
+    {
+        if (newTarget == null) return;
+        TargetObject = newTarget;
+        queuedAbility = abilityToQueue;
+        if (interactionCoroutine != null) { StopCoroutine(interactionCoroutine); interactionCoroutine = null; }
+        interactionCoroutine = StartCoroutine(FollowAndUseAbility());
+    }
 
     private IEnumerator MoveToInteract(GameObject targetObject)
     {
@@ -656,13 +709,12 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
     private void HandleEquipmentChanged(EquipmentType slotType) { if (slotType == EquipmentType.LeftHand || slotType == EquipmentType.RightHand) UpdateWeaponTypeParameter(); }
 
-    // --- UPDATED AAA WEAPON PARSING ---
     public void UpdateWeaponTypeParameter()
     {
         if (animator == null || playerEquipment == null) return;
 
-        int weaponType = 0; // 0 = Unarmed, 1 = 1H, 2 = 2H
-        int weaponCategory = 0; // Maps directly to ItemWeaponStats.WeaponCategory Enum
+        int weaponType = 0;
+        int weaponCategory = 0;
 
         playerEquipment.equippedItems.TryGetValue(EquipmentType.RightHand, out var rightHandItem);
         playerEquipment.equippedItems.TryGetValue(EquipmentType.LeftHand, out var leftHandItem);
@@ -670,15 +722,12 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         var rightWeaponStats = rightHandItem?.itemData.stats as ItemWeaponStats;
         var leftWeaponStats = leftHandItem?.itemData.stats as ItemWeaponStats;
 
-        // Let the primary hand dictate the stance/category, falling back to offhand if primary is empty
         ItemWeaponStats primaryWeapon = rightWeaponStats != null ? rightWeaponStats : leftWeaponStats;
 
         if (primaryWeapon != null)
         {
-            // Cast the enum to its integer value (e.g. Hands=0, Sword=1, Mace=2)
             weaponCategory = (int)primaryWeapon.weaponCategory;
 
-            // Preserve old Blend Tree logic for combat attacks
             if ((rightWeaponStats != null && rightWeaponStats.handed == ItemWeaponStats.Handed.TwoHanded) ||
                 (leftWeaponStats != null && leftWeaponStats.handed == ItemWeaponStats.Handed.TwoHanded))
             {
@@ -693,7 +742,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         animator.SetInteger(weaponTypeHash, weaponType);
         animator.SetInteger(weaponCategoryHash, weaponCategory);
     }
-    // ----------------------------------
 
     private bool IsUIDragInProgress() { if (uiManagerObject != null && Variables.Object(uiManagerObject).IsDefined(dragInProgressVariableName)) return Variables.Object(uiManagerObject).Get<bool>(dragInProgressVariableName); return false; }
     public void StopMovement() { if (navMeshAgent.hasPath) navMeshAgent.ResetPath(); }

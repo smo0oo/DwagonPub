@@ -14,12 +14,10 @@ public class GameManager : MonoBehaviour
     public static GameManager instance;
 
     [Header("Global UI")]
-    [Tooltip("Assign the 'GlobalUIOverlay' Canvas (Sort Order 30000) from the Core Scene here.")]
     public Transform globalUiOverlay;
 
     [Header("Scene Transition")]
     public float fadeDuration = 0.5f;
-    [Tooltip("The minimum time (in seconds) the loading screen will be visible, even if loading is instant.")]
     public float minimumLoadingScreenTime = 2.0f;
 
     [Header("Scene Management")]
@@ -28,16 +26,9 @@ public class GameManager : MonoBehaviour
     public List<ItemData> allItemsDatabase;
 
     [Header("State Tracking")]
-    [Tooltip("The ID of the spawn point used to enter the current scene.")]
     public string lastSpawnPointID;
-
-    [Tooltip("The scene we came from. Used by Dungeon Exits to return to the correct Hub (Town/Dome).")]
     public string previousSceneName;
-
-    [Tooltip("The type of the Location Node we most recently entered.")]
     public NodeType lastLocationType;
-
-    [Tooltip("Flag to suppress Dual Mode UI when returning from a dungeon run.")]
     public bool justExitedDungeon = false;
 
     [Header("Travel State")]
@@ -67,13 +58,11 @@ public class GameManager : MonoBehaviour
     public List<GameObject> worldMapHiddenElements;
 
     [Header("Sequence Visibility")]
-    [Tooltip("CanvasGroups in this list will have their Alpha set to 0 (and input disabled) when a Sequence starts.")]
     public List<CanvasGroup> canvasGroupsHiddenDuringSequence;
 
     [Header("Core Scene")]
     public string coreSceneName = "CoreScene";
 
-    // --- CACHED SCENE STATE ---
     public SceneType currentSceneType { get; private set; }
     private SceneType cachedSceneType = SceneType.Dungeon;
     private SceneInfo cachedSceneInfo;
@@ -86,11 +75,61 @@ public class GameManager : MonoBehaviour
 
     private bool isDebugExpanded = true;
 
+    // --- AAA GAME FEEL: SMOOTH TIME DILATION ---
+    private bool isHitStopping = false;
+
+    public void TriggerHitStop(float duration = 0.1f, float targetTimeScale = 0.1f)
+    {
+        if (!isHitStopping)
+        {
+            StartCoroutine(SmoothHitStopRoutine(duration, targetTimeScale));
+        }
+    }
+
+    private IEnumerator SmoothHitStopRoutine(float totalDuration, float targetTimeScale)
+    {
+        isHitStopping = true;
+
+        // Split the total duration into three phases for a buttery smooth curve
+        float easeInDuration = totalDuration * 0.2f;  // 20% of the time slowing down
+        float holdDuration = totalDuration * 0.3f;    // 30% of the time holding the impact
+        float easeOutDuration = totalDuration * 0.5f; // 50% of the time speeding back up
+
+        float elapsedTime = 0f;
+
+        // Phase 1: Ease In (Ramp down to target time scale)
+        while (elapsedTime < easeInDuration)
+        {
+            elapsedTime += Time.unscaledDeltaTime; // Unscaled time ignores the slowdown
+            float t = elapsedTime / easeInDuration;
+            Time.timeScale = Mathf.Lerp(1f, targetTimeScale, t);
+            yield return null;
+        }
+
+        // Phase 2: Hold (The bone-crunching impact)
+        Time.timeScale = targetTimeScale;
+        yield return new WaitForSecondsRealtime(holdDuration);
+
+        // Phase 3: Ease Out (Smoothly accelerate back to normal speed)
+        elapsedTime = 0f;
+        while (elapsedTime < easeOutDuration)
+        {
+            elapsedTime += Time.unscaledDeltaTime;
+            float t = elapsedTime / easeOutDuration;
+            Time.timeScale = Mathf.SmoothStep(targetTimeScale, 1f, t); // SmoothStep prevents the "snap" feeling
+            yield return null;
+        }
+
+        // Hard-set to 1f to guarantee the global time is restored perfectly
+        Time.timeScale = 1.0f;
+        isHitStopping = false;
+    }
+    // -------------------------------------------
+
     void OnGUI()
     {
         if (!Debug.isDebugBuild) return;
 
-        // Increased height to accommodate the new Aiming telemetry
         float height = isDebugExpanded ? 340 : 30;
         GUILayout.BeginArea(new Rect(10, 10, 350, height));
         if (GUILayout.Button(isDebugExpanded ? "Game State Debugger (▼)" : "Game State Debugger (▶)"))
@@ -117,7 +156,6 @@ public class GameManager : MonoBehaviour
                 }
             }
 
-            // --- AAA FIX: LIVE PROJECTILE AIM TELEMETRY ---
             if (PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
             {
                 GameObject activePlayer = PartyManager.instance.ActivePlayer;
@@ -134,7 +172,6 @@ public class GameManager : MonoBehaviour
                     Vector3 groundTarget = pm.CurrentGroundTarget;
                     Transform spawnPoint = pah.projectileSpawnPoint != null ? pah.projectileSpawnPoint : pah.transform;
 
-                    // Exact math from PlayerAbilityHolder.cs
                     float playerFloorY = activePlayer.transform.position.y;
                     if (UnityEngine.AI.NavMesh.SamplePosition(activePlayer.transform.position, out UnityEngine.AI.NavMeshHit hit, 2f, UnityEngine.AI.NavMesh.AllAreas))
                     {
@@ -149,7 +186,6 @@ public class GameManager : MonoBehaviour
                     GUILayout.Label($"Final Aim Height: <color=green>{finalAimHeight:F2}m</color>");
                 }
             }
-            // ----------------------------------------------
         }
         GUILayout.EndArea();
     }
