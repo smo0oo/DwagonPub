@@ -76,7 +76,8 @@ public class SequenceEffect : IAbilityEffect
         }
     }
 
-    public string GetEffectDescription()
+    // --- UPDATED SIGNATURE ---
+    public string GetEffectDescription(GameObject caster = null)
     {
         string prefix = "";
         if (chance < 100f)

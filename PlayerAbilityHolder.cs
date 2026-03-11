@@ -36,6 +36,13 @@ public class PlayerAbilityHolder : MonoBehaviour
     [Header("Targeting Settings")]
     public LayerMask targetLayers;
 
+    [Header("Aim Magnetism (AAA)")]
+    public bool enableAimMagnetism = true;
+    [Tooltip("The max cone angle (in degrees) an enemy can be from your cursor to be magnetically targeted.")]
+    public float magnetismAngle = 60f;
+    [Tooltip("Bonus range added to the ability's base range to catch enemies just out of reach.")]
+    public float magnetismBonusRange = 2f;
+
     [Header("Global Cooldown")]
     public float globalCooldownDuration = 1.0f;
     public float minGlobalCooldown = 0.5f;
@@ -47,12 +54,19 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     private Ability queuedAbility;
     private GameObject queuedTarget;
-    private Vector3 queuedPosition;
     private bool hasQueuedAction = false;
+
+    // --- MANUAL COMBO STATE TRACKERS ---
+    private Ability lastBaseAbilityInput;
+    private Ability currentComboNode;
+    private float comboWindowEndTime = 0f;
+    // -----------------------------------
 
     public ChanneledBeamController ActiveBeam { get; private set; }
     public bool IsCasting { get; private set; } = false;
+
     private Ability currentCastingAbility;
+    private Ability currentExecutingAbility;
 
     private Dictionary<Ability, float> cooldowns = new Dictionary<Ability, float>();
     private PlayerStats playerStats;
@@ -80,6 +94,22 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     public bool IsOnGlobalCooldown() => Time.time < globalCooldownTimer;
     public bool IsAnimationLocked => isAnimationLockedInternal;
+
+    public bool IsActivityLocked()
+    {
+        if (isAnimationLockedInternal) return true;
+        if (IsCasting && currentCastingAbility != null && currentCastingAbility.locksPlayerActivity) return true;
+
+        if (currentExecutingAbility != null && currentExecutingAbility.locksPlayerActivity)
+        {
+            bool isExecuting = activeProjectileCoroutine != null ||
+                               activeMeleeCoroutine != null ||
+                               activeLockCoroutine != null ||
+                               ActiveBeam != null;
+            if (isExecuting) return true;
+        }
+        return false;
+    }
 
     void Awake()
     {
@@ -135,51 +165,112 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         if (hasQueuedAction)
         {
-            if (Time.time > bufferExpirationTime) ClearInputBuffer();
+            if (Time.time > bufferExpirationTime)
+            {
+                ClearInputBuffer();
+            }
             else if (!IsCasting && !isAnimationLockedInternal && !IsOnGlobalCooldown())
             {
                 Ability ab = queuedAbility;
                 GameObject tar = queuedTarget;
-                Vector3 pos = queuedPosition;
                 ClearInputBuffer();
-                if (CanUseAbility(ab, tar)) UseAbility(ab, tar, pos, false);
+
+                // Funnel it right back into the main entry point to perfectly re-evaluate Combos and Magnetism!
+                UseAbility(ab, tar, false);
             }
         }
     }
 
     public void UseAbility(Ability ability, GameObject target) => UseAbility(ability, target, false);
-    public void UseAbility(Ability ability, Vector3 targetPosition) => UseAbility(ability, null, targetPosition, false);
 
-    public void UseAbility(Ability ability, GameObject target, bool bypassCooldown)
+    public void UseAbility(Ability ability, Vector3 targetPosition)
     {
-        Vector3 targetPosition;
-        if (target != null) targetPosition = target.transform.position;
-        else if (playerMovement != null) targetPosition = playerMovement.CurrentGroundTarget;
-        else targetPosition = transform.position + transform.forward * 5f;
-
-        UseAbility(ability, target, targetPosition, bypassCooldown);
+        // Direct positional commands skip magnetism and funnel straight to execution
+        UseAbilityInternal(ability, null, targetPosition, false, ability, false);
     }
 
-    private void UseAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown)
+    // --- MAIN ENTRY POINT ---
+    public void UseAbility(Ability ability, GameObject target, bool bypassCooldown)
     {
         if (ability == null) return;
+        Ability originalInput = ability;
+        bool isComboAdvance = false;
+
+        // 1. AAA COMBO INTERCEPTION
+        if (ability == lastBaseAbilityInput && Time.time <= comboWindowEndTime && currentComboNode != null && currentComboNode.nextComboLink != null)
+        {
+            ability = currentComboNode.nextComboLink; // Swap the ability!
+            if (currentComboNode.bypassGcdOnCombo) bypassCooldown = true;
+            isComboAdvance = true;
+        }
+
+        // 2. TARGETING & MAGNETISM
+        Vector3 targetPosition;
+        if (target != null)
+        {
+            targetPosition = target.transform.position;
+        }
+        else if (playerMovement != null)
+        {
+            targetPosition = playerMovement.CurrentGroundTarget;
+
+            // Magnetism uses the newly intercepted ability's stats
+            GameObject magneticTarget = FindMagneticTarget(ability, targetPosition);
+            if (magneticTarget != null)
+            {
+                target = magneticTarget;
+                targetPosition = magneticTarget.transform.position;
+
+                Vector3 snapDir = (targetPosition - transform.position).normalized;
+                snapDir.y = 0;
+                if (snapDir != Vector3.zero) transform.rotation = Quaternion.LookRotation(snapDir);
+            }
+        }
+        else
+        {
+            targetPosition = transform.position + transform.forward * 5f;
+        }
+
+        // 3. EXECUTION
+        UseAbilityInternal(ability, target, targetPosition, bypassCooldown, originalInput, isComboAdvance);
+    }
+
+    private void UseAbilityInternal(Ability ability, GameObject target, Vector3 position, bool bypassCooldown, Ability originalInput, bool isComboAdvance)
+    {
         if (playerStats != null && playerStats.currentMana < ability.manaCost) return;
         if (!bypassCooldown && cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return;
 
-        if (IsCasting || (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) || isAnimationLockedInternal)
+        if (IsCasting || (!bypassCooldown && ability.triggersGlobalCooldown && IsOnGlobalCooldown()) || isAnimationLockedInternal)
         {
-            QueueAbility(ability, target, position);
+            // If we are busy, queue the original button press so the combo is perfectly evaluated when it dequeues
+            QueueAbility(originalInput, target);
             return;
         }
+
+        // --- SUCCESSFUL CAST: UPDATE COMBO TRACKERS ---
+        if (isComboAdvance)
+        {
+            currentComboNode = ability;
+        }
+        else
+        {
+            // Start of a brand new chain
+            lastBaseAbilityInput = originalInput;
+            currentComboNode = ability;
+        }
+
+        float finalCastTime = ability.castTime;
+        if (playerStats != null) finalCastTime /= playerStats.secondaryStats.attackSpeed;
+
+        // Window opens AFTER the cast and locks finish!
+        comboWindowEndTime = Time.time + finalCastTime + ability.movementLockDuration + ability.comboWindow;
+        // ----------------------------------------------
 
         int styleIndex = ability.attackStyleIndex;
         if (ability.randomizeAttackStyle && ability.maxRandomVariants > 0)
         {
             styleIndex = UnityEngine.Random.Range(0, ability.maxRandomVariants);
         }
-
-        float finalCastTime = ability.castTime;
-        if (playerStats != null) finalCastTime /= playerStats.secondaryStats.attackSpeed;
 
         if (finalCastTime > 0 || ability.telegraphDuration > 0)
         {
@@ -192,11 +283,71 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    private void QueueAbility(Ability ability, GameObject target, Vector3 position)
+    private GameObject FindMagneticTarget(Ability ability, Vector3 cursorPosition)
+    {
+        if (!enableAimMagnetism || ability == null) return null;
+
+        if (ability.abilityType != AbilityType.TargetedMelee &&
+            ability.abilityType != AbilityType.DirectionalMelee &&
+            ability.abilityType != AbilityType.ForwardProjectile &&
+            ability.abilityType != AbilityType.TargetedProjectile)
+        {
+            return null;
+        }
+
+        float searchRadius = ability.range + magnetismBonusRange;
+        Collider[] hits = Physics.OverlapSphere(transform.position, searchRadius, targetLayers);
+
+        GameObject bestTarget = null;
+        float bestScore = float.MaxValue;
+
+        Vector3 cursorDir = (cursorPosition - transform.position).normalized;
+        cursorDir.y = 0;
+        if (cursorDir == Vector3.zero) cursorDir = transform.forward;
+
+        foreach (Collider col in hits)
+        {
+            GameObject potentialTarget = null;
+            CharacterRoot root = col.GetComponentInParent<CharacterRoot>();
+            if (root != null) potentialTarget = root.gameObject;
+            else
+            {
+                Health hp = col.GetComponentInParent<Health>();
+                if (hp != null) potentialTarget = hp.gameObject;
+            }
+
+            if (potentialTarget == null || potentialTarget == this.gameObject) continue;
+
+            Health targetHp = potentialTarget.GetComponent<Health>();
+            if (targetHp != null && targetHp.isDowned) continue;
+
+            CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
+            if (myRoot != null && root != null && myRoot.gameObject.layer == root.gameObject.layer) continue;
+
+            Vector3 dirToTarget = (potentialTarget.transform.position - transform.position).normalized;
+            dirToTarget.y = 0;
+
+            float angle = Vector3.Angle(cursorDir, dirToTarget);
+
+            if (angle <= magnetismAngle / 2f)
+            {
+                float distance = Vector3.Distance(transform.position, potentialTarget.transform.position);
+                float score = distance + (angle * 0.1f);
+
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    bestTarget = potentialTarget;
+                }
+            }
+        }
+        return bestTarget;
+    }
+
+    private void QueueAbility(Ability ability, GameObject target)
     {
         queuedAbility = ability;
         queuedTarget = target;
-        queuedPosition = position;
         bufferExpirationTime = Time.time + inputBufferDuration;
         hasQueuedAction = true;
     }
@@ -294,6 +445,8 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     private void ExecuteAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown = false, bool triggerAnimation = true, int styleIndex = 0)
     {
+        currentExecutingAbility = ability;
+
         if (ActiveBeam != null) ActiveBeam.Interrupt();
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
         if (ability.castSound != null) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
@@ -316,6 +469,14 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         OnPlayerAbilityUsed?.Invoke(this, ability, target, position);
 
+        if (ability.onCastEffects != null)
+        {
+            foreach (var effect in ability.onCastEffects)
+            {
+                effect.Apply(gameObject, target);
+            }
+        }
+
         if (triggerAnimation) TriggerAttackAnimation(ability, styleIndex);
 
         if (ability.movementLockDuration > 0)
@@ -328,15 +489,8 @@ public class PlayerAbilityHolder : MonoBehaviour
         {
             case AbilityType.TargetedProjectile:
             case AbilityType.ForwardProjectile:
-                if (ability.projectileSpawnDelay > 0)
-                {
-                    if (activeProjectileCoroutine != null) StopCoroutine(activeProjectileCoroutine);
-                    activeProjectileCoroutine = StartCoroutine(SpawnProjectileWithDelay(ability, target, position));
-                }
-                else
-                {
-                    HandleProjectile(ability, target, position);
-                }
+                if (activeProjectileCoroutine != null) StopCoroutine(activeProjectileCoroutine);
+                activeProjectileCoroutine = StartCoroutine(ExecuteProjectileBurst(ability, target, position));
                 break;
             case AbilityType.TargetedMelee:
             case AbilityType.DirectionalMelee:
@@ -353,16 +507,111 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    private IEnumerator SpawnProjectileWithDelay(Ability ability, GameObject target, Vector3 position)
+    private IEnumerator ExecuteProjectileBurst(Ability ability, GameObject target, Vector3 initialTargetPos)
     {
         float speedMultiplier = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
-        yield return new WaitForSeconds(ability.projectileSpawnDelay / speedMultiplier);
 
-        Health h = GetComponentInParent<Health>();
-        if (h != null && h.isDowned) yield break;
+        if (ability.projectileSpawnDelay > 0)
+            yield return new WaitForSeconds(ability.projectileSpawnDelay / speedMultiplier);
 
-        HandleProjectile(ability, target, position);
+        int count = Mathf.Max(1, ability.projectileCount);
+
+        for (int i = 0; i < count; i++)
+        {
+            Health h = GetComponentInParent<Health>();
+            if (h != null && h.isDowned) yield break;
+
+            Vector3 currentTargetPos = initialTargetPos;
+            if (target == null && playerMovement != null)
+            {
+                currentTargetPos = playerMovement.CurrentGroundTarget;
+
+                GameObject magneticTarget = FindMagneticTarget(ability, currentTargetPos);
+                if (magneticTarget != null)
+                {
+                    target = magneticTarget;
+                    currentTargetPos = magneticTarget.transform.position;
+                    Vector3 snapDir = (currentTargetPos - transform.position).normalized;
+                    snapDir.y = 0;
+                    if (snapDir != Vector3.zero) transform.rotation = Quaternion.LookRotation(snapDir);
+                }
+            }
+
+            FireSingleProjectile(ability, target, currentTargetPos, i, count);
+
+            if (ability.burstDelay > 0 && i < count - 1)
+                yield return new WaitForSeconds(ability.burstDelay / speedMultiplier);
+        }
+
         activeProjectileCoroutine = null;
+    }
+
+    private void FireSingleProjectile(Ability ability, GameObject target, Vector3 targetPos, int index, int totalCount)
+    {
+        if (ability.playerProjectilePrefab == null) return;
+        Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
+        Vector3 spawnPos = spawnTransform.position;
+        Quaternion spawnRot = spawnTransform.rotation;
+
+        if (target != null)
+        {
+            Vector3 targetCenter = target.transform.position;
+            Collider targetCollider = target.GetComponent<Collider>() ?? target.GetComponentInChildren<Collider>();
+            if (targetCollider != null) targetCenter = targetCollider.bounds.center;
+
+            Vector3 direction = targetCenter - spawnPos;
+            if (direction != Vector3.zero) spawnRot = Quaternion.LookRotation(direction);
+        }
+        else
+        {
+            float playerFloorY = transform.position.y;
+            if (UnityEngine.AI.NavMesh.SamplePosition(transform.position, out UnityEngine.AI.NavMeshHit myHit, 2f, UnityEngine.AI.NavMesh.AllAreas))
+                playerFloorY = myHit.position.y;
+
+            float spawnHeightAboveFloor = spawnPos.y - playerFloorY;
+            Vector3 adjustedTargetPos = new Vector3(targetPos.x, targetPos.y + spawnHeightAboveFloor, targetPos.z);
+
+            Vector3 direction = adjustedTargetPos - spawnPos;
+            if (direction.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(direction);
+        }
+
+        if (ability.spreadAngle > 0 && totalCount > 1)
+        {
+            float angleOffset = 0f;
+            if (ability.burstDelay == 0)
+            {
+                float step = ability.spreadAngle / (totalCount - 1);
+                float startAngle = -ability.spreadAngle / 2f;
+                angleOffset = startAngle + (step * index);
+            }
+            else
+            {
+                angleOffset = UnityEngine.Random.Range(-ability.spreadAngle / 2f, ability.spreadAngle / 2f);
+            }
+            spawnRot *= Quaternion.Euler(0, angleOffset, 0);
+        }
+
+        GameObject projectileGO = ObjectPooler.instance.Get(ability.playerProjectilePrefab, spawnPos, spawnRot);
+        if (projectileGO != null)
+        {
+            int layerId = LayerMask.NameToLayer("FriendlyRanged");
+            if (layerId != -1) projectileGO.layer = layerId;
+
+            if (projectileGO.TryGetComponent<Projectile>(out var projectile))
+            {
+                CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
+                int myLayer = myRoot != null ? myRoot.gameObject.layer : gameObject.layer;
+                projectile.Initialize(ability, this.gameObject, myLayer);
+            }
+
+            Collider pCol = projectileGO.GetComponent<Collider>();
+            if (pCol != null)
+            {
+                foreach (Collider c in GetComponentsInParent<Collider>()) Physics.IgnoreCollision(pCol, c);
+            }
+
+            projectileGO.SetActive(true);
+        }
     }
 
     private void SpawnCastVFX(Ability ability, Quaternion? overrideRotation = null)
@@ -468,7 +717,11 @@ public class PlayerAbilityHolder : MonoBehaviour
         bool isBusy = IsCasting || isAnimationLockedInternal || activeCastCoroutine != null || activeProjectileCoroutine != null || activeMeleeCoroutine != null || activeLockCoroutine != null || ActiveBeam != null;
         if (!isBusy) return;
 
-        if (isMovementInterrupt && IsCasting && currentCastingAbility != null && currentCastingAbility.canMoveWhileCasting) return;
+        if (isMovementInterrupt)
+        {
+            if (IsCasting && currentCastingAbility != null && currentCastingAbility.canMoveWhileCasting) return;
+            if (IsActivityLocked()) return;
+        }
 
         if (animator != null)
         {
@@ -497,6 +750,14 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         IsCasting = false;
         currentCastingAbility = null;
+        currentExecutingAbility = null;
+
+        // --- CLEAN UP THE COMBO CHAIN ON CANCEL ---
+        lastBaseAbilityInput = null;
+        currentComboNode = null;
+        comboWindowEndTime = 0f;
+        // ------------------------------------------
+
         CleanupCastingVFX();
         ClearInputBuffer();
         isAnimationLockedInternal = false;
@@ -526,66 +787,6 @@ public class PlayerAbilityHolder : MonoBehaviour
     }
 
     private float GetCurrentWeaponSpeed() { if (playerEquipment == null) return 2.0f; if (playerEquipment.equippedItems.TryGetValue(EquipmentType.RightHand, out var rightHandItem) && rightHandItem?.itemData.stats is ItemWeaponStats rightWeapon) return rightWeapon.baseAttackTime; if (playerEquipment.equippedItems.TryGetValue(EquipmentType.LeftHand, out var leftHandItem) && leftHandItem?.itemData.stats is ItemWeaponStats leftWeapon) return leftWeapon.baseAttackTime; return 2.0f; }
-
-    private void HandleProjectile(Ability ability, GameObject target, Vector3 targetPos)
-    {
-        if (ability.playerProjectilePrefab == null) return;
-        Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
-        Vector3 spawnPos = spawnTransform.position;
-        Quaternion spawnRot = spawnTransform.rotation;
-
-        if (target != null)
-        {
-            Vector3 targetCenter = target.transform.position;
-            Collider targetCollider = target.GetComponent<Collider>() ?? target.GetComponentInChildren<Collider>();
-            if (targetCollider != null) targetCenter = targetCollider.bounds.center;
-
-            Vector3 direction = targetCenter - spawnPos;
-            if (direction != Vector3.zero) spawnRot = Quaternion.LookRotation(direction);
-        }
-        else
-        {
-            float playerFloorY = transform.position.y;
-            if (UnityEngine.AI.NavMesh.SamplePosition(transform.position, out UnityEngine.AI.NavMeshHit myHit, 2f, UnityEngine.AI.NavMesh.AllAreas))
-            {
-                playerFloorY = myHit.position.y;
-            }
-
-            float spawnHeightAboveFloor = spawnPos.y - playerFloorY;
-            Vector3 adjustedTargetPos = new Vector3(targetPos.x, targetPos.y + spawnHeightAboveFloor, targetPos.z);
-
-            Vector3 direction = adjustedTargetPos - spawnPos;
-            if (direction.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(direction);
-        }
-
-        GameObject projectileGO = ObjectPooler.instance.Get(ability.playerProjectilePrefab, spawnPos, spawnRot);
-        if (projectileGO != null)
-        {
-            // Set layer to trigger physics
-            int layerId = LayerMask.NameToLayer("FriendlyRanged");
-            if (layerId != -1) projectileGO.layer = layerId;
-
-            if (projectileGO.TryGetComponent<Projectile>(out var projectile))
-            {
-                CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
-                int myLayer = myRoot != null ? myRoot.gameObject.layer : gameObject.layer;
-
-                // Initialize projectile WITHOUT overwriting its physical collision masks!
-                projectile.Initialize(ability, this.gameObject, myLayer);
-            }
-
-            Collider pCol = projectileGO.GetComponent<Collider>();
-            if (pCol != null)
-            {
-                foreach (Collider c in GetComponentsInParent<Collider>())
-                {
-                    Physics.IgnoreCollision(pCol, c);
-                }
-            }
-
-            projectileGO.SetActive(true);
-        }
-    }
 
     private void HandleGroundAOE(Ability ability, Vector3 position)
     {
@@ -683,7 +884,43 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    public bool GetCooldownStatus(Ability ability, out float remaining) { remaining = 0f; if (cooldowns.TryGetValue(ability, out float endTime)) { if (Time.time < endTime) { remaining = endTime - Time.time; return true; } } return false; }
-    public bool CanUseAbility(Ability ability, GameObject target) { if (ability == null || IsCasting) return false; if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false; if (ability.requiresWeaponType && !IsCorrectWeaponEquipped(ability.requiredWeaponCategories)) return false; if ((ability.abilityType == AbilityType.TargetedMelee || ability.abilityType == AbilityType.TargetedProjectile || ability.abilityType == AbilityType.Charge) && target == null) return false; if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false; if (playerStats != null && playerStats.currentMana < ability.manaCost) return false; return true; }
+    public bool GetCooldownStatus(Ability ability, out float remaining)
+    {
+        // --- AAA FIX: HOTBAR UI SYNC ---
+        // If the combo is active, render the cooldown status of the NEXT link, not the base!
+        if (ability == lastBaseAbilityInput && Time.time <= comboWindowEndTime && currentComboNode != null && currentComboNode.nextComboLink != null)
+        {
+            ability = currentComboNode.nextComboLink;
+        }
+
+        remaining = 0f;
+        if (cooldowns.TryGetValue(ability, out float endTime))
+        {
+            if (Time.time < endTime)
+            {
+                remaining = endTime - Time.time;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public bool CanUseAbility(Ability ability, GameObject target)
+    {
+        // --- AAA FIX: HOTBAR UI SYNC ---
+        if (ability == lastBaseAbilityInput && Time.time <= comboWindowEndTime && currentComboNode != null && currentComboNode.nextComboLink != null)
+        {
+            ability = currentComboNode.nextComboLink;
+        }
+
+        if (ability == null || IsCasting) return false;
+        if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false;
+        if (ability.requiresWeaponType && !IsCorrectWeaponEquipped(ability.requiredWeaponCategories)) return false;
+        if ((ability.abilityType == AbilityType.TargetedMelee || ability.abilityType == AbilityType.TargetedProjectile || ability.abilityType == AbilityType.Charge) && target == null) return false;
+        if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false;
+        if (playerStats != null && playerStats.currentMana < ability.manaCost) return false;
+        return true;
+    }
+
     public bool IsCorrectWeaponEquipped(List<ItemWeaponStats.WeaponCategory> categories) { if (playerEquipment == null) return false; if (categories == null || categories.Count == 0) return false; if (playerEquipment.equippedItems.TryGetValue(EquipmentType.RightHand, out var rightHandItem) && rightHandItem?.itemData?.stats is ItemWeaponStats rightWeapon && categories.Contains(rightWeapon.weaponCategory)) return true; if (playerEquipment.equippedItems.TryGetValue(EquipmentType.LeftHand, out var leftHandItem) && leftHandItem?.itemData?.stats is ItemWeaponStats leftWeapon && categories.Contains(leftWeapon.weaponCategory)) return true; return false; }
 }

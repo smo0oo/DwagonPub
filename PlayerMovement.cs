@@ -24,6 +24,13 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     public float bodyTurnSpeed = 5f;
 
     [Space(10)]
+    [Header("Generic Rig Head Look (AAA)")]
+    public Transform headBone;
+    [Tooltip("If the head bone's blue arrow (Z) isn't pointing forward out of the face, tweak this to align it (e.g., 0, 90, -90).")]
+    public Vector3 headLookOffsetRotation = Vector3.zero;
+    [Tooltip("Max angle the head can turn before it stops tracking.")]
+    public float maxHeadLookAngle = 70f;
+
     [Range(0, 1)] public float headLookWeight = 1f;
     public float headLookSpeed = 8f;
     public float headWeightBlendSpeed = 5f;
@@ -168,8 +175,10 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             return;
         }
 
-        if (abilityHolder != null && abilityHolder.IsAnimationLocked)
+        if (abilityHolder != null && abilityHolder.IsActivityLocked())
         {
+            if (navMeshAgent != null && navMeshAgent.isOnNavMesh && navMeshAgent.hasPath) navMeshAgent.ResetPath();
+            RotateTowardsMouse(true);
             _perfWatch.Stop();
             LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
             return;
@@ -177,11 +186,18 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         if (abilityHolder != null && abilityHolder.ActiveBeam != null)
         {
-            if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
-            RotateTowardsMouse(true);
-            _perfWatch.Stop();
-            LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
-            return;
+            bool wantsToMove = false;
+            if (currentMode == MovementMode.PointAndClick && Input.GetMouseButtonDown(0)) wantsToMove = true;
+            if (currentMode == MovementMode.WASD && (Input.GetAxis("Horizontal") != 0 || Input.GetAxis("Vertical") != 0)) wantsToMove = true;
+
+            if (!wantsToMove)
+            {
+                if (navMeshAgent != null && navMeshAgent.isOnNavMesh && navMeshAgent.hasPath) navMeshAgent.ResetPath();
+                RotateTowardsMouse(true);
+                _perfWatch.Stop();
+                LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
+                return;
+            }
         }
 
         if (IsMovingToAttack && TargetObject == null && !navMeshAgent.pathPending)
@@ -241,6 +257,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         HandleRotation();
         UpdateAnimator();
         UpdateHeadLookLogic();
+        ApplyGenericHeadLook(); // --- AAA FIX: TRIGGER THE GENERIC RIG BONE OVERRIDE
     }
 
     private void UpdateHeadLookLogic()
@@ -269,6 +286,34 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         float targetWeight = (isDodging || (myHealth != null && myHealth.isDowned)) ? 0f : headLookWeight;
         CurrentHeadLookWeight = Mathf.Lerp(CurrentHeadLookWeight, targetWeight, Time.deltaTime * headWeightBlendSpeed);
     }
+
+    // --- AAA FIX: GENERIC RIG MANUAL IK OVERRIDE ---
+    private void ApplyGenericHeadLook()
+    {
+        if (headBone == null || CurrentHeadLookWeight <= 0.01f) return;
+
+        Vector3 lookDir = CurrentHeadLookPosition - headBone.position;
+        if (lookDir == Vector3.zero) return;
+
+        // 1. Convert the look direction to be local to the character's body
+        Vector3 localLookDir = transform.InverseTransformDirection(lookDir);
+
+        // 2. Clamp the direction so the head doesn't snap backwards (Exorcist effect)
+        Vector3 clampedLocalDir = Vector3.RotateTowards(Vector3.forward, localLookDir, maxHeadLookAngle * Mathf.Deg2Rad, 0f);
+
+        // 3. Convert back to world space
+        Vector3 finalLookDir = transform.TransformDirection(clampedLocalDir);
+
+        // 4. Calculate the base target rotation 
+        Quaternion targetRotation = Quaternion.LookRotation(finalLookDir, transform.up);
+
+        // 5. Apply any bone orientation fixes (since generic rig bones point in arbitrary directions)
+        targetRotation *= Quaternion.Euler(headLookOffsetRotation);
+
+        // 6. Smoothly blend between the bone's raw animation rotation and our calculated IK rotation
+        headBone.rotation = Quaternion.Slerp(headBone.rotation, targetRotation, CurrentHeadLookWeight);
+    }
+    // -----------------------------------------------
 
     private void HandleInteractionClick()
     {

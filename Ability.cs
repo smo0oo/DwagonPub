@@ -72,10 +72,18 @@ public class Ability : ScriptableObject
     public float movementLockDuration = 0f;
 
     [Header("Randomization")]
-    [Tooltip("If true, ignores attackStyleIndex and picks a random number from 0 to maxRandomVariants - 1")]
     public bool randomizeAttackStyle = false;
-    [Tooltip("If set to 3, it will randomly send 0, 1, or 2 to the Animator.")]
     public int maxRandomVariants = 3;
+
+    // --- NEW AAA FIX: MANUAL COMBO SYSTEM ---
+    [Header("Manual Combo System (AAA)")]
+    [Tooltip("The next ability in the combo chain. Triggered by pressing this ability's button again.")]
+    public Ability nextComboLink;
+    [Tooltip("How long the player has to press the button again to trigger the next combo link.")]
+    public float comboWindow = 1.5f;
+    [Tooltip("If true, triggering the next combo link ignores the Global Cooldown.")]
+    public bool bypassGcdOnCombo = true;
+    // ----------------------------------------
 
     [Header("Behavior Type")]
     public AbilityType abilityType = AbilityType.TargetedMelee;
@@ -92,8 +100,12 @@ public class Ability : ScriptableObject
     [Header("Projectile Settings")]
     public GameObject playerProjectilePrefab;
     public GameObject enemyProjectilePrefab;
-    [Tooltip("How long (in seconds) to wait before spawning the projectile, so it syncs perfectly with the animation's release frame.")]
     public float projectileSpawnDelay = 0f;
+
+    [Header("Multi-Projectile Settings (AAA)")]
+    public int projectileCount = 1;
+    public float burstDelay = 0f;
+    public float spreadAngle = 0f;
 
     [Header("Melee Hitbox")]
     public Vector3 attackBoxSize = new Vector3(1, 2, 2);
@@ -151,6 +163,7 @@ public class Ability : ScriptableObject
     public List<string> effects = new List<string>();
 
     [Header("Effects")]
+    [SerializeReference] public List<IAbilityEffect> onCastEffects = new List<IAbilityEffect>();
     [SerializeReference] public List<IAbilityEffect> friendlyEffects = new List<IAbilityEffect>();
     [SerializeReference] public List<IAbilityEffect> hostileEffects = new List<IAbilityEffect>();
 }

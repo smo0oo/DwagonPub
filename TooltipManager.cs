@@ -46,7 +46,6 @@ public class TooltipManager : MonoBehaviour
     public Ease openEase = Ease.OutBack;
     public Ease closeEase = Ease.InBack;
 
-    // Cache the Canvas to update sorting layer dynamically
     private Canvas _parentCanvas;
 
     void Awake()
@@ -55,7 +54,6 @@ public class TooltipManager : MonoBehaviour
         instance = this;
         DontDestroyOnLoad(gameObject);
 
-        // --- GLOBAL OVERLAY PARENTING ---
         Transform overlay = null;
         if (GameManager.instance != null && GameManager.instance.globalUiOverlay != null)
         {
@@ -65,15 +63,13 @@ public class TooltipManager : MonoBehaviour
 
         if (tooltipPanel != null && overlay != null)
         {
-            // Fix: Use 'false' to reset position relative to the new parent (Overlay)
             tooltipPanel.transform.SetParent(overlay, false);
-
             tooltipRect = tooltipPanel.GetComponent<RectTransform>();
             if (tooltipRect != null)
             {
                 tooltipRect.anchoredPosition = Vector2.zero;
                 tooltipRect.localRotation = Quaternion.identity;
-                tooltipRect.localScale = Vector3.one; // Fix scale issues
+                tooltipRect.localScale = Vector3.one;
             }
 
             CanvasGroup group = tooltipPanel.GetComponent<CanvasGroup>();
@@ -97,17 +93,10 @@ public class TooltipManager : MonoBehaviour
         {
             UpdateTooltipPosition();
 
-            // --- AUTO-FIX SORTING LAYER ---
-            // If the user has multiple sorting layers (Default vs UI), ensure Tooltip stays on top.
-            // We just grab the layer of the "Current" top canvas if we can, or brute force "UI"
             if (_parentCanvas != null)
             {
-                // If the overlay accidentally got set to Default, and UI is active, force UI.
-                // Ideally, you set this in the Inspector on 'GlobalUIOverlay', but this is a failsafe.
                 if (_parentCanvas.sortingLayerName == "Default")
                 {
-                    // This is a common Unity issue. Try to guess "UI".
-                    // You can remove this check if you manually set the Canvas to "UI" in the Core Scene.
                     _parentCanvas.sortingLayerName = "UI";
                 }
             }
@@ -140,6 +129,8 @@ public class TooltipManager : MonoBehaviour
         if (nameBackgroundImage) nameBackgroundImage.color = new Color(0.1f, 0.1f, 0.2f, 0.9f);
 
         StringBuilder sbStats = new StringBuilder();
+
+        // --- AAA FIX: DYNAMIC PAYLOAD STATS ---
         void AppendStats(Ability a, string prefix)
         {
             if (a.abilityType == AbilityType.ChanneledBeam)
@@ -153,7 +144,18 @@ public class TooltipManager : MonoBehaviour
                 if (a.cooldown > 0) sbStats.AppendLine($"{prefix}<color=#DDDDDD>Cooldown: {a.cooldown}s</color>");
                 if (a.castTime > 0) sbStats.AppendLine($"{prefix}<color=#DDDDDD>Cast Time: {a.castTime}s</color>");
             }
+
+            // Expose the new Projectile Mechanics
+            if (a.abilityType == AbilityType.TargetedProjectile || a.abilityType == AbilityType.ForwardProjectile)
+            {
+                if (a.projectileCount > 1)
+                {
+                    string burstText = a.burstDelay == 0 ? "Shotgun Blast" : $"{a.burstDelay}s Burst";
+                    sbStats.AppendLine($"{prefix}<color=#FFA500>Payload: {a.projectileCount}x Projectiles ({burstText})</color>");
+                }
+            }
         }
+        // --------------------------------------
 
         if (nextRankAbility == null)
         {
@@ -185,14 +187,35 @@ public class TooltipManager : MonoBehaviour
         }
 
         StringBuilder sbDesc = new StringBuilder();
+
+        // --- AAA FIX: PARSE ALL EFFECT PIPELINES ---
         void AppendEffects(Ability a)
         {
-            bool hasHostile = a.hostileEffects.Count > 0;
-            bool hasFriendly = a.friendlyEffects.Count > 0;
-            if (hasHostile || hasFriendly) sbDesc.AppendLine();
-            foreach (var effect in a.hostileEffects) if (effect != null) sbDesc.AppendLine($"<color=#FF8888>• {effect.GetEffectDescription()}</color>");
-            foreach (var effect in a.friendlyEffects) if (effect != null) sbDesc.AppendLine($"<color=#88FF88>• {effect.GetEffectDescription()}</color>");
+            bool hasOnCast = a.onCastEffects != null && a.onCastEffects.Count > 0;
+            bool hasHostile = a.hostileEffects != null && a.hostileEffects.Count > 0;
+            bool hasFriendly = a.friendlyEffects != null && a.friendlyEffects.Count > 0;
+
+            if (hasOnCast || hasHostile || hasFriendly) sbDesc.AppendLine(); // Spacer
+
+            if (hasOnCast)
+            {
+                foreach (var effect in a.onCastEffects)
+                    if (effect != null) sbDesc.AppendLine($"<color=#FFD700>• {effect.GetEffectDescription()}</color>");
+            }
+
+            if (hasHostile)
+            {
+                foreach (var effect in a.hostileEffects)
+                    if (effect != null) sbDesc.AppendLine($"<color=#FF8888>• {effect.GetEffectDescription()}</color>");
+            }
+
+            if (hasFriendly)
+            {
+                foreach (var effect in a.friendlyEffects)
+                    if (effect != null) sbDesc.AppendLine($"<color=#88FF88>• {effect.GetEffectDescription()}</color>");
+            }
         }
+        // -------------------------------------------
 
         if (nextRankAbility == null)
         {
