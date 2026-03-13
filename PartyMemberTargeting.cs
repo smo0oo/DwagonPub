@@ -1,5 +1,17 @@
 using UnityEngine;
+using System.Collections.Generic;
 using System.Linq;
+
+// --- AAA FIX: TACTICAL GAMBIT SYSTEM ---
+public enum TacticalPriority
+{
+    Boss,   // Highest Threat (e.g., Bosses, Leaders)
+    Medic,  // High Threat (e.g., Enemy Healers)
+    Ranged, // High Threat (e.g., Mages, Archers, Snipers)
+    Melee,  // Standard (e.g., Standard Grunts, Tanks)
+    Low     // Last Resort (e.g., Summoned Minions, Weak critters)
+}
+// ---------------------------------------
 
 public class PartyMemberTargeting : MonoBehaviour
 {
@@ -7,6 +19,16 @@ public class PartyMemberTargeting : MonoBehaviour
     public float aggressiveScanRadius = 20f;
     public LayerMask enemyLayer;
     public LayerMask obstacleLayers; // For Line of Sight
+
+    [Header("Tactical Priorities (AAA)")]
+    [Tooltip("The AI will completely clear out enemies of the first rank before moving to the next rank. Drag to reorder!")]
+    public List<TacticalPriority> priorityOrder = new List<TacticalPriority> {
+        TacticalPriority.Boss,
+        TacticalPriority.Medic,
+        TacticalPriority.Ranged,
+        TacticalPriority.Melee,
+        TacticalPriority.Low
+    };
 
     [Header("Healing Logic")]
     [Range(0f, 1f)]
@@ -46,34 +68,61 @@ public class PartyMemberTargeting : MonoBehaviour
     {
         int hitCount = Physics.OverlapSphereNonAlloc(transform.position, aggressiveScanRadius, _enemyBuffer, enemyLayer);
 
-        GameObject closestEnemy = null;
-        float minDistance = float.MaxValue;
+        List<EnemyAI> validEnemies = new List<EnemyAI>();
 
         for (int i = 0; i < hitCount; i++)
         {
             Collider col = _enemyBuffer[i];
 
-            // 1. Resolve Health (Handle collider on child/parent)
+            // 1. Resolve Health
             Health h = col.GetComponent<Health>() ?? col.GetComponentInParent<Health>();
 
             // 2. Skip if no health or already dead
             if (h == null || h.isDowned || h.currentHealth <= 0) continue;
 
             // 3. Line of Sight Check
-            if (!HasLineOfSight(col.transform))
-            {
-                continue;
-            }
+            if (!HasLineOfSight(col.transform)) continue;
 
-            float distance = Vector3.Distance(transform.position, col.transform.position);
-            if (distance < minDistance)
+            // 4. Grab the EnemyAI component
+            EnemyAI enemy = col.GetComponent<EnemyAI>() ?? col.GetComponentInParent<EnemyAI>();
+            if (enemy != null)
             {
-                minDistance = distance;
-                closestEnemy = h.gameObject; // Target the object with Health
+                validEnemies.Add(enemy);
             }
         }
 
-        return closestEnemy;
+        if (validEnemies.Count == 0) return null;
+
+        // --- AAA FIX: EVALUATE TARGETS BY PRIORITY RANK ---
+        // We loop through what the Party Member CARES about first.
+        foreach (TacticalPriority rank in priorityOrder)
+        {
+            EnemyAI bestEnemyInRank = null;
+            float minDistance = float.MaxValue;
+
+            foreach (var enemy in validEnemies)
+            {
+                if (enemy.priorityRank == rank)
+                {
+                    float distance = Vector3.Distance(transform.position, enemy.transform.position);
+                    if (distance < minDistance)
+                    {
+                        minDistance = distance;
+                        bestEnemyInRank = enemy;
+                    }
+                }
+            }
+
+            // If we found ANY valid enemy matching this specific priority rank, 
+            // lock onto the closest one immediately and ignore all lower ranks!
+            if (bestEnemyInRank != null)
+            {
+                return bestEnemyInRank.gameObject;
+            }
+        }
+        // --------------------------------------------------
+
+        return null;
     }
 
     public bool HasLineOfSight(Transform target)

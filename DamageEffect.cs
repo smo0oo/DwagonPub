@@ -17,6 +17,10 @@ public class DamageEffect : IAbilityEffect
     [Tooltip("If true, adds the caster's global damage multiplier to this attack.")]
     public bool useGlobalStatBonus = true;
 
+    [Header("Impact & Force")]
+    public int poiseDamage = 10;
+    public float knockbackForce = 0f;
+
     [Header("Stat Scaling")]
     public List<StatScaling> scalingFactors;
 
@@ -25,21 +29,17 @@ public class DamageEffect : IAbilityEffect
     public float splashRadius = 3f;
     public float splashDamageMultiplier = 0.5f;
 
-    // Static buffer for Non-Allocating Physics to reduce garbage collection
     private static Collider[] _splashBuffer = new Collider[50];
 
     public void Apply(GameObject caster, GameObject target)
     {
-        // 1. Activation Chance Check
         if (chance < 100f && Random.Range(0f, 100f) > chance) return;
 
         Health targetHealth = target.GetComponentInChildren<Health>();
-        // Note: We continue even if targetHealth is null because splash damage might still hit other things nearby.
 
         float finalDamage = baseDamage;
         bool isCrit = false;
 
-        // 2. Calculate Damage based on Caster Stats
         CharacterRoot casterRoot = caster.GetComponentInParent<CharacterRoot>();
         PlayerStats casterStats = (casterRoot != null) ? casterRoot.GetComponentInChildren<PlayerStats>() : null;
 
@@ -80,7 +80,7 @@ public class DamageEffect : IAbilityEffect
 
                 if (Random.value < (casterStats.secondaryStats.critChance / 100f)) { finalDamage *= 2; isCrit = true; }
             }
-            else // Magical
+            else
             {
                 finalDamage *= (1 + casterStats.secondaryStats.magicAttackDamage / 100f);
                 foreach (var scaling in scalingFactors)
@@ -96,16 +96,24 @@ public class DamageEffect : IAbilityEffect
                 if (Random.value < (casterStats.secondaryStats.spellCritChance / 100f)) { finalDamage *= 2; isCrit = true; }
             }
         }
+        // --- AAA FIX: ENEMY LEVEL SCALING MULTIPLIER ---
+        else if (caster != null)
+        {
+            EnemyAI enemyCaster = caster.GetComponent<EnemyAI>() ?? caster.GetComponentInParent<EnemyAI>();
+            if (enemyCaster != null)
+            {
+                finalDamage *= enemyCaster.CurrentDamageMultiplier;
+            }
+        }
+        // -----------------------------------------------
 
         int finalDamageInt = Mathf.FloorToInt(finalDamage);
 
-        // 3. Apply Damage to Primary Target
         if (targetHealth != null)
         {
-            targetHealth.TakeDamage(finalDamageInt, damageType, isCrit, caster);
+            targetHealth.TakeDamage(finalDamageInt, damageType, isCrit, caster, knockbackForce, poiseDamage);
         }
 
-        // 4. Handle Splash Damage
         if (isSplash)
         {
             HandleSplash(target, caster, finalDamageInt, damageType, casterRoot);
@@ -114,62 +122,144 @@ public class DamageEffect : IAbilityEffect
 
     private void HandleSplash(GameObject mainTarget, GameObject caster, int mainDamage, DamageType type, CharacterRoot casterRoot)
     {
-        // Use NonAlloc to avoid garbage generation during combat
         int hitCount = Physics.OverlapSphereNonAlloc(mainTarget.transform.position, splashRadius, _splashBuffer);
         int splashDamage = Mathf.FloorToInt(mainDamage * splashDamageMultiplier);
+
+        int splashPoise = Mathf.FloorToInt(poiseDamage * splashDamageMultiplier);
+        float splashKnockback = knockbackForce * splashDamageMultiplier;
 
         CharacterRoot mainTargetRoot = mainTarget.GetComponentInParent<CharacterRoot>();
 
         for (int i = 0; i < hitCount; i++)
         {
             var hit = _splashBuffer[i];
-
-            // 1. Ignore Aggro/Activation Triggers (Layer 21 is usually triggers)
             if (hit.gameObject.layer == 21) continue;
 
-            // 2. Identify the root of the hit object (is it a character?)
             CharacterRoot hitRoot = hit.GetComponentInParent<CharacterRoot>();
-
-            // 3. Prevent double-hitting the main target
             if (hitRoot != null && mainTargetRoot != null && hitRoot == mainTargetRoot) continue;
-
-            // 4. Prevent Self-Damage (Caster shouldn't nuke themselves)
             if (hitRoot != null && casterRoot != null && hitRoot == casterRoot) continue;
-
-            // 5. Prevent hitting own child objects (e.g., caster's own sword collider or sensor)
             if (hitRoot == null && hit.transform.IsChildOf(caster.transform)) continue;
 
-            // 6. Resolve Target Object
             GameObject targetObj = (hitRoot != null) ? hitRoot.gameObject : hit.gameObject;
 
-            // --- AAA PROPS FIX ---
-            // Explicitly check if the object is a DestructibleProp
             bool isProp = targetObj.GetComponent<DestructibleProp>() != null || targetObj.GetComponentInChildren<DestructibleProp>() != null;
-
-            // It is considered hostile if:
-            // A) It is a prop (Barrels are always valid targets)
-            // B) Caster is null (Environment damage)
-            // C) It is on a different layer than the caster (Enemy vs Player)
             bool isHostile = isProp || (casterRoot == null) || (targetObj.layer != casterRoot.gameObject.layer);
-            // ---------------------
 
             if (isHostile)
             {
                 Health splashTargetHealth = targetObj.GetComponentInChildren<Health>();
                 if (splashTargetHealth != null)
                 {
-                    // Apply splash damage (never crit on splash to keep balance)
-                    splashTargetHealth.TakeDamage(splashDamage, type, false, caster);
+                    splashTargetHealth.TakeDamage(splashDamage, type, false, caster, splashKnockback, splashPoise);
                 }
             }
         }
     }
 
-    public string GetEffectDescription()
+    // --- AAA FIX: LIVE TOOLTIP SCALING ---
+    public string GetEffectDescription(GameObject caster = null)
     {
+        float previewDamageLow = baseDamage;
+        float previewDamageHigh = baseDamage;
+
+        if (caster != null)
+        {
+            CharacterRoot casterRoot = caster.GetComponentInParent<CharacterRoot>();
+            PlayerStats casterStats = (casterRoot != null) ? casterRoot.GetComponentInChildren<PlayerStats>() : null;
+
+            if (casterStats != null)
+            {
+                if (damageType == DamageType.Physical)
+                {
+                    float weaponDamageLow = 0f;
+                    float weaponDamageHigh = 0f;
+                    PlayerEquipment equipment = caster.GetComponentInParent<PlayerEquipment>();
+
+                    if (equipment != null)
+                    {
+                        equipment.equippedItems.TryGetValue(EquipmentType.RightHand, out ItemStack rightHandItem);
+                        equipment.equippedItems.TryGetValue(EquipmentType.LeftHand, out ItemStack leftHandItem);
+
+                        ItemWeaponStats weaponStats = null;
+                        if (rightHandItem != null && rightHandItem.itemData.stats is ItemWeaponStats)
+                            weaponStats = rightHandItem.itemData.stats as ItemWeaponStats;
+                        else if (leftHandItem != null && leftHandItem.itemData.stats is ItemWeaponStats)
+                            weaponStats = leftHandItem.itemData.stats as ItemWeaponStats;
+
+                        if (weaponStats != null)
+                        {
+                            weaponDamageLow = weaponStats.DamageLow;
+                            weaponDamageHigh = weaponStats.DamageHigh;
+                        }
+                    }
+
+                    previewDamageLow += weaponDamageLow;
+                    previewDamageHigh += weaponDamageHigh;
+
+                    if (useGlobalStatBonus)
+                    {
+                        previewDamageLow += casterStats.secondaryStats.damageMultiplier;
+                        previewDamageHigh += casterStats.secondaryStats.damageMultiplier;
+                    }
+
+                    foreach (var scaling in scalingFactors)
+                    {
+                        float statBonus = 0f;
+                        switch (scaling.stat)
+                        {
+                            case StatType.Strength: statBonus = casterStats.finalStrength * scaling.ratio; break;
+                            case StatType.Agility: statBonus = casterStats.finalAgility * scaling.ratio; break;
+                            case StatType.Intelligence: statBonus = casterStats.finalIntelligence * scaling.ratio; break;
+                            case StatType.Faith: statBonus = casterStats.finalFaith * scaling.ratio; break;
+                        }
+                        previewDamageLow += statBonus;
+                        previewDamageHigh += statBonus;
+                    }
+                }
+                else // Magical
+                {
+                    float magicMult = (1 + casterStats.secondaryStats.magicAttackDamage / 100f);
+                    previewDamageLow *= magicMult;
+                    previewDamageHigh *= magicMult;
+
+                    foreach (var scaling in scalingFactors)
+                    {
+                        float statBonus = 0f;
+                        switch (scaling.stat)
+                        {
+                            case StatType.Strength: statBonus = casterStats.finalStrength * scaling.ratio; break;
+                            case StatType.Agility: statBonus = casterStats.finalAgility * scaling.ratio; break;
+                            case StatType.Intelligence: statBonus = casterStats.finalIntelligence * scaling.ratio; break;
+                            case StatType.Faith: statBonus = casterStats.finalFaith * scaling.ratio; break;
+                        }
+                        previewDamageLow += statBonus;
+                        previewDamageHigh += statBonus;
+                    }
+                }
+            }
+            // --- AAA FIX: ENEMY TOOLTIP SCALING ---
+            else
+            {
+                EnemyAI enemyCaster = caster.GetComponent<EnemyAI>() ?? caster.GetComponentInParent<EnemyAI>();
+                if (enemyCaster != null)
+                {
+                    previewDamageLow *= enemyCaster.CurrentDamageMultiplier;
+                    previewDamageHigh *= enemyCaster.CurrentDamageMultiplier;
+                }
+            }
+            // --------------------------------------
+        }
+
+        int finalLow = Mathf.FloorToInt(previewDamageLow);
+        int finalHigh = Mathf.FloorToInt(previewDamageHigh);
+
+        string damageText = finalLow == finalHigh ? $"{finalLow}" : $"{finalLow}-{finalHigh}";
+
         string prefix = (chance < 100f) ? $"{chance}% Chance to " : "";
-        string description = $"{prefix}deal {baseDamage} {damageType} damage";
+        string description = $"{prefix}deal {damageText} {damageType} damage";
+
         if (isSplash) description += $" (AoE: {splashDamageMultiplier * 100}% damage in {splashRadius}m)";
+
         return description + ".";
     }
 }

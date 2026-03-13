@@ -18,26 +18,72 @@ public class UseAbilityAction : SequenceAction
 
     public override IEnumerator Execute(MonoBehaviour owner, GameObject caster, GameObject target)
     {
-        if (Random.value > triggerChance) yield break;
+        string abilityName = abilityToCall != null ? abilityToCall.abilityName : "NULL_ABILITY";
+        Debug.Log($"<color=cyan>[Sequence]</color> Attempting to execute action: <b>{abilityName}</b>");
+
+        if (Random.value > triggerChance)
+        {
+            Debug.Log($"<color=grey>[Sequence]</color> {abilityName} failed trigger chance. Skipping.");
+            yield break;
+        }
 
         var playerHolder = caster.GetComponentInChildren<PlayerAbilityHolder>();
         if (playerHolder != null)
         {
+            Debug.Log($"<color=cyan>[Sequence]</color> PHASE 1: Waiting for player to be ready for {abilityName}...");
+
+            // PHASE 1: Wait for the player to be ready
+            while (playerHolder != null && (playerHolder.IsCasting || playerHolder.IsAnimationLocked || (!overrideCooldown && abilityToCall != null && abilityToCall.triggersGlobalCooldown && playerHolder.IsOnGlobalCooldown())))
+            {
+                yield return null;
+            }
+            if (playerHolder == null) yield break;
+
+            Debug.Log($"<color=orange>[Sequence]</color> PHASE 2: Player is ready. Commanding cast for {abilityName} (OverrideCD: {overrideCooldown})");
+
+            // PHASE 2: Force the cast
             playerHolder.UseAbility(abilityToCall, target, overrideCooldown);
+
+            // PHASE 3: Wait a single frame
+            yield return null;
+
+            Debug.Log($"<color=orange>[Sequence]</color> PHASE 3: Cast commanded. Current State -> IsCasting: {playerHolder.IsCasting} | AnimLocked: {playerHolder.IsAnimationLocked} | GCD: {playerHolder.IsOnGlobalCooldown()}");
+
+            // PHASE 4: Wait for completion
+            while (playerHolder != null && (playerHolder.IsCasting || playerHolder.IsAnimationLocked || (!overrideCooldown && abilityToCall != null && abilityToCall.triggersGlobalCooldown && playerHolder.IsOnGlobalCooldown())))
+            {
+                yield return null;
+            }
+
+            Debug.Log($"<color=green>[Sequence]</color> PHASE 4: {abilityName} is COMPLETELY FINISHED. Releasing sequence to next action.");
             yield break;
         }
 
         var enemyHolder = caster.GetComponentInChildren<EnemyAbilityHolder>();
         if (enemyHolder != null)
         {
+            Debug.Log($"<color=cyan>[Sequence]</color> Executing {abilityName} on Enemy.");
             enemyHolder.UseAbility(abilityToCall, target, overrideCooldown);
+
+            if (abilityToCall != null)
+            {
+                yield return new WaitForSeconds(abilityToCall.castTime + abilityToCall.telegraphDuration + 0.1f);
+            }
+            Debug.Log($"<color=green>[Sequence]</color> Enemy finished {abilityName}.");
             yield break;
         }
 
         var domeHolder = caster.GetComponentInChildren<DomeAbilityHolder>();
         if (domeHolder != null)
         {
+            Debug.Log($"<color=cyan>[Sequence]</color> Executing {abilityName} on Dome.");
             domeHolder.UseAbility(abilityToCall, target, overrideCooldown);
+
+            if (abilityToCall != null)
+            {
+                yield return new WaitForSeconds(abilityToCall.castTime + abilityToCall.telegraphDuration + 0.1f);
+            }
+            Debug.Log($"<color=green>[Sequence]</color> Dome finished {abilityName}.");
             yield break;
         }
     }
@@ -57,6 +103,7 @@ public class MoveRelativeAction : SequenceAction
 
     public override IEnumerator Execute(MonoBehaviour owner, GameObject caster, GameObject target)
     {
+        Debug.Log($"<color=cyan>[Sequence]</color> Executing MoveRelativeAction...");
         if (!caster.TryGetComponent<NavMeshAgent>(out var agent)) yield break;
 
         if (agent.isOnNavMesh) agent.ResetPath();
@@ -72,6 +119,7 @@ public class MoveRelativeAction : SequenceAction
         }
         else
         {
+            Debug.LogWarning($"<color=red>[Sequence]</color> MoveRelativeAction failed: Target destination is off NavMesh.");
             yield break; // Invalid location
         }
 
@@ -108,6 +156,8 @@ public class MoveRelativeAction : SequenceAction
 
         agent.enabled = true;
         if (agent.isOnNavMesh) agent.Warp(caster.transform.position);
+
+        Debug.Log($"<color=green>[Sequence]</color> MoveRelativeAction COMPLETE.");
     }
 }
 
@@ -131,6 +181,7 @@ public class NavMeshMoveAction : SequenceAction
 
     public override IEnumerator Execute(MonoBehaviour owner, GameObject caster, GameObject target)
     {
+        Debug.Log($"<color=cyan>[Sequence]</color> Executing NavMeshMoveAction...");
         if (!caster.TryGetComponent<NavMeshAgent>(out var agent)) yield break;
         if (!agent.isOnNavMesh) yield break;
 
@@ -184,6 +235,8 @@ public class NavMeshMoveAction : SequenceAction
         // Restore original stats
         agent.speed = originalSpeed;
         agent.stoppingDistance = originalStoppingDist;
+
+        Debug.Log($"<color=green>[Sequence]</color> NavMeshMoveAction COMPLETE.");
     }
 }
 
@@ -194,9 +247,11 @@ public class WaitAction : SequenceAction
 
     public override IEnumerator Execute(MonoBehaviour owner, GameObject caster, GameObject target)
     {
+        Debug.Log($"<color=cyan>[Sequence]</color> Waiting for {duration} seconds...");
         if (duration > 0)
         {
             yield return new WaitForSeconds(duration);
         }
+        Debug.Log($"<color=green>[Sequence]</color> Wait COMPLETE.");
     }
 }

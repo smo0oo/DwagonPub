@@ -39,9 +39,21 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public float LastRetreatTime { get; set; } = -999f;
     public float RetreatCooldown { get; set; } = 10f;
 
+    // --- AAA FIX: EASY LEVEL TWEAKER ---
+    [Header("Instance Scaling (AAA)")]
+    [Tooltip("Set to 1 for base stats. Higher levels automatically scale HP, Damage, and Armor.")]
+    [Range(1, 100)] public int enemyLevel = 1;
+
+    public float CurrentDamageMultiplier { get; private set; } = 1.0f;
+    // -----------------------------------
+
     [Header("Enemy Stats & Behavior")]
     public EnemyClass enemyClass;
     public AIBehaviorProfile behaviorProfile;
+
+    [Header("Tactical Priority")]
+    [Tooltip("Identifies this enemy's role so your Party Members can prioritize who to attack first.")]
+    public TacticalPriority priorityRank = TacticalPriority.Melee;
 
     [Header("Boss / Giant Settings")]
     public bool isStationary = false;
@@ -118,12 +130,26 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     void Start()
     {
+        // --- AAA FIX: AUTOMATIC STAT SCALING ---
         if (enemyClass != null && Health != null)
         {
-            Health.UpdateMaxHealth(enemyClass.maxHealth);
+            // Level 1 = 1.0x scale. Every level above 1 compounds the stats.
+            float hpScale = Mathf.Pow(1.15f, enemyLevel - 1);   // +15% HP per level
+            float dmgScale = Mathf.Pow(1.10f, enemyLevel - 1);  // +10% Damage per level
+            float armorScale = (enemyLevel - 1) * 0.02f;        // Flat +2% Mitigation per level
+
+            int scaledMaxHealth = Mathf.RoundToInt(enemyClass.maxHealth * hpScale);
+
+            Health.UpdateMaxHealth(scaledMaxHealth);
             Health.SetToMaxHealth();
-            Health.damageReductionPercent = enemyClass.damageMitigation;
+
+            // Caps out at 85% mitigation so they never become literally invincible
+            Health.damageReductionPercent = Mathf.Clamp(enemyClass.damageMitigation + armorScale, 0f, 0.85f);
+
+            // Store the damage multiplier so DamageEffect.cs can use it when this enemy hits a player
+            CurrentDamageMultiplier = enemyClass.damageMultiplier * dmgScale;
         }
+        // ---------------------------------------
 
         StartPosition = transform.position;
         OriginalSpeed = NavAgent.speed;
@@ -313,9 +339,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public void PerformAttack(Ability ability)
     {
         if (StatusEffects != null && StatusEffects.IsStunned) return;
-
-        // Animation logic has been entirely shifted to EnemyAbilityHolder.cs
-        // to match the AAA player pipeline and ensure casting perfectly syncs with execution.
         AbilityHolder.UseAbility(ability, currentTarget?.gameObject ?? gameObject);
     }
 
@@ -418,7 +441,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private void HandleRotation()
     {
         if (NavAgent == null || isDead) return;
-        if (StatusEffects != null && StatusEffects.IsStunned) return; // Prevent rotation while stunned
+        if (StatusEffects != null && StatusEffects.IsStunned) return;
 
         Vector3 targetLookPos = Vector3.zero;
         bool shouldRotate = false;
@@ -726,7 +749,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
 
         if (Health != null) Health.isInvulnerable = false;
-        IsInActionSequence = false;
+        IsInActionSequence = true;
     }
 
     private void HandleCastStarted(string n, float d) { enemyHealthUI?.StartCast(n, d); SetAIStatus("Combat", "Casting"); if (NavAgent.isOnNavMesh && !isStationary) NavAgent.ResetPath(); }
