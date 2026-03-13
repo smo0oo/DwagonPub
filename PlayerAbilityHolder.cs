@@ -32,6 +32,8 @@ public class PlayerAbilityHolder : MonoBehaviour
     [Header("Animation Settings")]
     public string defaultAttackTrigger = "Attack";
     public string attackSpeedParam = "AttackSpeedMultiplier";
+    [Tooltip("The boolean parameter that sustains channeling animations.")]
+    public string channelingBoolParam = "IsChanneling";
 
     [Header("Targeting Settings")]
     public LayerMask targetLayers;
@@ -89,6 +91,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     private int attackStyleHash;
     private int castTriggerHash;
     private int forceIdleHash;
+    private int isChannelingHash;
     private bool hasCastTrigger = false;
     private bool isAnimationLockedInternal = false;
 
@@ -136,6 +139,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         attackStyleHash = Animator.StringToHash("AttackStyle");
         castTriggerHash = Animator.StringToHash("CastTrigger");
         forceIdleHash = Animator.StringToHash("ForceIdle");
+        isChannelingHash = Animator.StringToHash(channelingBoolParam);
 
         if (animator != null)
         {
@@ -175,7 +179,6 @@ public class PlayerAbilityHolder : MonoBehaviour
                 GameObject tar = queuedTarget;
                 ClearInputBuffer();
 
-                // Funnel it right back into the main entry point to perfectly re-evaluate Combos and Magnetism!
                 UseAbility(ab, tar, false);
             }
         }
@@ -185,26 +188,22 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     public void UseAbility(Ability ability, Vector3 targetPosition)
     {
-        // Direct positional commands skip magnetism and funnel straight to execution
         UseAbilityInternal(ability, null, targetPosition, false, ability, false);
     }
 
-    // --- MAIN ENTRY POINT ---
     public void UseAbility(Ability ability, GameObject target, bool bypassCooldown)
     {
         if (ability == null) return;
         Ability originalInput = ability;
         bool isComboAdvance = false;
 
-        // 1. AAA COMBO INTERCEPTION
         if (ability == lastBaseAbilityInput && Time.time <= comboWindowEndTime && currentComboNode != null && currentComboNode.nextComboLink != null)
         {
-            ability = currentComboNode.nextComboLink; // Swap the ability!
+            ability = currentComboNode.nextComboLink;
             if (currentComboNode.bypassGcdOnCombo) bypassCooldown = true;
             isComboAdvance = true;
         }
 
-        // 2. TARGETING & MAGNETISM
         Vector3 targetPosition;
         if (target != null)
         {
@@ -214,7 +213,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         {
             targetPosition = playerMovement.CurrentGroundTarget;
 
-            // Magnetism uses the newly intercepted ability's stats
             GameObject magneticTarget = FindMagneticTarget(ability, targetPosition);
             if (magneticTarget != null)
             {
@@ -231,7 +229,6 @@ public class PlayerAbilityHolder : MonoBehaviour
             targetPosition = transform.position + transform.forward * 5f;
         }
 
-        // 3. EXECUTION
         UseAbilityInternal(ability, target, targetPosition, bypassCooldown, originalInput, isComboAdvance);
     }
 
@@ -242,19 +239,16 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         if (IsCasting || (!bypassCooldown && ability.triggersGlobalCooldown && IsOnGlobalCooldown()) || isAnimationLockedInternal)
         {
-            // If we are busy, queue the original button press so the combo is perfectly evaluated when it dequeues
             QueueAbility(originalInput, target);
             return;
         }
 
-        // --- SUCCESSFUL CAST: UPDATE COMBO TRACKERS ---
         if (isComboAdvance)
         {
             currentComboNode = ability;
         }
         else
         {
-            // Start of a brand new chain
             lastBaseAbilityInput = originalInput;
             currentComboNode = ability;
         }
@@ -262,9 +256,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         float finalCastTime = ability.castTime;
         if (playerStats != null) finalCastTime /= playerStats.secondaryStats.attackSpeed;
 
-        // Window opens AFTER the cast and locks finish!
         comboWindowEndTime = Time.time + finalCastTime + ability.movementLockDuration + ability.comboWindow;
-        // ----------------------------------------------
 
         int styleIndex = ability.attackStyleIndex;
         if (ability.randomizeAttackStyle && ability.maxRandomVariants > 0)
@@ -413,7 +405,7 @@ public class PlayerAbilityHolder : MonoBehaviour
                 }
             }
 
-            ExecuteAbility(ability, target, position, bypassCooldown, (ability.abilityType != AbilityType.ChanneledBeam), styleIndex);
+            ExecuteAbility(ability, target, position, bypassCooldown, true, styleIndex);
         }
         finally
         {
@@ -727,8 +719,11 @@ public class PlayerAbilityHolder : MonoBehaviour
         {
             animator.ResetTrigger(attackHash);
             if (hasCastTrigger) animator.ResetTrigger(castTriggerHash);
-
             animator.SetInteger(attackStyleHash, -1);
+
+            // --- AAA FIX: Release the Channeling Lock ---
+            animator.SetBool(isChannelingHash, false);
+            // --------------------------------------------
 
             if (currentCastingAbility != null)
             {
@@ -736,6 +731,12 @@ public class PlayerAbilityHolder : MonoBehaviour
                     animator.ResetTrigger(currentCastingAbility.telegraphAnimationTrigger);
                 if (!string.IsNullOrEmpty(currentCastingAbility.overrideTriggerName))
                     animator.ResetTrigger(currentCastingAbility.overrideTriggerName);
+            }
+
+            if (currentExecutingAbility != null)
+            {
+                if (!string.IsNullOrEmpty(currentExecutingAbility.overrideTriggerName))
+                    animator.ResetTrigger(currentExecutingAbility.overrideTriggerName);
             }
 
             animator.SetTrigger(forceIdleHash);
@@ -752,11 +753,9 @@ public class PlayerAbilityHolder : MonoBehaviour
         currentCastingAbility = null;
         currentExecutingAbility = null;
 
-        // --- CLEAN UP THE COMBO CHAIN ON CANCEL ---
         lastBaseAbilityInput = null;
         currentComboNode = null;
         comboWindowEndTime = 0f;
-        // ------------------------------------------
 
         CleanupCastingVFX();
         ClearInputBuffer();
@@ -860,6 +859,10 @@ public class PlayerAbilityHolder : MonoBehaviour
             {
                 beam.Initialize(ability, this.gameObject, target, projectileSpawnPoint);
                 ActiveBeam = beam;
+
+                // --- AAA FIX: Engage the Channeling Lock ---
+                if (animator != null) animator.SetBool(isChannelingHash, true);
+                // ------------------------------------------
             }
         }
     }
@@ -886,8 +889,6 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     public bool GetCooldownStatus(Ability ability, out float remaining)
     {
-        // --- AAA FIX: HOTBAR UI SYNC ---
-        // If the combo is active, render the cooldown status of the NEXT link, not the base!
         if (ability == lastBaseAbilityInput && Time.time <= comboWindowEndTime && currentComboNode != null && currentComboNode.nextComboLink != null)
         {
             ability = currentComboNode.nextComboLink;
@@ -907,7 +908,6 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     public bool CanUseAbility(Ability ability, GameObject target)
     {
-        // --- AAA FIX: HOTBAR UI SYNC ---
         if (ability == lastBaseAbilityInput && Time.time <= comboWindowEndTime && currentComboNode != null && currentComboNode.nextComboLink != null)
         {
             ability = currentComboNode.nextComboLink;
