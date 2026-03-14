@@ -147,7 +147,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         if (myHealth != null && myHealth.isDowned)
         {
-            if (navMeshAgent != null && navMeshAgent.enabled && !navMeshAgent.isStopped)
+            if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh && !navMeshAgent.isStopped)
             {
                 navMeshAgent.isStopped = true;
                 navMeshAgent.ResetPath();
@@ -177,7 +177,8 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         if (abilityHolder != null && abilityHolder.IsActivityLocked())
         {
-            if (navMeshAgent != null && navMeshAgent.isOnNavMesh && navMeshAgent.hasPath) navMeshAgent.ResetPath();
+            if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh && navMeshAgent.hasPath)
+                navMeshAgent.ResetPath();
             RotateTowardsMouse(true);
             _perfWatch.Stop();
             LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
@@ -192,7 +193,8 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
             if (!wantsToMove)
             {
-                if (navMeshAgent != null && navMeshAgent.isOnNavMesh && navMeshAgent.hasPath) navMeshAgent.ResetPath();
+                if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh && navMeshAgent.hasPath)
+                    navMeshAgent.ResetPath();
                 RotateTowardsMouse(true);
                 _perfWatch.Stop();
                 LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
@@ -200,9 +202,19 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             }
         }
 
-        if (IsMovingToAttack && TargetObject == null && !navMeshAgent.pathPending)
+        if (IsMovingToAttack && TargetObject == null)
         {
-            if (navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance) IsMovingToAttack = false;
+            if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
+            {
+                if (!navMeshAgent.pathPending && navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance)
+                {
+                    IsMovingToAttack = false;
+                }
+            }
+            else
+            {
+                IsMovingToAttack = false;
+            }
         }
 
         if (isFacingLocked && (TargetObject == null || IsTargetDead(TargetObject))) isFacingLocked = false;
@@ -257,7 +269,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         HandleRotation();
         UpdateAnimator();
         UpdateHeadLookLogic();
-        ApplyGenericHeadLook(); // --- AAA FIX: TRIGGER THE GENERIC RIG BONE OVERRIDE
+        ApplyGenericHeadLook();
     }
 
     private void UpdateHeadLookLogic()
@@ -287,7 +299,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         CurrentHeadLookWeight = Mathf.Lerp(CurrentHeadLookWeight, targetWeight, Time.deltaTime * headWeightBlendSpeed);
     }
 
-    // --- AAA FIX: GENERIC RIG MANUAL IK OVERRIDE ---
     private void ApplyGenericHeadLook()
     {
         if (headBone == null || CurrentHeadLookWeight <= 0.01f) return;
@@ -295,25 +306,15 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         Vector3 lookDir = CurrentHeadLookPosition - headBone.position;
         if (lookDir == Vector3.zero) return;
 
-        // 1. Convert the look direction to be local to the character's body
         Vector3 localLookDir = transform.InverseTransformDirection(lookDir);
-
-        // 2. Clamp the direction so the head doesn't snap backwards (Exorcist effect)
         Vector3 clampedLocalDir = Vector3.RotateTowards(Vector3.forward, localLookDir, maxHeadLookAngle * Mathf.Deg2Rad, 0f);
-
-        // 3. Convert back to world space
         Vector3 finalLookDir = transform.TransformDirection(clampedLocalDir);
 
-        // 4. Calculate the base target rotation 
         Quaternion targetRotation = Quaternion.LookRotation(finalLookDir, transform.up);
-
-        // 5. Apply any bone orientation fixes (since generic rig bones point in arbitrary directions)
         targetRotation *= Quaternion.Euler(headLookOffsetRotation);
 
-        // 6. Smoothly blend between the bone's raw animation rotation and our calculated IK rotation
         headBone.rotation = Quaternion.Slerp(headBone.rotation, targetRotation, CurrentHeadLookWeight);
     }
-    // -----------------------------------------------
 
     private void HandleInteractionClick()
     {
@@ -375,8 +376,12 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
                 TargetObject = null;
 
                 isFacingLocked = false;
-                navMeshAgent.stoppingDistance = 0f;
-                navMeshAgent.SetDestination(hitPoint);
+
+                if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
+                {
+                    navMeshAgent.stoppingDistance = 0f;
+                    navMeshAgent.SetDestination(hitPoint);
+                }
                 clickLockoutFrames = 2;
             }
         }
@@ -400,8 +405,12 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
                 isFacingLocked = false;
                 IsMovingToAttack = false;
-                navMeshAgent.stoppingDistance = 0f;
-                navMeshAgent.SetDestination(hit.point);
+
+                if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
+                {
+                    navMeshAgent.stoppingDistance = 0f;
+                    navMeshAgent.SetDestination(hit.point);
+                }
             }
         }
     }
@@ -418,15 +427,18 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
     public void OnMovementModeChanged(MovementMode newMode)
     {
-        if (newMode == MovementMode.WASD)
+        if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
         {
-            if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
-            navMeshAgent.updatePosition = false;
-        }
-        else
-        {
-            navMeshAgent.Warp(transform.position);
-            navMeshAgent.updatePosition = true;
+            if (newMode == MovementMode.WASD)
+            {
+                if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
+                navMeshAgent.updatePosition = false;
+            }
+            else
+            {
+                navMeshAgent.Warp(transform.position);
+                navMeshAgent.updatePosition = true;
+            }
         }
     }
 
@@ -443,9 +455,76 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         if (PartyManager.instance != null) OnMovementModeChanged(PartyManager.instance.currentMovementMode);
     }
 
-    void OnDisable() { if (navMeshAgent != null && navMeshAgent.isOnNavMesh) { navMeshAgent.isStopped = true; navMeshAgent.ResetPath(); navMeshAgent.updatePosition = true; } StopAllCoroutines(); IsMovingToAttack = false; if (playerEquipment != null) playerEquipment.OnEquipmentChanged -= HandleEquipmentChanged; }
+    void OnDisable()
+    {
+        if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
+        {
+            navMeshAgent.isStopped = true;
+            navMeshAgent.ResetPath();
+            navMeshAgent.updatePosition = true;
+        }
+        StopAllCoroutines();
+        IsMovingToAttack = false;
+        if (playerEquipment != null) playerEquipment.OnEquipmentChanged -= HandleEquipmentChanged;
+    }
 
-    private void UpdateAnimator() { if (animator == null) return; Vector3 worldVelocity = (currentMode == MovementMode.WASD && wasdVelocity.sqrMagnitude > 0.01f) ? wasdVelocity : navMeshAgent.velocity; Vector3 localVelocity = transform.InverseTransformDirection(worldVelocity); float speed = navMeshAgent.speed; float vZ = localVelocity.z / speed; float vX = localVelocity.x / speed; if (Mathf.Abs(vZ) < 0.05f) vZ = 0f; if (Mathf.Abs(vX) < 0.05f) vX = 0f; animator.SetFloat(velocityZHash, vZ, animationDampTime, Time.deltaTime); animator.SetFloat(velocityXHash, vX, animationDampTime, Time.deltaTime); }
+    // --- AAA FIX: SAFE NAVMESH ACCESS FOR DRIFT PREVENTION ---
+    private void UpdateAnimator()
+    {
+        if (animator == null) return;
+
+        Vector3 worldVelocity = Vector3.zero;
+
+        // 1. Determine velocity source safely
+        if (currentMode == MovementMode.WASD && wasdVelocity.sqrMagnitude > 0.01f)
+        {
+            worldVelocity = wasdVelocity;
+        }
+        else if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
+        {
+            worldVelocity = navMeshAgent.velocity;
+
+            // Prevent micro-drifting when the agent has reached its destination safely
+            if (!navMeshAgent.pathPending && navMeshAgent.remainingDistance < 0.1f && !navMeshAgent.isStopped)
+            {
+                worldVelocity = Vector3.zero;
+            }
+        }
+
+        Vector3 localVelocity = transform.InverseTransformDirection(worldVelocity);
+        float speed = (navMeshAgent != null && navMeshAgent.speed > 0.1f) ? navMeshAgent.speed : 3.5f;
+
+        float vZ = localVelocity.z / speed;
+        float vX = localVelocity.x / speed;
+
+        // CLAMP: Strictly keep the inputs between -1 and 1 to prevent animation stretching
+        vZ = Mathf.Clamp(vZ, -1f, 1f);
+        vX = Mathf.Clamp(vX, -1f, 1f);
+
+        // DEADZONE: If we are barely moving, set target to 0
+        if (Mathf.Abs(vZ) < 0.05f) vZ = 0f;
+        if (Mathf.Abs(vX) < 0.05f) vX = 0f;
+
+        // HARD SNAP: Denormalized float prevention
+        if (vZ == 0f && Mathf.Abs(animator.GetFloat(velocityZHash)) < 0.05f)
+        {
+            animator.SetFloat(velocityZHash, 0f);
+        }
+        else
+        {
+            animator.SetFloat(velocityZHash, vZ, animationDampTime, Time.deltaTime);
+        }
+
+        if (vX == 0f && Mathf.Abs(animator.GetFloat(velocityXHash)) < 0.05f)
+        {
+            animator.SetFloat(velocityXHash, 0f);
+        }
+        else
+        {
+            animator.SetFloat(velocityXHash, vX, animationDampTime, Time.deltaTime);
+        }
+    }
+    // ---------------------------------------------------------
 
     public void TriggerDodgeRoll(Vector3 explicitDestination = default)
     {
@@ -500,7 +579,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             destination = startPosition;
         }
 
-        if (navMeshAgent.isOnNavMesh) navMeshAgent.enabled = false;
+        if (navMeshAgent != null && navMeshAgent.isOnNavMesh) navMeshAgent.enabled = false;
         if (mainCollider != null) mainCollider.enabled = false;
 
         float elapsedTime = 0f;
@@ -514,8 +593,12 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         transform.position = destination;
 
         if (mainCollider != null) mainCollider.enabled = true;
-        navMeshAgent.enabled = true;
-        if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(transform.position);
+
+        if (navMeshAgent != null)
+        {
+            navMeshAgent.enabled = true;
+            if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(transform.position);
+        }
 
         isDodging = false;
     }
@@ -527,7 +610,9 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         if ((horizontal != 0 || vertical != 0))
         {
-            if (navMeshAgent.hasPath) navMeshAgent.ResetPath();
+            if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh && navMeshAgent.hasPath)
+                navMeshAgent.ResetPath();
+
             IsMovingToAttack = false;
             isFacingLocked = false;
 
@@ -546,8 +631,13 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         Vector3 moveDirection = (cameraForward * vertical) + (cameraRight * horizontal);
         moveDirection.Normalize();
         wasdVelocity = moveDirection * wasdMoveSpeed;
-        navMeshAgent.Move(wasdVelocity * Time.deltaTime);
-        transform.position = navMeshAgent.nextPosition;
+
+        if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
+        {
+            navMeshAgent.Move(wasdVelocity * Time.deltaTime);
+            transform.position = navMeshAgent.nextPosition;
+        }
+
         if (Input.GetMouseButtonDown(0)) HandleInteractionClick();
     }
 
@@ -597,7 +687,10 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         Ability abilityToUse = queuedAbility != null ? queuedAbility : defaultAttackAbility;
         if (abilityToUse == null) { IsMovingToAttack = false; yield break; }
 
-        navMeshAgent.stoppingDistance = abilityToUse.range;
+        if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
+        {
+            navMeshAgent.stoppingDistance = abilityToUse.range;
+        }
 
         WaitForSeconds pathUpdateDelay = new WaitForSeconds(0.2f);
 
@@ -634,11 +727,19 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
                 break;
             }
 
-            navMeshAgent.SetDestination(TargetObject.transform.position);
+            if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
+            {
+                navMeshAgent.SetDestination(TargetObject.transform.position);
+            }
+
             yield return pathUpdateDelay;
         }
 
-        navMeshAgent.ResetPath();
+        if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
+        {
+            navMeshAgent.ResetPath();
+        }
+
         if (abilityHolder != null)
         {
             abilityHolder.UseAbility(abilityToUse, TargetObject);
@@ -707,8 +808,11 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             currentInteractionRange = 0.2f;
         }
 
-        navMeshAgent.stoppingDistance = currentInteractionRange;
-        navMeshAgent.SetDestination(destination);
+        if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
+        {
+            navMeshAgent.stoppingDistance = currentInteractionRange;
+            navMeshAgent.SetDestination(destination);
+        }
 
         yield return null;
 
@@ -716,25 +820,34 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         {
             if (targetObject == null)
             {
-                navMeshAgent.ResetPath();
+                if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath();
                 yield break;
             }
 
-            if (!navMeshAgent.pathPending)
+            if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh)
             {
-                if (navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance + 0.1f)
+                if (!navMeshAgent.pathPending)
                 {
-                    if (!navMeshAgent.hasPath || navMeshAgent.velocity.sqrMagnitude < 0.01f)
+                    if (navMeshAgent.remainingDistance <= navMeshAgent.stoppingDistance + 0.1f)
+                    {
+                        if (!navMeshAgent.hasPath || navMeshAgent.velocity.sqrMagnitude < 0.01f)
+                        {
+                            break;
+                        }
+                    }
+
+                    if (!navMeshAgent.hasPath && Vector3.Distance(transform.position, destination) <= currentInteractionRange + 0.5f)
                     {
                         break;
                     }
                 }
-
-                if (!navMeshAgent.hasPath && Vector3.Distance(transform.position, destination) <= currentInteractionRange + 0.5f)
-                {
-                    break;
-                }
             }
+            else
+            {
+                // Break out if agent disabled to avoid infinite hang
+                break;
+            }
+
             yield return null;
         }
 
@@ -742,7 +855,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         dir.y = 0;
         if (dir != Vector3.zero) transform.rotation = Quaternion.LookRotation(dir);
 
-        navMeshAgent.ResetPath();
+        if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath();
 
         if (targetObject.TryGetComponent<IInteractable>(out var interactable))
             interactable.Interact(this.gameObject);
@@ -789,9 +902,14 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     }
 
     private bool IsUIDragInProgress() { if (uiManagerObject != null && Variables.Object(uiManagerObject).IsDefined(dragInProgressVariableName)) return Variables.Object(uiManagerObject).Get<bool>(dragInProgressVariableName); return false; }
-    public void StopMovement() { if (navMeshAgent.hasPath) navMeshAgent.ResetPath(); }
+
+    public void StopMovement() { if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh && navMeshAgent.hasPath) navMeshAgent.ResetPath(); }
+
     public IEnumerator ResetGroundTargetingFlag() { while (Input.GetMouseButton(0)) yield return null; yield return null; IsGroundTargeting = false; }
-    public void ExecuteLeap(Vector3 destination, Action onLandAction) { if (movementHandler == null) return; StopAllCoroutines(); if (navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath(); IsMovingToAttack = false; TargetObject = null; queuedAbility = null; movementHandler.ExecuteLeap(destination, onLandAction); }
+
+    public void ExecuteLeap(Vector3 destination, Action onLandAction) { if (movementHandler == null) return; StopAllCoroutines(); if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath(); IsMovingToAttack = false; TargetObject = null; queuedAbility = null; movementHandler.ExecuteLeap(destination, onLandAction); }
+
     public void InitiateCharge(GameObject target, Ability chargeAbility) { if (movementHandler == null || !abilityHolder.CanUseAbility(chargeAbility, target)) return; abilityHolder.PayCostAndStartCooldown(chargeAbility); StopAllCoroutines(); movementHandler.ExecuteCharge(target, chargeAbility); }
-    public void ExecuteTeleport(Vector3 destination) { StopAllCoroutines(); if (navMeshAgent.isOnNavMesh) navMeshAgent.ResetPath(); IsMovingToAttack = false; TargetObject = null; queuedAbility = null; if (navMeshAgent.isOnNavMesh) navMeshAgent.Warp(destination); else transform.position = destination; }
+
+    public void ExecuteTeleport(Vector3 destination) { StopAllCoroutines(); if (navMeshAgent != null && navMeshAgent.isActiveAndEnabled && navMeshAgent.isOnNavMesh) { navMeshAgent.ResetPath(); navMeshAgent.Warp(destination); } else transform.position = destination; IsMovingToAttack = false; TargetObject = null; queuedAbility = null; }
 }

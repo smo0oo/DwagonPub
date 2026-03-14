@@ -50,18 +50,36 @@ public class EnemyAbilityHolder : MonoBehaviour
 
     private int attackTriggerHash;
     private int attackIndexHash;
+    private int castTriggerHash;
+    private bool hasCastTrigger = false;
+    private Ability currentCastingAbility;
 
     public bool IsOnGlobalCooldown() => Time.time < globalCooldownTimer;
 
     void Awake()
     {
         movementHandler = GetComponentInParent<IMovementHandler>();
+
         enemyAI = GetComponentInParent<EnemyAI>();
-        animator = GetComponentInParent<Animator>();
+        if (enemyAI == null) enemyAI = GetComponent<EnemyAI>();
+
+        // --- AAA FIX: SEARCH DOWNWARDS FOR THE ANIMATOR ---
+        animator = GetComponentInChildren<Animator>();
+        // --------------------------------------------------
+
         if (projectileSpawnPoint == null) projectileSpawnPoint = transform;
 
         attackTriggerHash = Animator.StringToHash("AttackTrigger");
         attackIndexHash = Animator.StringToHash("AttackIndex");
+        castTriggerHash = Animator.StringToHash("CastTrigger");
+
+        if (animator != null && animator.runtimeAnimatorController != null)
+        {
+            foreach (var param in animator.parameters)
+            {
+                if (param.name == "CastTrigger") { hasCastTrigger = true; break; }
+            }
+        }
     }
 
     void OnDisable() => CancelCast();
@@ -70,6 +88,23 @@ public class EnemyAbilityHolder : MonoBehaviour
     {
         if (activeCastCoroutine != null) { StopCoroutine(activeCastCoroutine); activeCastCoroutine = null; }
         IsCasting = false;
+
+        // Ensure stale triggers are cleared on cancel
+        if (animator != null)
+        {
+            animator.ResetTrigger(attackTriggerHash);
+            if (hasCastTrigger) animator.ResetTrigger(castTriggerHash);
+
+            if (currentCastingAbility != null)
+            {
+                if (!string.IsNullOrEmpty(currentCastingAbility.telegraphAnimationTrigger))
+                    animator.ResetTrigger(currentCastingAbility.telegraphAnimationTrigger);
+                if (!string.IsNullOrEmpty(currentCastingAbility.overrideTriggerName))
+                    animator.ResetTrigger(currentCastingAbility.overrideTriggerName);
+            }
+        }
+
+        currentCastingAbility = null;
         CleanupCastingVFX();
         CleanupTelegraph();
         if (ActiveBeam != null) { ActiveBeam.Interrupt(); ActiveBeam = null; }
@@ -106,6 +141,7 @@ public class EnemyAbilityHolder : MonoBehaviour
     private IEnumerator PerformCast(Ability ability, GameObject target, Vector3 position, bool bypassCooldown, int styleIndex)
     {
         IsCasting = true;
+        currentCastingAbility = ability;
         try
         {
             if ((ability.telegraphDuration > 0 || ability.castTime > 0) && animator != null)
@@ -114,6 +150,8 @@ public class EnemyAbilityHolder : MonoBehaviour
 
                 if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger))
                     animator.SetTrigger(ability.telegraphAnimationTrigger);
+                else if (hasCastTrigger)
+                    animator.SetTrigger(castTriggerHash);
             }
 
             if (ability.castingVFX != null)
@@ -173,9 +211,14 @@ public class EnemyAbilityHolder : MonoBehaviour
             CleanupCastingVFX();
             CleanupTelegraph();
 
-            if (ability.abilityType != AbilityType.TargetedMelee && ability.abilityType != AbilityType.DirectionalMelee)
+            // Prevent casting flags from clearing if we are chaining into a burst or melee delay
+            if (ability.abilityType != AbilityType.TargetedMelee &&
+                ability.abilityType != AbilityType.DirectionalMelee &&
+                ability.abilityType != AbilityType.TargetedProjectile &&
+                ability.abilityType != AbilityType.ForwardProjectile)
             {
                 IsCasting = false;
+                currentCastingAbility = null;
                 activeCastCoroutine = null;
                 OnCastFinished?.Invoke();
             }
@@ -232,7 +275,12 @@ public class EnemyAbilityHolder : MonoBehaviour
                 activeCastCoroutine = StartCoroutine(PerformSmartMeleeAttack(ability));
                 break;
             case AbilityType.TargetedProjectile:
-            case AbilityType.ForwardProjectile: HandleProjectile(ability, target, position); break;
+            case AbilityType.ForwardProjectile:
+                // --- AAA FIX: ENEMY PROJECTILE BURST & SHOTGUN SUPPORT ---
+                if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
+                activeCastCoroutine = StartCoroutine(ExecuteProjectileBurst(ability, target, position));
+                break;
+            // ---------------------------------------------------------
             case AbilityType.GroundAOE: HandleGroundAOE(ability, position); break;
             case AbilityType.GroundPlacement: HandleGroundPlacement(ability, position); break;
             case AbilityType.Self: HandleSelfCast(ability); break;
@@ -272,6 +320,7 @@ public class EnemyAbilityHolder : MonoBehaviour
     private IEnumerator PerformSmartMeleeAttack(Ability ability)
     {
         IsCasting = true;
+        currentCastingAbility = ability;
         float windup = (ability.hitboxOpenDelay > 0) ? ability.hitboxOpenDelay : 0.1f;
         yield return new WaitForSeconds(windup);
 
@@ -284,8 +333,103 @@ public class EnemyAbilityHolder : MonoBehaviour
         yield return new WaitForSeconds(remainingDuration);
 
         IsCasting = false;
+        currentCastingAbility = null;
         activeCastCoroutine = null;
         OnCastFinished?.Invoke();
+    }
+
+    private IEnumerator ExecuteProjectileBurst(Ability ability, GameObject target, Vector3 initialTargetPos)
+    {
+        IsCasting = true;
+        currentCastingAbility = ability;
+
+        if (ability.projectileSpawnDelay > 0)
+            yield return new WaitForSeconds(ability.projectileSpawnDelay);
+
+        int count = Mathf.Max(1, ability.projectileCount);
+
+        for (int i = 0; i < count; i++)
+        {
+            if (enemyAI != null && enemyAI.Health.currentHealth <= 0) break;
+
+            Vector3 currentTargetPos = initialTargetPos;
+            if (target != null) currentTargetPos = target.transform.position;
+
+            FireSingleProjectile(ability, target, currentTargetPos, i, count);
+
+            if (ability.burstDelay > 0 && i < count - 1)
+                yield return new WaitForSeconds(ability.burstDelay);
+        }
+
+        IsCasting = false;
+        currentCastingAbility = null;
+        activeCastCoroutine = null;
+        OnCastFinished?.Invoke();
+    }
+
+    private void FireSingleProjectile(Ability ability, GameObject target, Vector3 targetPos, int index, int totalCount)
+    {
+        GameObject prefab = ability.enemyProjectilePrefab ?? ability.playerProjectilePrefab;
+        if (prefab == null) return;
+        Transform spawnT = projectileSpawnPoint ?? transform;
+        Vector3 spawnPos = spawnT.position;
+        if (spawnT == transform) spawnPos += Vector3.up * 1.5f;
+        Quaternion spawnRot = spawnT.rotation;
+
+        if (target != null)
+        {
+            Vector3 tPos = target.transform.position;
+            if (target.GetComponent<Collider>() != null) tPos = target.GetComponent<Collider>().bounds.center;
+            Vector3 dir = tPos - spawnPos; dir.y = 0;
+            if (dir.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(dir);
+        }
+        else
+        {
+            Vector3 dir = targetPos - spawnPos; dir.y = 0;
+            if (dir.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(dir);
+        }
+
+        if (ability.spreadAngle > 0 && totalCount > 1)
+        {
+            float angleOffset = 0f;
+            if (ability.burstDelay == 0)
+            {
+                float step = ability.spreadAngle / (totalCount - 1);
+                float startAngle = -ability.spreadAngle / 2f;
+                angleOffset = startAngle + (step * index);
+            }
+            else
+            {
+                angleOffset = UnityEngine.Random.Range(-ability.spreadAngle / 2f, ability.spreadAngle / 2f);
+            }
+            spawnRot *= Quaternion.Euler(0, angleOffset, 0);
+        }
+
+        GameObject pGO = ObjectPooler.instance.Get(prefab, spawnPos, spawnRot);
+        if (pGO == null) return;
+
+        int hostileLayer = LayerMask.NameToLayer("HostileRanged");
+        if (hostileLayer != -1) pGO.layer = hostileLayer;
+
+        if (pGO.TryGetComponent<Projectile>(out var p))
+        {
+            CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
+            int layer = myRoot != null ? myRoot.gameObject.layer : gameObject.layer;
+
+            // Initialize WITHOUT overwriting collision masks so it hits walls!
+            p.Initialize(ability, gameObject, layer);
+        }
+
+        Collider pCol = pGO.GetComponent<Collider>();
+        if (pCol != null)
+        {
+            foreach (Collider c in GetComponentsInParent<Collider>())
+            {
+                Physics.IgnoreCollision(pCol, c);
+            }
+        }
+
+        pGO.SetActive(true);
     }
 
     private void CheckHit(Ability ability)
@@ -389,55 +533,6 @@ public class EnemyAbilityHolder : MonoBehaviour
     public bool CanUseAbility(Ability ability, GameObject target) { if (ability == null || IsCasting) return false; if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false; if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false; return true; }
     private void HandleChanneledBeam(Ability ability, GameObject target) { GameObject prefab = ability.enemyProjectilePrefab ?? ability.playerProjectilePrefab; if (prefab != null) { GameObject beam = Instantiate(prefab, transform.position, transform.rotation); if (beam.TryGetComponent<ChanneledBeamController>(out var b)) { b.Initialize(ability, gameObject, target); ActiveBeam = b; } } }
     private void HandleSelfCast(Ability ability) { foreach (var effect in ability.friendlyEffects) effect.Apply(gameObject, gameObject); }
-
-    private void HandleProjectile(Ability ability, GameObject target, Vector3 fallbackPosition)
-    {
-        GameObject prefab = ability.enemyProjectilePrefab ?? ability.playerProjectilePrefab;
-        if (prefab == null) return;
-        Transform spawnT = projectileSpawnPoint ?? transform;
-        Vector3 spawnPos = spawnT.position;
-        if (spawnT == transform) spawnPos += Vector3.up * 1.5f;
-        Quaternion spawnRot = spawnT.rotation;
-
-        if (target != null)
-        {
-            Vector3 tPos = target.transform.position;
-            if (target.GetComponent<Collider>() != null) tPos = target.GetComponent<Collider>().bounds.center;
-            Vector3 dir = tPos - spawnPos; dir.y = 0;
-            if (dir.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(dir);
-        }
-        else
-        {
-            Vector3 dir = fallbackPosition - spawnPos; dir.y = 0;
-            if (dir.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(dir);
-        }
-
-        GameObject pGO = ObjectPooler.instance.Get(prefab, spawnPos, spawnRot);
-        if (pGO == null) return;
-
-        int hostileLayer = LayerMask.NameToLayer("HostileRanged");
-        if (hostileLayer != -1) pGO.layer = hostileLayer;
-
-        if (pGO.TryGetComponent<Projectile>(out var p))
-        {
-            CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
-            int layer = myRoot != null ? myRoot.gameObject.layer : gameObject.layer;
-
-            // Initialize WITHOUT overwriting collision masks so it hits walls!
-            p.Initialize(ability, gameObject, layer);
-        }
-
-        Collider pCol = pGO.GetComponent<Collider>();
-        if (pCol != null)
-        {
-            foreach (Collider c in GetComponentsInParent<Collider>())
-            {
-                Physics.IgnoreCollision(pCol, c);
-            }
-        }
-
-        pGO.SetActive(true);
-    }
 
     private Transform GetAnchorTransform(VFXAnchor anchor)
     {
