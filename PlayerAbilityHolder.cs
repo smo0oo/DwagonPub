@@ -70,6 +70,11 @@ public class PlayerAbilityHolder : MonoBehaviour
     private Ability currentCastingAbility;
     private Ability currentExecutingAbility;
 
+    // --- AAA ANIMATION EVENT STATE TRACKING ---
+    private int currentStyleIndex = 0;
+    private Quaternion currentAimRotation = Quaternion.identity;
+    // ------------------------------------------
+
     private Dictionary<Ability, float> cooldowns = new Dictionary<Ability, float>();
     private PlayerStats playerStats;
     private IMovementHandler movementHandler;
@@ -439,21 +444,29 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         currentExecutingAbility = ability;
 
+        // --- AAA FIX: Capture state for Animation Events ---
+        currentStyleIndex = styleIndex;
+
         if (ActiveBeam != null) ActiveBeam.Interrupt();
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
-        if (ability.castSound != null) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
 
-        Quaternion aimRotation = transform.rotation;
+        // --- AAA FIX: Only play audio automatically if we are NOT waiting for an animation event ---
+        if (ability.castSound != null && ability.hitboxOpenDelay > 0) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
+
+        currentAimRotation = transform.rotation;
         if (ability.abilityType == AbilityType.ForwardProjectile || ability.abilityType == AbilityType.TargetedProjectile)
         {
             Vector3 fireDir = (position - GetAnchorTransform(ability.castVFXAnchor).position).normalized;
-            if (fireDir != Vector3.zero) aimRotation = Quaternion.LookRotation(fireDir);
+            if (fireDir != Vector3.zero) currentAimRotation = Quaternion.LookRotation(fireDir);
         }
 
-        if (ability.castVFX != null)
+        bool hasVFXOverride = ability.styleVFXOverrides != null && ability.styleVFXOverrides.Count > styleIndex && ability.styleVFXOverrides[styleIndex].overrideVFX != null;
+
+        // --- AAA FIX: Hybrid VFX Delay ---
+        if (ability.castVFX != null || hasVFXOverride)
         {
-            if (ability.castVFXDelay > 0) StartCoroutine(SpawnVFXWithDelay(ability, aimRotation));
-            else SpawnCastVFX(ability, aimRotation);
+            if (ability.castVFXDelay > 0) StartCoroutine(SpawnVFXWithDelay(ability, currentAimRotation, styleIndex));
+            // If delay is exactly 0, we trust the AE_SpawnCastVFX animation event to fire it!
         }
 
         if (ability.screenShakeIntensity > 0)
@@ -487,7 +500,18 @@ public class PlayerAbilityHolder : MonoBehaviour
             case AbilityType.TargetedMelee:
             case AbilityType.DirectionalMelee:
                 if (activeMeleeCoroutine != null) { StopCoroutine(activeMeleeCoroutine); meleeHitbox.gameObject.SetActive(false); }
-                activeMeleeCoroutine = StartCoroutine(PerformMeleeAttackWithTimers(ability));
+
+                // --- AAA FIX: Hybrid Hitbox Timing ---
+                meleeHitbox.Setup(ability, this.gameObject);
+                BoxCollider collider = meleeHitbox.GetComponent<BoxCollider>();
+                collider.size = ability.attackBoxSize;
+                collider.center = ability.attackBoxCenter;
+
+                if (ability.hitboxOpenDelay > 0)
+                {
+                    activeMeleeCoroutine = StartCoroutine(PerformMeleeAttackWithTimers(ability));
+                }
+                // If OpenDelay is exactly 0, we trust AE_OpenHitbox and AE_CloseHitbox to handle it!
                 break;
             case AbilityType.GroundAOE: HandleGroundAOE(ability, position); break;
             case AbilityType.Self: HandleSelfCast(ability); break;
@@ -498,6 +522,37 @@ public class PlayerAbilityHolder : MonoBehaviour
             case AbilityType.Teleport: if (movementHandler != null) movementHandler.ExecuteTeleport(position); break;
         }
     }
+
+    // --- NEW PUBLIC METHODS CALLED BY THE ANIMATION EVENT RECEIVER ---
+    public void OnAnimationEventOpenHitbox()
+    {
+        if (currentExecutingAbility == null) return;
+        if (currentExecutingAbility.abilityType == AbilityType.TargetedMelee || currentExecutingAbility.abilityType == AbilityType.DirectionalMelee)
+        {
+            if (meleeHitbox != null) meleeHitbox.gameObject.SetActive(true);
+        }
+    }
+
+    public void OnAnimationEventCloseHitbox()
+    {
+        if (meleeHitbox != null) meleeHitbox.gameObject.SetActive(false);
+        activeMeleeCoroutine = null;
+    }
+
+    public void OnAnimationEventSpawnVFX()
+    {
+        if (currentExecutingAbility == null) return;
+        SpawnCastVFX(currentExecutingAbility, currentAimRotation, currentStyleIndex);
+    }
+
+    public void OnAnimationEventPlayAudio()
+    {
+        if (currentExecutingAbility != null && currentExecutingAbility.castSound != null)
+        {
+            AudioSource.PlayClipAtPoint(currentExecutingAbility.castSound, transform.position);
+        }
+    }
+    // -----------------------------------------------------------------
 
     private IEnumerator ExecuteProjectileBurst(Ability ability, GameObject target, Vector3 initialTargetPos)
     {
@@ -606,18 +661,35 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    private void SpawnCastVFX(Ability ability, Quaternion? overrideRotation = null)
+    private void SpawnCastVFX(Ability ability, Quaternion? overrideRotation = null, int styleIndex = 0)
     {
         Transform anchor = GetAnchorTransform(ability.castVFXAnchor);
         Quaternion spawnRot = overrideRotation ?? anchor.rotation;
 
-        GameObject vfxInstance = ObjectPooler.instance.Get(ability.castVFX, anchor.position, spawnRot);
+        GameObject vfxPrefab = ability.castVFX;
+        Vector3 posOffset = ability.castVFXPositionOffset;
+        Vector3 rotOffset = ability.castVFXRotationOffset;
+
+        if (ability.styleVFXOverrides != null && styleIndex < ability.styleVFXOverrides.Count)
+        {
+            var styleOverride = ability.styleVFXOverrides[styleIndex];
+            if (styleOverride.overrideVFX != null)
+            {
+                vfxPrefab = styleOverride.overrideVFX;
+                posOffset = styleOverride.positionOffset;
+                rotOffset = styleOverride.rotationOffset;
+            }
+        }
+
+        if (vfxPrefab == null) return;
+
+        GameObject vfxInstance = ObjectPooler.instance.Get(vfxPrefab, anchor.position, spawnRot);
         if (vfxInstance != null)
         {
             vfxInstance.transform.SetParent(anchor, false);
-            vfxInstance.transform.localScale = ability.castVFX.transform.localScale;
-            vfxInstance.transform.localPosition = ability.castVFXPositionOffset;
-            vfxInstance.transform.localRotation = Quaternion.Euler(ability.castVFXRotationOffset);
+            vfxInstance.transform.localScale = vfxPrefab.transform.localScale;
+            vfxInstance.transform.localPosition = posOffset;
+            vfxInstance.transform.localRotation = Quaternion.Euler(rotOffset);
             vfxInstance.SetActive(true);
 
             if (!ability.attachCastVFX) vfxInstance.transform.SetParent(null);
@@ -654,11 +726,11 @@ public class PlayerAbilityHolder : MonoBehaviour
         return transform;
     }
 
-    private IEnumerator SpawnVFXWithDelay(Ability ability, Quaternion aimRot)
+    private IEnumerator SpawnVFXWithDelay(Ability ability, Quaternion aimRot, int styleIndex)
     {
         float speedMultiplier = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
         yield return new WaitForSeconds(ability.castVFXDelay / speedMultiplier);
-        SpawnCastVFX(ability, aimRot);
+        SpawnCastVFX(ability, aimRot, styleIndex);
     }
 
     private IEnumerator HandleMovementLock(float baseDuration)
@@ -672,16 +744,16 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     private IEnumerator PerformMeleeAttackWithTimers(Ability ability)
     {
-        meleeHitbox.Setup(ability, this.gameObject);
-        BoxCollider collider = meleeHitbox.GetComponent<BoxCollider>();
-        collider.size = ability.attackBoxSize;
-        collider.center = ability.attackBoxCenter;
+        // --- AAA FIX: Stripped redundant setup (already handled in ExecuteAbility) ---
         float speedMultiplier = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
         yield return new WaitForSeconds(ability.hitboxOpenDelay / speedMultiplier);
-        meleeHitbox.gameObject.SetActive(true);
+
+        if (meleeHitbox != null) meleeHitbox.gameObject.SetActive(true);
+
         float duration = ability.hitboxCloseDelay - ability.hitboxOpenDelay;
         if (duration > 0) yield return new WaitForSeconds(duration / speedMultiplier);
-        meleeHitbox.gameObject.SetActive(false);
+
+        if (meleeHitbox != null) meleeHitbox.gameObject.SetActive(false);
         activeMeleeCoroutine = null;
     }
 
@@ -692,13 +764,14 @@ public class PlayerAbilityHolder : MonoBehaviour
             float animSpeed = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
             animator.SetFloat(attackSpeedHash, animSpeed);
 
+            animator.SetInteger(attackStyleHash, styleIndex);
+
             if (!string.IsNullOrEmpty(ability.overrideTriggerName))
             {
                 animator.SetTrigger(ability.overrideTriggerName);
             }
             else
             {
-                animator.SetInteger(attackStyleHash, styleIndex);
                 animator.SetTrigger(attackHash);
             }
         }
@@ -721,9 +794,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             if (hasCastTrigger) animator.ResetTrigger(castTriggerHash);
             animator.SetInteger(attackStyleHash, -1);
 
-            // --- AAA FIX: Release the Channeling Lock ---
             animator.SetBool(isChannelingHash, false);
-            // --------------------------------------------
 
             if (currentCastingAbility != null)
             {
@@ -860,9 +931,7 @@ public class PlayerAbilityHolder : MonoBehaviour
                 beam.Initialize(ability, this.gameObject, target, projectileSpawnPoint);
                 ActiveBeam = beam;
 
-                // --- AAA FIX: Engage the Channeling Lock ---
                 if (animator != null) animator.SetBool(isChannelingHash, true);
-                // ------------------------------------------
             }
         }
     }

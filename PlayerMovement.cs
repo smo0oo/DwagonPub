@@ -453,6 +453,12 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         if (playerEquipment != null) playerEquipment.OnEquipmentChanged += HandleEquipmentChanged;
         if (PartyManager.instance != null) OnMovementModeChanged(PartyManager.instance.currentMovementMode);
+
+        // --- AAA FIX: GUARANTEE RESYNC ON WAKE ---
+        // If the player was disabled when items were equipped (party swapping, loading),
+        // this strictly resyncs their animator the exact frame they wake up.
+        UpdateWeaponTypeParameter();
+        // -----------------------------------------
     }
 
     void OnDisable()
@@ -468,14 +474,12 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         if (playerEquipment != null) playerEquipment.OnEquipmentChanged -= HandleEquipmentChanged;
     }
 
-    // --- AAA FIX: SAFE NAVMESH ACCESS FOR DRIFT PREVENTION ---
     private void UpdateAnimator()
     {
         if (animator == null) return;
 
         Vector3 worldVelocity = Vector3.zero;
 
-        // 1. Determine velocity source safely
         if (currentMode == MovementMode.WASD && wasdVelocity.sqrMagnitude > 0.01f)
         {
             worldVelocity = wasdVelocity;
@@ -484,7 +488,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         {
             worldVelocity = navMeshAgent.velocity;
 
-            // Prevent micro-drifting when the agent has reached its destination safely
             if (!navMeshAgent.pathPending && navMeshAgent.remainingDistance < 0.1f && !navMeshAgent.isStopped)
             {
                 worldVelocity = Vector3.zero;
@@ -497,15 +500,12 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         float vZ = localVelocity.z / speed;
         float vX = localVelocity.x / speed;
 
-        // CLAMP: Strictly keep the inputs between -1 and 1 to prevent animation stretching
         vZ = Mathf.Clamp(vZ, -1f, 1f);
         vX = Mathf.Clamp(vX, -1f, 1f);
 
-        // DEADZONE: If we are barely moving, set target to 0
         if (Mathf.Abs(vZ) < 0.05f) vZ = 0f;
         if (Mathf.Abs(vX) < 0.05f) vX = 0f;
 
-        // HARD SNAP: Denormalized float prevention
         if (vZ == 0f && Mathf.Abs(animator.GetFloat(velocityZHash)) < 0.05f)
         {
             animator.SetFloat(velocityZHash, 0f);
@@ -524,7 +524,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             animator.SetFloat(velocityXHash, vX, animationDampTime, Time.deltaTime);
         }
     }
-    // ---------------------------------------------------------
 
     public void TriggerDodgeRoll(Vector3 explicitDestination = default)
     {
@@ -869,7 +868,8 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
     public void UpdateWeaponTypeParameter()
     {
-        if (animator == null || playerEquipment == null) return;
+        // --- AAA FIX: Safety check to prevent silent drops on inactive animators ---
+        if (animator == null || !animator.isActiveAndEnabled || playerEquipment == null) return;
 
         int weaponType = 0;
         int weaponCategory = 0;

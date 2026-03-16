@@ -9,7 +9,7 @@ public class AbilityEditor : Editor
     private bool showCore = true;
     private bool showTargeting = true;
     private bool showCasting = false;
-    private bool showCombo = false; // New Header State
+    private bool showCombo = false; 
     private bool showPayload = false;
     private bool showVisuals = false;
     private bool showEffects = true;
@@ -18,9 +18,13 @@ public class AbilityEditor : Editor
     private readonly string[] coreProps = { "abilityName", "displayName", "rank", "icon", "description", "cooldown", "manaCost" };
     private readonly string[] targetingProps = { "abilityType", "locksPlayerActivity", "requiresWeaponType", "requiredWeaponCategories", "range", "canHitCaster" };
     private readonly string[] castingProps = { "showCastBar", "canMoveWhileCasting", "castTime", "triggersGlobalCooldown", "telegraphDuration", "telegraphAnimationTrigger", "attackStyleIndex", "overrideTriggerName", "movementLockDuration", "randomizeAttackStyle", "maxRandomVariants" };
-    private readonly string[] comboProps = { "nextComboLink", "comboWindow", "bypassGcdOnCombo" }; // New AAA Array
+    private readonly string[] comboProps = { "nextComboLink", "comboWindow", "bypassGcdOnCombo" }; 
     private readonly string[] payloadProps = { "playerProjectilePrefab", "enemyProjectilePrefab", "projectileSpawnDelay", "projectileCount", "burstDelay", "spreadAngle", "attackBoxSize", "attackBoxCenter", "hitboxOpenDelay", "hitboxCloseDelay", "aoeRadius", "placementPrefab", "manaDrain", "tickRate" };
-    private readonly string[] visualProps = { "targetingReticleOverride", "castingVFX", "castingVFXAnchor", "castingVFXPositionOffset", "castingVFXRotationOffset", "attachCastingVFX", "castVFX", "castVFXAnchor", "castVFXPositionOffset", "castVFXRotationOffset", "attachCastVFX", "castVFXDelay", "hitVFX", "hitVFXPositionOffset", "hitVFXRotationOffset", "windupSound", "castSound", "impactSound", "screenShakeIntensity", "screenShakeDuration" };
+    
+    // --- AAA FIX: ADDED "styleVFXOverrides" TO THE VISUAL PROPS ARRAY ---
+    private readonly string[] visualProps = { "targetingReticleOverride", "castingVFX", "castingVFXAnchor", "castingVFXPositionOffset", "castingVFXRotationOffset", "attachCastingVFX", "castVFX", "castVFXAnchor", "castVFXPositionOffset", "castVFXRotationOffset", "attachCastVFX", "castVFXDelay", "styleVFXOverrides", "hitVFX", "hitVFXPositionOffset", "hitVFXRotationOffset", "windupSound", "castSound", "impactSound", "screenShakeIntensity", "screenShakeDuration" };
+    // --------------------------------------------------------------------
+
     private readonly string[] effectProps = { "effects", "onCastEffects", "friendlyEffects", "hostileEffects" };
     private readonly string[] aiProps = { "priority", "isAreaEffect", "usageType", "enemyTelegraphPrefab", "isMajorTacticalThreat" };
 
@@ -32,7 +36,7 @@ public class AbilityEditor : Editor
         DrawCategory("Core Identity", ref showCore, coreProps);
         DrawCategory("Targeting & Requirements", ref showTargeting, targetingProps);
         DrawCategory("Casting & Animation", ref showCasting, castingProps);
-        DrawCategory("Manual Combo System", ref showCombo, comboProps); // Draws the new Combo block
+        DrawCategory("Manual Combo System", ref showCombo, comboProps); 
         DrawCategory("Payload Mechanics", ref showPayload, payloadProps);
         DrawCategory("Visuals, Audio & Game Feel", ref showVisuals, visualProps);
         DrawCategory("Effect Pipelines", ref showEffects, effectProps);

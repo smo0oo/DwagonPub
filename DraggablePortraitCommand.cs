@@ -20,21 +20,14 @@ public class DraggablePortraitCommand : MonoBehaviour, IBeginDragHandler, IDragH
 
     public void OnBeginDrag(PointerEventData eventData)
     {
-        // 1. Scene Rule Check: If switching is disabled (Town/WorldMap), block all dragging.
-        if (PartyManager.instance != null && !PartyManager.instance.playerSwitchingEnabled)
-        {
-            return;
-        }
+        // 1. Scene Rule Check
+        if (PartyManager.instance != null && !PartyManager.instance.playerSwitchingEnabled) return;
 
-        // 2. Active Player Check: Do not drag the portrait of the currently controlled player.
-        if (representedPlayer == InventoryUIController.instance.ActivePlayer) return;
+        // --- AAA FIX: Safely ask PartyManager instead of InventoryUIController ---
+        if (PartyManager.instance != null && representedPlayer == PartyManager.instance.ActivePlayer) return;
 
-        // --- NEW: Inactive Member Check ---
-        // 3. Activity Check: If the character is disabled (e.g., Player 0 in a Dungeon), block dragging.
-        if (representedPlayer != null && !representedPlayer.activeInHierarchy)
-        {
-            return;
-        }
+        // 3. Activity Check
+        if (representedPlayer != null && !representedPlayer.activeInHierarchy) return;
 
         if (uiManager != null && representedPlayer != null)
         {
@@ -60,7 +53,7 @@ public class DraggablePortraitCommand : MonoBehaviour, IBeginDragHandler, IDragH
             return;
         }
 
-        if (representedPlayer == InventoryUIController.instance.ActivePlayer ||
+        if ((PartyManager.instance != null && representedPlayer == PartyManager.instance.ActivePlayer) ||
             (representedPlayer != null && !representedPlayer.activeInHierarchy))
         {
             CancelDrag();
@@ -76,18 +69,38 @@ public class DraggablePortraitCommand : MonoBehaviour, IBeginDragHandler, IDragH
             return;
         }
 
-        Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
-        if (Physics.Raycast(ray, out RaycastHit hit, 200f))
+        // --- AAA FIX: Use EventSystem Pointer Data (Input System Agnostic) ---
+        Ray ray = Camera.main.ScreenPointToRay(eventData.position);
+
+        // --- AAA FIX: RaycastAll pierces invisible triggers to find the actual targets ---
+        RaycastHit[] hits = Physics.RaycastAll(ray, 200f);
+        System.Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+        bool commandIssued = false;
+
+        // Pass 1: Prioritize Enemies (In case an enemy is standing on terrain, attack them instead of moving)
+        foreach (var hit in hits)
         {
             GameObject hitObject = hit.collider.gameObject;
-
             if (hitObject.layer == LayerMask.NameToLayer("Enemy"))
             {
                 partyAIManager.IssueCommandAttackSingle(representedPlayer, hitObject);
+                commandIssued = true;
+                break;
             }
-            else if (hitObject.layer == LayerMask.NameToLayer("Terrain"))
+        }
+
+        // Pass 2: If we didn't hit an enemy, find the ground terrain to move to
+        if (!commandIssued)
+        {
+            foreach (var hit in hits)
             {
-                partyAIManager.IssueCommandMoveToSingle(representedPlayer, hit.point);
+                GameObject hitObject = hit.collider.gameObject;
+                if (hitObject.layer == LayerMask.NameToLayer("Terrain"))
+                {
+                    partyAIManager.IssueCommandMoveToSingle(representedPlayer, hit.point);
+                    break;
+                }
             }
         }
 
