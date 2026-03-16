@@ -31,4 +31,10 @@ public class AnimationEventReceiver : MonoBehaviour
     {
         if (abilityHolder != null) abilityHolder.OnAnimationEventPlayAudio();
     }
+
+    // --- AAA FIX: Added the frame-perfect projectile trigger ---
+    public void AE_FireSingleProjectile()
+    {
+        if (abilityHolder != null) abilityHolder.OnAnimationEventFireProjectile();
+    }
 }

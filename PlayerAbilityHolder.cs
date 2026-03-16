@@ -40,9 +40,7 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     [Header("Aim Magnetism (AAA)")]
     public bool enableAimMagnetism = true;
-    [Tooltip("The max cone angle (in degrees) an enemy can be from your cursor to be magnetically targeted.")]
     public float magnetismAngle = 60f;
-    [Tooltip("Bonus range added to the ability's base range to catch enemies just out of reach.")]
     public float magnetismBonusRange = 2f;
 
     [Header("Global Cooldown")]
@@ -62,7 +60,6 @@ public class PlayerAbilityHolder : MonoBehaviour
     private Ability lastBaseAbilityInput;
     private Ability currentComboNode;
     private float comboWindowEndTime = 0f;
-    // -----------------------------------
 
     public ChanneledBeamController ActiveBeam { get; private set; }
     public bool IsCasting { get; private set; } = false;
@@ -73,6 +70,11 @@ public class PlayerAbilityHolder : MonoBehaviour
     // --- AAA ANIMATION EVENT STATE TRACKING ---
     private int currentStyleIndex = 0;
     private Quaternion currentAimRotation = Quaternion.identity;
+
+    // Projectile AE Caching
+    private GameObject currentExecutingTarget;
+    private Vector3 currentExecutingPosition;
+    private int currentProjectileIndex = 0;
     // ------------------------------------------
 
     private Dictionary<Ability, float> cooldowns = new Dictionary<Ability, float>();
@@ -160,41 +162,26 @@ public class PlayerAbilityHolder : MonoBehaviour
         defaultProjectileSpawnPoint = projectileSpawnPoint;
     }
 
-    public void SetDynamicProjectileSpawnPoint(Transform newSpawnPoint)
-    {
-        projectileSpawnPoint = newSpawnPoint;
-    }
-
-    public void ClearDynamicProjectileSpawnPoint()
-    {
-        projectileSpawnPoint = defaultProjectileSpawnPoint;
-    }
+    public void SetDynamicProjectileSpawnPoint(Transform newSpawnPoint) { projectileSpawnPoint = newSpawnPoint; }
+    public void ClearDynamicProjectileSpawnPoint() { projectileSpawnPoint = defaultProjectileSpawnPoint; }
 
     void Update()
     {
         if (hasQueuedAction)
         {
-            if (Time.time > bufferExpirationTime)
-            {
-                ClearInputBuffer();
-            }
+            if (Time.time > bufferExpirationTime) ClearInputBuffer();
             else if (!IsCasting && !isAnimationLockedInternal && !IsOnGlobalCooldown())
             {
                 Ability ab = queuedAbility;
                 GameObject tar = queuedTarget;
                 ClearInputBuffer();
-
                 UseAbility(ab, tar, false);
             }
         }
     }
 
     public void UseAbility(Ability ability, GameObject target) => UseAbility(ability, target, false);
-
-    public void UseAbility(Ability ability, Vector3 targetPosition)
-    {
-        UseAbilityInternal(ability, null, targetPosition, false, ability, false);
-    }
+    public void UseAbility(Ability ability, Vector3 targetPosition) => UseAbilityInternal(ability, null, targetPosition, false, ability, false);
 
     public void UseAbility(Ability ability, GameObject target, bool bypassCooldown)
     {
@@ -210,29 +197,21 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
 
         Vector3 targetPosition;
-        if (target != null)
-        {
-            targetPosition = target.transform.position;
-        }
+        if (target != null) targetPosition = target.transform.position;
         else if (playerMovement != null)
         {
             targetPosition = playerMovement.CurrentGroundTarget;
-
             GameObject magneticTarget = FindMagneticTarget(ability, targetPosition);
             if (magneticTarget != null)
             {
                 target = magneticTarget;
                 targetPosition = magneticTarget.transform.position;
-
                 Vector3 snapDir = (targetPosition - transform.position).normalized;
                 snapDir.y = 0;
                 if (snapDir != Vector3.zero) transform.rotation = Quaternion.LookRotation(snapDir);
             }
         }
-        else
-        {
-            targetPosition = transform.position + transform.forward * 5f;
-        }
+        else targetPosition = transform.position + transform.forward * 5f;
 
         UseAbilityInternal(ability, target, targetPosition, bypassCooldown, originalInput, isComboAdvance);
     }
@@ -248,10 +227,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             return;
         }
 
-        if (isComboAdvance)
-        {
-            currentComboNode = ability;
-        }
+        if (isComboAdvance) currentComboNode = ability;
         else
         {
             lastBaseAbilityInput = originalInput;
@@ -283,18 +259,10 @@ public class PlayerAbilityHolder : MonoBehaviour
     private GameObject FindMagneticTarget(Ability ability, Vector3 cursorPosition)
     {
         if (!enableAimMagnetism || ability == null) return null;
-
-        if (ability.abilityType != AbilityType.TargetedMelee &&
-            ability.abilityType != AbilityType.DirectionalMelee &&
-            ability.abilityType != AbilityType.ForwardProjectile &&
-            ability.abilityType != AbilityType.TargetedProjectile)
-        {
-            return null;
-        }
+        if (ability.abilityType != AbilityType.TargetedMelee && ability.abilityType != AbilityType.DirectionalMelee && ability.abilityType != AbilityType.ForwardProjectile && ability.abilityType != AbilityType.TargetedProjectile) return null;
 
         float searchRadius = ability.range + magnetismBonusRange;
         Collider[] hits = Physics.OverlapSphere(transform.position, searchRadius, targetLayers);
-
         GameObject bestTarget = null;
         float bestScore = float.MaxValue;
 
@@ -307,48 +275,29 @@ public class PlayerAbilityHolder : MonoBehaviour
             GameObject potentialTarget = null;
             CharacterRoot root = col.GetComponentInParent<CharacterRoot>();
             if (root != null) potentialTarget = root.gameObject;
-            else
-            {
-                Health hp = col.GetComponentInParent<Health>();
-                if (hp != null) potentialTarget = hp.gameObject;
-            }
+            else { Health hp = col.GetComponentInParent<Health>(); if (hp != null) potentialTarget = hp.gameObject; }
 
             if (potentialTarget == null || potentialTarget == this.gameObject) continue;
-
             Health targetHp = potentialTarget.GetComponent<Health>();
             if (targetHp != null && targetHp.isDowned) continue;
-
             CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
             if (myRoot != null && root != null && myRoot.gameObject.layer == root.gameObject.layer) continue;
 
             Vector3 dirToTarget = (potentialTarget.transform.position - transform.position).normalized;
             dirToTarget.y = 0;
-
             float angle = Vector3.Angle(cursorDir, dirToTarget);
 
             if (angle <= magnetismAngle / 2f)
             {
                 float distance = Vector3.Distance(transform.position, potentialTarget.transform.position);
                 float score = distance + (angle * 0.1f);
-
-                if (score < bestScore)
-                {
-                    bestScore = score;
-                    bestTarget = potentialTarget;
-                }
+                if (score < bestScore) { bestScore = score; bestTarget = potentialTarget; }
             }
         }
         return bestTarget;
     }
 
-    private void QueueAbility(Ability ability, GameObject target)
-    {
-        queuedAbility = ability;
-        queuedTarget = target;
-        bufferExpirationTime = Time.time + inputBufferDuration;
-        hasQueuedAction = true;
-    }
-
+    private void QueueAbility(Ability ability, GameObject target) { queuedAbility = ability; queuedTarget = target; bufferExpirationTime = Time.time + inputBufferDuration; hasQueuedAction = true; }
     private void ClearInputBuffer() { hasQueuedAction = false; queuedAbility = null; queuedTarget = null; }
 
     private IEnumerator PerformCast(Ability ability, GameObject target, Vector3 position, float castTime, bool bypassCooldown, int styleIndex)
@@ -361,7 +310,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (animator != null)
         {
             animator.SetInteger(attackStyleHash, styleIndex);
-
             if (!string.IsNullOrEmpty(ability.telegraphAnimationTrigger)) animator.SetTrigger(ability.telegraphAnimationTrigger);
             else if (hasCastTrigger) animator.SetTrigger(castTriggerHash);
         }
@@ -384,7 +332,6 @@ public class PlayerAbilityHolder : MonoBehaviour
                 currentCastingVFXInstance.transform.localRotation = Quaternion.Euler(ability.castingVFXRotationOffset);
                 currentCastingVFXInstance.transform.localScale = ability.castingVFX.transform.localScale;
                 currentCastingVFXInstance.SetActive(true);
-
                 if (!ability.attachCastingVFX) currentCastingVFXInstance.transform.SetParent(null);
             }
         }
@@ -399,15 +346,8 @@ public class PlayerAbilityHolder : MonoBehaviour
 
             if (target == null && playerMovement != null)
             {
-                bool isFixedGroundTarget = ability.abilityType == AbilityType.GroundPlacement ||
-                                           ability.abilityType == AbilityType.GroundAOE ||
-                                           ability.abilityType == AbilityType.Leap ||
-                                           ability.abilityType == AbilityType.Teleport;
-
-                if (!isFixedGroundTarget)
-                {
-                    position = playerMovement.CurrentGroundTarget;
-                }
+                bool isFixedGroundTarget = ability.abilityType == AbilityType.GroundPlacement || ability.abilityType == AbilityType.GroundAOE || ability.abilityType == AbilityType.Leap || ability.abilityType == AbilityType.Teleport;
+                if (!isFixedGroundTarget) position = playerMovement.CurrentGroundTarget;
             }
 
             ExecuteAbility(ability, target, position, bypassCooldown, true, styleIndex);
@@ -443,14 +383,16 @@ public class PlayerAbilityHolder : MonoBehaviour
     private void ExecuteAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown = false, bool triggerAnimation = true, int styleIndex = 0)
     {
         currentExecutingAbility = ability;
-
-        // --- AAA FIX: Capture state for Animation Events ---
         currentStyleIndex = styleIndex;
+
+        // --- Caching values for the Animation Events to read later! ---
+        currentExecutingTarget = target;
+        currentExecutingPosition = position;
+        currentProjectileIndex = 0;
+        // --------------------------------------------------------------
 
         if (ActiveBeam != null) ActiveBeam.Interrupt();
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
-
-        // --- AAA FIX: Only play audio automatically if we are NOT waiting for an animation event ---
         if (ability.castSound != null && ability.hitboxOpenDelay > 0) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
 
         currentAimRotation = transform.rotation;
@@ -461,26 +403,16 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
 
         bool hasVFXOverride = ability.styleVFXOverrides != null && ability.styleVFXOverrides.Count > styleIndex && ability.styleVFXOverrides[styleIndex].overrideVFX != null;
-
-        // --- AAA FIX: Hybrid VFX Delay ---
         if (ability.castVFX != null || hasVFXOverride)
         {
             if (ability.castVFXDelay > 0) StartCoroutine(SpawnVFXWithDelay(ability, currentAimRotation, styleIndex));
-            // If delay is exactly 0, we trust the AE_SpawnCastVFX animation event to fire it!
         }
 
-        if (ability.screenShakeIntensity > 0)
-            OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration, transform.position);
+        if (ability.screenShakeIntensity > 0) OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration, transform.position);
 
         OnPlayerAbilityUsed?.Invoke(this, ability, target, position);
 
-        if (ability.onCastEffects != null)
-        {
-            foreach (var effect in ability.onCastEffects)
-            {
-                effect.Apply(gameObject, target);
-            }
-        }
+        if (ability.onCastEffects != null) { foreach (var effect in ability.onCastEffects) effect.Apply(gameObject, target); }
 
         if (triggerAnimation) TriggerAttackAnimation(ability, styleIndex);
 
@@ -494,25 +426,26 @@ public class PlayerAbilityHolder : MonoBehaviour
         {
             case AbilityType.TargetedProjectile:
             case AbilityType.ForwardProjectile:
-                if (activeProjectileCoroutine != null) StopCoroutine(activeProjectileCoroutine);
-                activeProjectileCoroutine = StartCoroutine(ExecuteProjectileBurst(ability, target, position));
+                // --- AAA FIX: Hybrid Projectile Trigger ---
+                if (ability.useCoroutineForProjectiles)
+                {
+                    if (activeProjectileCoroutine != null) StopCoroutine(activeProjectileCoroutine);
+                    activeProjectileCoroutine = StartCoroutine(ExecuteProjectileBurst(ability, target, position));
+                }
+                // If FALSE, it skips the coroutine and relies entirely on AE_FireSingleProjectile!
                 break;
+
             case AbilityType.TargetedMelee:
             case AbilityType.DirectionalMelee:
                 if (activeMeleeCoroutine != null) { StopCoroutine(activeMeleeCoroutine); meleeHitbox.gameObject.SetActive(false); }
-
-                // --- AAA FIX: Hybrid Hitbox Timing ---
                 meleeHitbox.Setup(ability, this.gameObject);
                 BoxCollider collider = meleeHitbox.GetComponent<BoxCollider>();
                 collider.size = ability.attackBoxSize;
                 collider.center = ability.attackBoxCenter;
 
-                if (ability.hitboxOpenDelay > 0)
-                {
-                    activeMeleeCoroutine = StartCoroutine(PerformMeleeAttackWithTimers(ability));
-                }
-                // If OpenDelay is exactly 0, we trust AE_OpenHitbox and AE_CloseHitbox to handle it!
+                if (ability.hitboxOpenDelay > 0) activeMeleeCoroutine = StartCoroutine(PerformMeleeAttackWithTimers(ability));
                 break;
+
             case AbilityType.GroundAOE: HandleGroundAOE(ability, position); break;
             case AbilityType.Self: HandleSelfCast(ability); break;
             case AbilityType.GroundPlacement: HandleGroundPlacement(ability, position); break;
@@ -523,7 +456,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    // --- NEW PUBLIC METHODS CALLED BY THE ANIMATION EVENT RECEIVER ---
+    // --- PUBLIC METHODS CALLED BY THE ANIMATION EVENT RECEIVER ---
     public void OnAnimationEventOpenHitbox()
     {
         if (currentExecutingAbility == null) return;
@@ -552,17 +485,30 @@ public class PlayerAbilityHolder : MonoBehaviour
             AudioSource.PlayClipAtPoint(currentExecutingAbility.castSound, transform.position);
         }
     }
-    // -----------------------------------------------------------------
+
+    public void OnAnimationEventFireProjectile()
+    {
+        if (currentExecutingAbility == null) return;
+
+        int totalCount = Mathf.Max(1, currentExecutingAbility.projectileCount);
+
+        // Dynamically update position if tracking a ground point
+        Vector3 targetPos = currentExecutingPosition;
+        if (currentExecutingTarget == null && playerMovement != null) targetPos = playerMovement.CurrentGroundTarget;
+
+        FireSingleProjectile(currentExecutingAbility, currentExecutingTarget, targetPos, currentProjectileIndex, totalCount);
+
+        // Increment so the next Animation Event on this timeline fans out cleanly!
+        currentProjectileIndex++;
+    }
+    // -------------------------------------------------------------
 
     private IEnumerator ExecuteProjectileBurst(Ability ability, GameObject target, Vector3 initialTargetPos)
     {
         float speedMultiplier = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
-
-        if (ability.projectileSpawnDelay > 0)
-            yield return new WaitForSeconds(ability.projectileSpawnDelay / speedMultiplier);
+        if (ability.projectileSpawnDelay > 0) yield return new WaitForSeconds(ability.projectileSpawnDelay / speedMultiplier);
 
         int count = Mathf.Max(1, ability.projectileCount);
-
         for (int i = 0; i < count; i++)
         {
             Health h = GetComponentInParent<Health>();
@@ -572,7 +518,6 @@ public class PlayerAbilityHolder : MonoBehaviour
             if (target == null && playerMovement != null)
             {
                 currentTargetPos = playerMovement.CurrentGroundTarget;
-
                 GameObject magneticTarget = FindMagneticTarget(ability, currentTargetPos);
                 if (magneticTarget != null)
                 {
@@ -585,11 +530,8 @@ public class PlayerAbilityHolder : MonoBehaviour
             }
 
             FireSingleProjectile(ability, target, currentTargetPos, i, count);
-
-            if (ability.burstDelay > 0 && i < count - 1)
-                yield return new WaitForSeconds(ability.burstDelay / speedMultiplier);
+            if (ability.burstDelay > 0 && i < count - 1) yield return new WaitForSeconds(ability.burstDelay / speedMultiplier);
         }
-
         activeProjectileCoroutine = null;
     }
 
@@ -612,9 +554,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         else
         {
             float playerFloorY = transform.position.y;
-            if (UnityEngine.AI.NavMesh.SamplePosition(transform.position, out UnityEngine.AI.NavMeshHit myHit, 2f, UnityEngine.AI.NavMesh.AllAreas))
-                playerFloorY = myHit.position.y;
-
+            if (UnityEngine.AI.NavMesh.SamplePosition(transform.position, out UnityEngine.AI.NavMeshHit myHit, 2f, UnityEngine.AI.NavMesh.AllAreas)) playerFloorY = myHit.position.y;
             float spawnHeightAboveFloor = spawnPos.y - playerFloorY;
             Vector3 adjustedTargetPos = new Vector3(targetPos.x, targetPos.y + spawnHeightAboveFloor, targetPos.z);
 
@@ -625,7 +565,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (ability.spreadAngle > 0 && totalCount > 1)
         {
             float angleOffset = 0f;
-            if (ability.burstDelay == 0)
+            if (ability.burstDelay == 0 && ability.useCoroutineForProjectiles)
             {
                 float step = ability.spreadAngle / (totalCount - 1);
                 float startAngle = -ability.spreadAngle / 2f;
@@ -633,6 +573,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             }
             else
             {
+                // If triggered sequentially (burst delay OR via sequential Animation Events)
                 angleOffset = UnityEngine.Random.Range(-ability.spreadAngle / 2f, ability.spreadAngle / 2f);
             }
             spawnRot *= Quaternion.Euler(0, angleOffset, 0);
@@ -652,11 +593,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             }
 
             Collider pCol = projectileGO.GetComponent<Collider>();
-            if (pCol != null)
-            {
-                foreach (Collider c in GetComponentsInParent<Collider>()) Physics.IgnoreCollision(pCol, c);
-            }
-
+            if (pCol != null) { foreach (Collider c in GetComponentsInParent<Collider>()) Physics.IgnoreCollision(pCol, c); }
             projectileGO.SetActive(true);
         }
     }
@@ -665,7 +602,6 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         Transform anchor = GetAnchorTransform(ability.castVFXAnchor);
         Quaternion spawnRot = overrideRotation ?? anchor.rotation;
-
         GameObject vfxPrefab = ability.castVFX;
         Vector3 posOffset = ability.castVFXPositionOffset;
         Vector3 rotOffset = ability.castVFXRotationOffset;
@@ -691,7 +627,6 @@ public class PlayerAbilityHolder : MonoBehaviour
             vfxInstance.transform.localPosition = posOffset;
             vfxInstance.transform.localRotation = Quaternion.Euler(rotOffset);
             vfxInstance.SetActive(true);
-
             if (!ability.attachCastVFX) vfxInstance.transform.SetParent(null);
         }
     }
@@ -700,28 +635,12 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         switch (anchor)
         {
-            case VFXAnchor.LeftHand:
-                if (leftHandAnchor != null) return leftHandAnchor;
-                if (animator != null) { var bone = animator.GetBoneTransform(HumanBodyBones.LeftHand); if (bone != null) return bone; }
-                break;
-            case VFXAnchor.RightHand:
-                if (rightHandAnchor != null) return rightHandAnchor;
-                if (animator != null) { var bone = animator.GetBoneTransform(HumanBodyBones.RightHand); if (bone != null) return bone; }
-                break;
-            case VFXAnchor.Head:
-                if (headAnchor != null) return headAnchor;
-                if (animator != null) { var bone = animator.GetBoneTransform(HumanBodyBones.Head); if (bone != null) return bone; }
-                break;
-            case VFXAnchor.Feet:
-                if (feetAnchor != null) return feetAnchor;
-                return transform;
-            case VFXAnchor.Center:
-                if (centerAnchor != null) return centerAnchor;
-                if (animator != null) { var bone = animator.GetBoneTransform(HumanBodyBones.Chest); if (bone != null) return bone; }
-                return transform;
-            case VFXAnchor.ProjectileSpawnPoint:
-            default:
-                return projectileSpawnPoint != null ? projectileSpawnPoint : transform;
+            case VFXAnchor.LeftHand: if (leftHandAnchor != null) return leftHandAnchor; if (animator != null) { var bone = animator.GetBoneTransform(HumanBodyBones.LeftHand); if (bone != null) return bone; } break;
+            case VFXAnchor.RightHand: if (rightHandAnchor != null) return rightHandAnchor; if (animator != null) { var bone = animator.GetBoneTransform(HumanBodyBones.RightHand); if (bone != null) return bone; } break;
+            case VFXAnchor.Head: if (headAnchor != null) return headAnchor; if (animator != null) { var bone = animator.GetBoneTransform(HumanBodyBones.Head); if (bone != null) return bone; } break;
+            case VFXAnchor.Feet: if (feetAnchor != null) return feetAnchor; return transform;
+            case VFXAnchor.Center: if (centerAnchor != null) return centerAnchor; if (animator != null) { var bone = animator.GetBoneTransform(HumanBodyBones.Chest); if (bone != null) return bone; } return transform;
+            case VFXAnchor.ProjectileSpawnPoint: default: return projectileSpawnPoint != null ? projectileSpawnPoint : transform;
         }
         return transform;
     }
@@ -744,15 +663,11 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     private IEnumerator PerformMeleeAttackWithTimers(Ability ability)
     {
-        // --- AAA FIX: Stripped redundant setup (already handled in ExecuteAbility) ---
         float speedMultiplier = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
         yield return new WaitForSeconds(ability.hitboxOpenDelay / speedMultiplier);
-
         if (meleeHitbox != null) meleeHitbox.gameObject.SetActive(true);
-
         float duration = ability.hitboxCloseDelay - ability.hitboxOpenDelay;
         if (duration > 0) yield return new WaitForSeconds(duration / speedMultiplier);
-
         if (meleeHitbox != null) meleeHitbox.gameObject.SetActive(false);
         activeMeleeCoroutine = null;
     }
@@ -763,17 +678,9 @@ public class PlayerAbilityHolder : MonoBehaviour
         {
             float animSpeed = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
             animator.SetFloat(attackSpeedHash, animSpeed);
-
             animator.SetInteger(attackStyleHash, styleIndex);
-
-            if (!string.IsNullOrEmpty(ability.overrideTriggerName))
-            {
-                animator.SetTrigger(ability.overrideTriggerName);
-            }
-            else
-            {
-                animator.SetTrigger(attackHash);
-            }
+            if (!string.IsNullOrEmpty(ability.overrideTriggerName)) animator.SetTrigger(ability.overrideTriggerName);
+            else animator.SetTrigger(attackHash);
         }
     }
 
@@ -793,23 +700,15 @@ public class PlayerAbilityHolder : MonoBehaviour
             animator.ResetTrigger(attackHash);
             if (hasCastTrigger) animator.ResetTrigger(castTriggerHash);
             animator.SetInteger(attackStyleHash, -1);
-
             animator.SetBool(isChannelingHash, false);
 
             if (currentCastingAbility != null)
             {
-                if (!string.IsNullOrEmpty(currentCastingAbility.telegraphAnimationTrigger))
-                    animator.ResetTrigger(currentCastingAbility.telegraphAnimationTrigger);
-                if (!string.IsNullOrEmpty(currentCastingAbility.overrideTriggerName))
-                    animator.ResetTrigger(currentCastingAbility.overrideTriggerName);
+                if (!string.IsNullOrEmpty(currentCastingAbility.telegraphAnimationTrigger)) animator.ResetTrigger(currentCastingAbility.telegraphAnimationTrigger);
+                if (!string.IsNullOrEmpty(currentCastingAbility.overrideTriggerName)) animator.ResetTrigger(currentCastingAbility.overrideTriggerName);
             }
 
-            if (currentExecutingAbility != null)
-            {
-                if (!string.IsNullOrEmpty(currentExecutingAbility.overrideTriggerName))
-                    animator.ResetTrigger(currentExecutingAbility.overrideTriggerName);
-            }
-
+            if (currentExecutingAbility != null && !string.IsNullOrEmpty(currentExecutingAbility.overrideTriggerName)) animator.ResetTrigger(currentExecutingAbility.overrideTriggerName);
             animator.SetTrigger(forceIdleHash);
         }
 
@@ -817,13 +716,11 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (activeProjectileCoroutine != null) { StopCoroutine(activeProjectileCoroutine); activeProjectileCoroutine = null; }
         if (activeLockCoroutine != null) { StopCoroutine(activeLockCoroutine); activeLockCoroutine = null; }
         if (activeMeleeCoroutine != null) { StopCoroutine(activeMeleeCoroutine); activeMeleeCoroutine = null; if (meleeHitbox != null) meleeHitbox.gameObject.SetActive(false); }
-
         if (audioSource != null) { audioSource.Stop(); audioSource.clip = null; }
 
         IsCasting = false;
         currentCastingAbility = null;
         currentExecutingAbility = null;
-
         lastBaseAbilityInput = null;
         currentComboNode = null;
         comboWindowEndTime = 0f;
@@ -865,11 +762,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             Vector3 spawnPos = position + ability.hitVFXPositionOffset;
             Quaternion spawnRot = Quaternion.Euler(ability.hitVFXRotationOffset);
             GameObject vfx = ObjectPooler.instance.Get(ability.hitVFX, spawnPos, spawnRot);
-            if (vfx != null)
-            {
-                vfx.transform.localScale = ability.hitVFX.transform.localScale;
-                vfx.SetActive(true);
-            }
+            if (vfx != null) { vfx.transform.localScale = ability.hitVFX.transform.localScale; vfx.SetActive(true); }
         }
 
         if (ability.impactSound != null) AudioSource.PlayClipAtPoint(ability.impactSound, position);
@@ -885,28 +778,15 @@ public class PlayerAbilityHolder : MonoBehaviour
             CharacterRoot hitCharacter = col.GetComponentInParent<CharacterRoot>();
 
             if (hitCharacter != null) finalTarget = hitCharacter.gameObject;
-            else
-            {
-                Health hitHealth = col.GetComponentInParent<Health>();
-                if (hitHealth != null) finalTarget = hitHealth.gameObject;
-            }
+            else { Health hitHealth = col.GetComponentInParent<Health>(); if (hitHealth != null) finalTarget = hitHealth.gameObject; }
 
             if (finalTarget != null && !hitTargets.Contains(finalTarget))
             {
                 hitTargets.Add(finalTarget);
                 bool isAlly = false;
-
-                if (hitCharacter != null)
-                {
-                    CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
-                    if (myRoot != null) isAlly = myRoot.gameObject.layer == hitCharacter.gameObject.layer;
-                }
-
+                if (hitCharacter != null) { CharacterRoot myRoot = GetComponentInParent<CharacterRoot>(); if (myRoot != null) isAlly = myRoot.gameObject.layer == hitCharacter.gameObject.layer; }
                 List<IAbilityEffect> effectsToApply = isAlly ? ability.friendlyEffects : ability.hostileEffects;
-                foreach (var effect in effectsToApply)
-                {
-                    effect.Apply(gameObject, finalTarget);
-                }
+                foreach (var effect in effectsToApply) effect.Apply(gameObject, finalTarget);
             }
         }
     }
@@ -917,7 +797,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (casterRoot == null) return;
         if (ability.impactSound != null) AudioSource.PlayClipAtPoint(ability.impactSound, transform.position);
         if (ability.aoeRadius <= 0) { foreach (var effect in ability.friendlyEffects) effect.Apply(casterRoot.gameObject, casterRoot.gameObject); }
-        else { HandleGroundAOE(ability, transform.position); }
+        else HandleGroundAOE(ability, transform.position);
     }
 
     private void HandleChanneledBeam(Ability ability, GameObject target)
@@ -930,7 +810,6 @@ public class PlayerAbilityHolder : MonoBehaviour
             {
                 beam.Initialize(ability, this.gameObject, target, projectileSpawnPoint);
                 ActiveBeam = beam;
-
                 if (animator != null) animator.SetBool(isChannelingHash, true);
             }
         }
@@ -945,43 +824,22 @@ public class PlayerAbilityHolder : MonoBehaviour
             CharacterRoot casterRoot = GetComponentInParent<CharacterRoot>();
             if (casterRoot != null) caster = casterRoot.gameObject;
 
-            if (placedObject.TryGetComponent<AreaBombardmentController>(out var bombardment))
-            {
-                bombardment.Initialize(caster, ability);
-            }
-            else if (placedObject.TryGetComponent<PlaceableTrap>(out var trap))
-            {
-                trap.owner = caster;
-            }
+            if (placedObject.TryGetComponent<AreaBombardmentController>(out var bombardment)) bombardment.Initialize(caster, ability);
+            else if (placedObject.TryGetComponent<PlaceableTrap>(out var trap)) trap.owner = caster;
         }
     }
 
     public bool GetCooldownStatus(Ability ability, out float remaining)
     {
-        if (ability == lastBaseAbilityInput && Time.time <= comboWindowEndTime && currentComboNode != null && currentComboNode.nextComboLink != null)
-        {
-            ability = currentComboNode.nextComboLink;
-        }
-
+        if (ability == lastBaseAbilityInput && Time.time <= comboWindowEndTime && currentComboNode != null && currentComboNode.nextComboLink != null) ability = currentComboNode.nextComboLink;
         remaining = 0f;
-        if (cooldowns.TryGetValue(ability, out float endTime))
-        {
-            if (Time.time < endTime)
-            {
-                remaining = endTime - Time.time;
-                return true;
-            }
-        }
+        if (cooldowns.TryGetValue(ability, out float endTime)) { if (Time.time < endTime) { remaining = endTime - Time.time; return true; } }
         return false;
     }
 
     public bool CanUseAbility(Ability ability, GameObject target)
     {
-        if (ability == lastBaseAbilityInput && Time.time <= comboWindowEndTime && currentComboNode != null && currentComboNode.nextComboLink != null)
-        {
-            ability = currentComboNode.nextComboLink;
-        }
-
+        if (ability == lastBaseAbilityInput && Time.time <= comboWindowEndTime && currentComboNode != null && currentComboNode.nextComboLink != null) ability = currentComboNode.nextComboLink;
         if (ability == null || IsCasting) return false;
         if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false;
         if (ability.requiresWeaponType && !IsCorrectWeaponEquipped(ability.requiredWeaponCategories)) return false;

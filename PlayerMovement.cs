@@ -19,16 +19,23 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     public MovementMode currentMode => (PartyManager.instance != null) ? PartyManager.instance.currentMovementMode : MovementMode.PointAndClick;
     public float wasdMoveSpeed;
 
+    [Header("Idle Animation (AAA)")]
+    [Tooltip("How many seconds of standing perfectly still before triggering a long idle.")]
+    public float timeBeforeLongIdle = 4.0f;
+    [Tooltip("How many random long idle animations do you have in the Animator?")]
+    public int maxLongIdleVariants = 3;
+
+    private float currentIdleTimer = 0f;
+    private bool isLongIdling = false;
+
     [Header("PoE2 Rotation Style")]
     public float bodyTurnThreshold = 15f;
     public float bodyTurnSpeed = 5f;
 
     [Space(10)]
-    [Header("Generic Rig Head Look (AAA)")]
+    [Header("Generic Rig Head Look")]
     public Transform headBone;
-    [Tooltip("If the head bone's blue arrow (Z) isn't pointing forward out of the face, tweak this to align it (e.g., 0, 90, -90).")]
     public Vector3 headLookOffsetRotation = Vector3.zero;
-    [Tooltip("Max angle the head can turn before it stops tracking.")]
     public float maxHeadLookAngle = 70f;
 
     [Range(0, 1)] public float headLookWeight = 1f;
@@ -96,6 +103,11 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     private int weaponCategoryHash;
     private int dodgeHash;
 
+    // --- NEW IDLE HASHES ---
+    private int isLongIdleHash;
+    private int longIdleIndexHash;
+    // -----------------------
+
     private int frameSkipCounter = 0;
 
     void Awake()
@@ -127,6 +139,9 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         weaponTypeHash = Animator.StringToHash("WeaponType");
         weaponCategoryHash = Animator.StringToHash("WeaponCategory");
         dodgeHash = Animator.StringToHash(!string.IsNullOrEmpty(dodgeAnimationTrigger) ? dodgeAnimationTrigger : "DodgeRoll");
+
+        isLongIdleHash = Animator.StringToHash("IsLongIdle");
+        longIdleIndexHash = Animator.StringToHash("LongIdleIndex");
 
         if (navMeshAgent != null)
         {
@@ -453,12 +468,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
         if (playerEquipment != null) playerEquipment.OnEquipmentChanged += HandleEquipmentChanged;
         if (PartyManager.instance != null) OnMovementModeChanged(PartyManager.instance.currentMovementMode);
-
-        // --- AAA FIX: GUARANTEE RESYNC ON WAKE ---
-        // If the player was disabled when items were equipped (party swapping, loading),
-        // this strictly resyncs their animator the exact frame they wake up.
         UpdateWeaponTypeParameter();
-        // -----------------------------------------
     }
 
     void OnDisable()
@@ -523,6 +533,38 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         {
             animator.SetFloat(velocityXHash, vX, animationDampTime, Time.deltaTime);
         }
+
+        // --- NEW IDLE LOGIC ---
+        // Only start the timer if we are completely still and NOT doing anything else
+        if (vZ == 0f && vX == 0f && !isDodging && !IsMovingToAttack && !IsSpecialMovementActive && (abilityHolder == null || !abilityHolder.IsActivityLocked()))
+        {
+            currentIdleTimer += Time.deltaTime;
+
+            if (currentIdleTimer >= timeBeforeLongIdle && !isLongIdling)
+            {
+                isLongIdling = true;
+
+                // Roll the dice to pick which idle to play!
+                if (maxLongIdleVariants > 0)
+                {
+                    animator.SetInteger(longIdleIndexHash, UnityEngine.Random.Range(0, maxLongIdleVariants));
+                }
+
+                // Tell the animator to enter the long idle state
+                animator.SetBool(isLongIdleHash, true);
+            }
+        }
+        else
+        {
+            // If we move, attack, dodge, or cast, instantly reset everything!
+            currentIdleTimer = 0f;
+            if (isLongIdling)
+            {
+                isLongIdling = false;
+                animator.SetBool(isLongIdleHash, false);
+            }
+        }
+        // ----------------------
     }
 
     public void TriggerDodgeRoll(Vector3 explicitDestination = default)
@@ -843,7 +885,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             }
             else
             {
-                // Break out if agent disabled to avoid infinite hang
                 break;
             }
 
@@ -868,7 +909,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
     public void UpdateWeaponTypeParameter()
     {
-        // --- AAA FIX: Safety check to prevent silent drops on inactive animators ---
         if (animator == null || !animator.isActiveAndEnabled || playerEquipment == null) return;
 
         int weaponType = 0;

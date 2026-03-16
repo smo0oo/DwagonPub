@@ -41,6 +41,10 @@ public class PlayerEquipment : MonoBehaviour
     private Inventory playerInventory;
     private PlayerStats playerStats;
 
+    // --- AAA FIX: Reference to wire up dynamic spawn points ---
+    private PlayerAbilityHolder abilityHolder;
+    // ---------------------------------------------------------
+
     // Cache the exact bones found on your player character for 1:1 matching
     private Dictionary<string, Transform> boneMap = new Dictionary<string, Transform>();
 
@@ -51,6 +55,12 @@ public class PlayerEquipment : MonoBehaviour
         {
             playerInventory = root.Inventory;
             playerStats = root.PlayerStats;
+            abilityHolder = root.PlayerAbilityHolder;
+        }
+        else
+        {
+            // Fallback if not using a CharacterRoot structure
+            abilityHolder = GetComponent<PlayerAbilityHolder>();
         }
 
         foreach (EquipmentType slot in Enum.GetValues(typeof(EquipmentType)))
@@ -141,6 +151,19 @@ public class PlayerEquipment : MonoBehaviour
             visual.transform.localRotation = Quaternion.identity;
             visual.transform.localScale = Vector3.one;
             equippedVisuals[slot] = visual;
+
+            // --- AAA FIX: Find and link the weapon's custom Projectile Point! ---
+            if (abilityHolder != null)
+            {
+                Transform customPoint = FindChildRecursive(visual.transform, "ProjectilePoint");
+                if (customPoint == null) customPoint = FindChildRecursive(visual.transform, "ShootPoint");
+
+                if (customPoint != null)
+                {
+                    abilityHolder.SetDynamicProjectileSpawnPoint(customPoint);
+                }
+            }
+            // --------------------------------------------------------------------
         }
         else
         {
@@ -251,6 +274,13 @@ public class PlayerEquipment : MonoBehaviour
     {
         if (equippedVisuals.ContainsKey(slot) && equippedVisuals[slot] != null)
         {
+            // --- AAA FIX: Clear the dynamic point if we are unequipping a weapon ---
+            if (slot == EquipmentType.RightHand || slot == EquipmentType.LeftHand)
+            {
+                if (abilityHolder != null) abilityHolder.ClearDynamicProjectileSpawnPoint();
+            }
+            // -----------------------------------------------------------------------
+
             Destroy(equippedVisuals[slot]);
             equippedVisuals[slot] = null;
         }
@@ -264,6 +294,18 @@ public class PlayerEquipment : MonoBehaviour
             case EquipmentType.LeftHand: return leftHandAttachPoint;
             default: return null;
         }
+    }
+
+    // Helper method to dig through a weapon's hierarchy to find the custom spawn point
+    private Transform FindChildRecursive(Transform parent, string exactName)
+    {
+        if (parent.name == exactName) return parent;
+        foreach (Transform child in parent)
+        {
+            Transform found = FindChildRecursive(child, exactName);
+            if (found != null) return found;
+        }
+        return null;
     }
 
     public ItemStack EquipItem(EquipmentType slot, ItemStack itemToEquip)

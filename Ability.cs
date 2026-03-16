@@ -18,11 +18,11 @@ public enum AbilityType
 
 public enum VFXAnchor
 {
-    ProjectileSpawnPoint, // Default (Weapon tip)
+    ProjectileSpawnPoint,
     LeftHand,
     RightHand,
-    Feet,                 // Root
-    Center,               // Chest/Torso
+    Feet,
+    Center,
     Head
 }
 
@@ -75,15 +75,10 @@ public class Ability : ScriptableObject
     public bool randomizeAttackStyle = false;
     public int maxRandomVariants = 3;
 
-    // --- NEW AAA FIX: MANUAL COMBO SYSTEM ---
     [Header("Manual Combo System (AAA)")]
-    [Tooltip("The next ability in the combo chain. Triggered by pressing this ability's button again.")]
     public Ability nextComboLink;
-    [Tooltip("How long the player has to press the button again to trigger the next combo link.")]
     public float comboWindow = 1.5f;
-    [Tooltip("If true, triggering the next combo link ignores the Global Cooldown.")]
     public bool bypassGcdOnCombo = true;
-    // ----------------------------------------
 
     [Header("Behavior Type")]
     public AbilityType abilityType = AbilityType.TargetedMelee;
@@ -103,6 +98,8 @@ public class Ability : ScriptableObject
     public float projectileSpawnDelay = 0f;
 
     [Header("Multi-Projectile Settings (AAA)")]
+    [Tooltip("If TRUE, uses the Inspector's Burst Delay Coroutine. If FALSE, ignores the Coroutine and waits for you to trigger AE_FireSingleProjectile on the Animation Timeline!")]
+    public bool useCoroutineForProjectiles = true;
     public int projectileCount = 1;
     public float burstDelay = 0f;
     public float spreadAngle = 0f;
@@ -141,6 +138,9 @@ public class Ability : ScriptableObject
     public bool attachCastVFX = true;
     public float castVFXDelay = 0f;
 
+    [Header("Attack Style VFX Overrides")]
+    public List<StyleVFXOverride> styleVFXOverrides = new List<StyleVFXOverride>();
+
     [Header("Hit / Impact VFX Settings")]
     public GameObject hitVFX;
     public Vector3 hitVFXPositionOffset;
@@ -166,4 +166,12 @@ public class Ability : ScriptableObject
     [SerializeReference] public List<IAbilityEffect> onCastEffects = new List<IAbilityEffect>();
     [SerializeReference] public List<IAbilityEffect> friendlyEffects = new List<IAbilityEffect>();
     [SerializeReference] public List<IAbilityEffect> hostileEffects = new List<IAbilityEffect>();
+}
+
+[System.Serializable]
+public struct StyleVFXOverride
+{
+    public GameObject overrideVFX;
+    public Vector3 positionOffset;
+    public Vector3 rotationOffset;
 }
