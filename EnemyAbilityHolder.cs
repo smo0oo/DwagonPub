@@ -43,29 +43,30 @@ public class EnemyAbilityHolder : MonoBehaviour
     private GameObject activeTelegraphInstance;
     private Collider[] hitBuffer = new Collider[20];
 
-    private Vector3 debugBoxCenter;
-    private Vector3 debugBoxSize;
-    private Quaternion debugBoxRotation;
-    private float debugDisplayTime;
+    private GameObject currentExecutingTarget;
+    private Vector3 currentExecutingPosition;
+    private int currentProjectileIndex = 0;
+    private int currentStyleIndex = 0;
 
     private int attackTriggerHash;
     private int attackIndexHash;
     private int castTriggerHash;
     private bool hasCastTrigger = false;
     private Ability currentCastingAbility;
+    private Ability currentExecutingAbility;
+
+    private int activationTriggerLayer = -1;
 
     public bool IsOnGlobalCooldown() => Time.time < globalCooldownTimer;
 
     void Awake()
     {
         movementHandler = GetComponentInParent<IMovementHandler>();
-
         enemyAI = GetComponentInParent<EnemyAI>();
         if (enemyAI == null) enemyAI = GetComponent<EnemyAI>();
 
-        // --- AAA FIX: SEARCH DOWNWARDS FOR THE ANIMATOR ---
         animator = GetComponentInChildren<Animator>();
-        // --------------------------------------------------
+        activationTriggerLayer = LayerMask.NameToLayer("ActivationTrigger");
 
         if (projectileSpawnPoint == null) projectileSpawnPoint = transform;
 
@@ -89,7 +90,6 @@ public class EnemyAbilityHolder : MonoBehaviour
         if (activeCastCoroutine != null) { StopCoroutine(activeCastCoroutine); activeCastCoroutine = null; }
         IsCasting = false;
 
-        // Ensure stale triggers are cleared on cancel
         if (animator != null)
         {
             animator.ResetTrigger(attackTriggerHash);
@@ -105,6 +105,7 @@ public class EnemyAbilityHolder : MonoBehaviour
         }
 
         currentCastingAbility = null;
+        currentExecutingAbility = null;
         CleanupCastingVFX();
         CleanupTelegraph();
         if (ActiveBeam != null) { ActiveBeam.Interrupt(); ActiveBeam = null; }
@@ -124,7 +125,7 @@ public class EnemyAbilityHolder : MonoBehaviour
         }
         else if (ability.attackStyleIndex <= 0 && string.IsNullOrEmpty(ability.overrideTriggerName))
         {
-            styleIndex = UnityEngine.Random.Range(0, 3); // Fallback for basic enemies
+            styleIndex = UnityEngine.Random.Range(0, 3);
         }
 
         if (ability.castTime > 0 || ability.telegraphDuration > 0)
@@ -211,7 +212,6 @@ public class EnemyAbilityHolder : MonoBehaviour
             CleanupCastingVFX();
             CleanupTelegraph();
 
-            // Prevent casting flags from clearing if we are chaining into a burst or melee delay
             if (ability.abilityType != AbilityType.TargetedMelee &&
                 ability.abilityType != AbilityType.DirectionalMelee &&
                 ability.abilityType != AbilityType.TargetedProjectile &&
@@ -245,6 +245,12 @@ public class EnemyAbilityHolder : MonoBehaviour
     {
         if (enemyAI != null && enemyAI.Health.currentHealth <= 0) return;
 
+        currentExecutingAbility = ability;
+        currentExecutingTarget = target;
+        currentExecutingPosition = position;
+        currentProjectileIndex = 0;
+        currentStyleIndex = styleIndex;
+
         PayCostAndStartCooldown(ability, bypassCooldown);
         if (ability.castSound != null) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
 
@@ -271,16 +277,20 @@ public class EnemyAbilityHolder : MonoBehaviour
         {
             case AbilityType.TargetedMelee:
             case AbilityType.DirectionalMelee:
-                if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
-                activeCastCoroutine = StartCoroutine(PerformSmartMeleeAttack(ability));
+                if (ability.hitboxOpenDelay > 0)
+                {
+                    if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
+                    activeCastCoroutine = StartCoroutine(PerformSmartMeleeAttack(ability));
+                }
                 break;
             case AbilityType.TargetedProjectile:
             case AbilityType.ForwardProjectile:
-                // --- AAA FIX: ENEMY PROJECTILE BURST & SHOTGUN SUPPORT ---
-                if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
-                activeCastCoroutine = StartCoroutine(ExecuteProjectileBurst(ability, target, position));
+                if (ability.useCoroutineForProjectiles)
+                {
+                    if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
+                    activeCastCoroutine = StartCoroutine(ExecuteProjectileBurst(ability, target, position));
+                }
                 break;
-            // ---------------------------------------------------------
             case AbilityType.GroundAOE: HandleGroundAOE(ability, position); break;
             case AbilityType.GroundPlacement: HandleGroundPlacement(ability, position); break;
             case AbilityType.Self: HandleSelfCast(ability); break;
@@ -299,21 +309,48 @@ public class EnemyAbilityHolder : MonoBehaviour
         }
     }
 
+    public void OnAnimationEventOpenHitbox()
+    {
+        if (currentExecutingAbility != null) CheckHit(currentExecutingAbility);
+    }
+
+    public void OnAnimationEventCloseHitbox()
+    {
+        IsCasting = false;
+        currentCastingAbility = null;
+        activeCastCoroutine = null;
+        OnCastFinished?.Invoke();
+    }
+
+    public void OnAnimationEventSpawnVFX()
+    {
+        if (currentExecutingAbility == null || currentExecutingAbility.castVFX == null) return;
+        Transform anchor = GetAnchorTransform(currentExecutingAbility.castVFXAnchor);
+        GameObject vfx = ObjectPooler.instance.Get(currentExecutingAbility.castVFX, anchor.position, anchor.rotation);
+        if (vfx != null) vfx.SetActive(true);
+    }
+
+    public void OnAnimationEventPlayAudio()
+    {
+        if (currentExecutingAbility != null && currentExecutingAbility.castSound != null)
+            AudioSource.PlayClipAtPoint(currentExecutingAbility.castSound, transform.position);
+    }
+
+    public void OnAnimationEventFireProjectile()
+    {
+        if (currentExecutingAbility == null) return;
+        int totalCount = Mathf.Max(1, currentExecutingAbility.projectileCount);
+        FireSingleProjectile(currentExecutingAbility, currentExecutingTarget, currentExecutingPosition, currentProjectileIndex, totalCount);
+        currentProjectileIndex++;
+    }
+
     private void TriggerAttackAnimation(Ability ability, int styleIndex)
     {
         if (animator != null)
         {
             animator.ResetTrigger(attackTriggerHash);
-
-            if (!string.IsNullOrEmpty(ability.overrideTriggerName))
-            {
-                animator.SetTrigger(ability.overrideTriggerName);
-            }
-            else
-            {
-                animator.SetInteger(attackIndexHash, styleIndex);
-                animator.SetTrigger(attackTriggerHash);
-            }
+            if (!string.IsNullOrEmpty(ability.overrideTriggerName)) animator.SetTrigger(ability.overrideTriggerName);
+            else { animator.SetInteger(attackIndexHash, styleIndex); animator.SetTrigger(attackTriggerHash); }
         }
     }
 
@@ -392,7 +429,7 @@ public class EnemyAbilityHolder : MonoBehaviour
         if (ability.spreadAngle > 0 && totalCount > 1)
         {
             float angleOffset = 0f;
-            if (ability.burstDelay == 0)
+            if (ability.burstDelay == 0 && ability.useCoroutineForProjectiles)
             {
                 float step = ability.spreadAngle / (totalCount - 1);
                 float startAngle = -ability.spreadAngle / 2f;
@@ -415,8 +452,6 @@ public class EnemyAbilityHolder : MonoBehaviour
         {
             CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
             int layer = myRoot != null ? myRoot.gameObject.layer : gameObject.layer;
-
-            // Initialize WITHOUT overwriting collision masks so it hits walls!
             p.Initialize(ability, gameObject, layer);
         }
 
@@ -441,11 +476,6 @@ public class EnemyAbilityHolder : MonoBehaviour
         Vector3 center = transform.position + (transform.forward * (boxLength / 2f)) + (Vector3.up * 1f);
         Vector3 halfExtents = new Vector3(boxWidth / 2f, boxHeight / 2f, boxLength / 2f);
 
-        debugBoxCenter = center;
-        debugBoxSize = halfExtents * 2;
-        debugBoxRotation = transform.rotation;
-        debugDisplayTime = 0.5f;
-
         int hitCount = Physics.OverlapBoxNonAlloc(center, halfExtents, hitBuffer, transform.rotation, aoeTargetLayers);
         HashSet<GameObject> hitTargets = new HashSet<GameObject>();
         CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
@@ -454,7 +484,8 @@ public class EnemyAbilityHolder : MonoBehaviour
         for (int i = 0; i < hitCount; i++)
         {
             Collider hit = hitBuffer[i];
-            if (hit.gameObject.layer == 21) continue;
+
+            if (activationTriggerLayer != -1 && hit.gameObject.layer == activationTriggerLayer) continue;
 
             CharacterRoot targetRoot = hit.GetComponentInParent<CharacterRoot>();
             GameObject uniqueTargetObj = (targetRoot != null) ? targetRoot.gameObject : hit.gameObject;
@@ -489,7 +520,9 @@ public class EnemyAbilityHolder : MonoBehaviour
         for (int i = 0; i < hitCount; i++)
         {
             Collider hit = hitBuffer[i];
-            if (hit.gameObject.layer == 21) continue;
+
+            if (activationTriggerLayer != -1 && hit.gameObject.layer == activationTriggerLayer) continue;
+
             if (Vector3.Distance(position, hit.transform.position) > ability.aoeRadius + 1.0f) continue;
 
             CharacterRoot hitCharacter = hit.GetComponentInParent<CharacterRoot>();
@@ -550,6 +583,6 @@ public class EnemyAbilityHolder : MonoBehaviour
         }
         return projectileSpawnPoint ?? transform;
     }
+
     void Update() { if (ActiveBeam != null && ActiveBeam.gameObject == null) ActiveBeam = null; }
-    private void OnDrawGizmos() { if (debugDisplayTime > 0) { Gizmos.color = new Color(1, 0, 0, 0.3f); Gizmos.matrix = Matrix4x4.TRS(debugBoxCenter, debugBoxRotation, debugBoxSize); Gizmos.DrawCube(Vector3.zero, Vector3.one); debugDisplayTime -= Time.deltaTime; } }
 }

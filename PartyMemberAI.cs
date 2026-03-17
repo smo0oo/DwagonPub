@@ -60,10 +60,8 @@ public class PartyMemberAI : MonoBehaviour
     private float lastPathUpdateTime = 0f;
     private const float PATH_UPDATE_INTERVAL = 0.25f;
 
-    // --- NEW: TACTICAL VARIABLES ---
     private TacticalNode claimedTacticalNode;
     private EnemyAbilityHolder currentThreatCaster;
-    // -------------------------------
 
     public string CurrentStatus { get; private set; }
 
@@ -150,10 +148,8 @@ public class PartyMemberAI : MonoBehaviour
 
         UpdateAnimator();
 
-        // --- FIX: Logic to yield control to player ---
         if (PartyManager.instance != null && PartyManager.instance.ActivePlayer == this.gameObject)
         {
-            // Reset state if we accidentally left it dirty (e.g. slowed down from wandering)
             if (navMeshAgent != null)
             {
                 if (navMeshAgent.speed != originalNavMeshSpeed) navMeshAgent.speed = originalNavMeshSpeed;
@@ -161,7 +157,6 @@ public class PartyMemberAI : MonoBehaviour
             }
             return;
         }
-        // ---------------------------------------------
 
         if (navMeshAgent == null || !navMeshAgent.isOnNavMesh || health == null || health.currentHealth <= 0) return;
 
@@ -202,14 +197,8 @@ public class PartyMemberAI : MonoBehaviour
         }
 
         float hpPercent = health.currentHealth / (float)health.maxHealth;
-        if (hpPercent < retreatThreshold)
-        {
-            isRetreating = true;
-        }
-        else if (hpPercent > retreatThreshold + 0.15f)
-        {
-            isRetreating = false;
-        }
+        if (hpPercent < retreatThreshold) isRetreating = true;
+        else if (hpPercent > retreatThreshold + 0.15f) isRetreating = false;
 
         if (isRetreating)
         {
@@ -227,11 +216,18 @@ public class PartyMemberAI : MonoBehaviour
             return;
         }
 
+        if (playerStats == null || playerStats.characterClass == null) return;
+
         if (playerStats.characterClass.aiRole == PlayerClass.AILogicRole.Support)
         {
             PartyMemberAI allyToHeal = targeting.FindWoundedAlly();
             if (allyToHeal != null)
             {
+                if (currentCommand == AICommand.AttackTarget && abilityHolder != null && abilityHolder.IsCasting)
+                {
+                    abilityHolder.CancelCast();
+                }
+
                 currentTarget = allyToHeal.gameObject;
                 currentCommand = AICommand.HealTarget;
                 return;
@@ -239,14 +235,8 @@ public class PartyMemberAI : MonoBehaviour
         }
 
         GameObject enemyTarget = null;
-        if (currentStance == AIStance.Defensive)
-        {
-            enemyTarget = PartyAIManager.instance.GetPartyFocusTarget();
-        }
-        else if (currentStance == AIStance.Aggressive)
-        {
-            enemyTarget = PartyAIManager.instance.GetPartyFocusTarget() ?? targeting.FindNearestEnemy();
-        }
+        if (currentStance == AIStance.Defensive) enemyTarget = PartyAIManager.instance.GetPartyFocusTarget();
+        else if (currentStance == AIStance.Aggressive) enemyTarget = PartyAIManager.instance.GetPartyFocusTarget() ?? targeting.FindNearestEnemy();
 
         if (enemyTarget != null)
         {
@@ -294,7 +284,6 @@ public class PartyMemberAI : MonoBehaviour
         }
     }
 
-    // --- TACTICAL LOGIC (AAA BOSS REACTION) ---
     private void HandleMajorThreat(EnemyAbilityHolder boss, Ability threatAbility, Vector3 attackTarget)
     {
         if (health == null || health.currentHealth <= 0 || (PartyManager.instance != null && PartyManager.instance.ActivePlayer == gameObject)) return;
@@ -303,7 +292,6 @@ public class PartyMemberAI : MonoBehaviour
         float distToDanger = Vector3.Distance(transform.position, attackTarget);
         if (distToDanger > threatAbility.aoeRadius + 1.5f) return;
 
-        // [FIX] Using TacticalNodeType to avoid conflict with LocationNode
         TacticalNodeType preferredType = TacticalNodeType.Cover;
         if (playerStats != null && playerStats.characterClass != null)
         {
@@ -365,7 +353,6 @@ public class PartyMemberAI : MonoBehaviour
             if (navMeshAgent != null) navMeshAgent.speed = originalNavMeshSpeed;
         }
     }
-    // ------------------------------------------
 
     private void HandleFollowState()
     {
@@ -441,9 +428,9 @@ public class PartyMemberAI : MonoBehaviour
             randomOffset.y = 0;
             Vector3 potentialTarget = anchorPosition + randomOffset;
 
-            if (NavMesh.SamplePosition(potentialTarget, out NavMeshHit hit, 2.0f, NavMesh.AllAreas))
+            if (UnityEngine.AI.NavMesh.SamplePosition(potentialTarget, out UnityEngine.AI.NavMeshHit hit, 2.0f, UnityEngine.AI.NavMesh.AllAreas))
             {
-                navMeshAgent.speed = originalNavMeshSpeed * 0.5f; // Walk slow
+                navMeshAgent.speed = originalNavMeshSpeed * 0.5f;
                 navMeshAgent.stoppingDistance = 0.1f;
 
                 MoveTo(hit.position);
@@ -465,22 +452,43 @@ public class PartyMemberAI : MonoBehaviour
 
         if (targeting.HasLineOfSight(currentTarget.transform))
         {
-            navMeshAgent.speed = originalNavMeshSpeed;
-
             Ability abilityToUse = abilitySelector.SelectBestAbility(currentTarget);
             if (abilityToUse == null) return;
 
             float distanceToTarget = Vector3.Distance(transform.position, currentTarget.transform.position);
 
-            if (distanceToTarget > abilityToUse.range)
+            bool targetIsLowHealth = false;
+            Health targetHp = currentTarget.GetComponent<Health>();
+            if (targetHp != null && (targetHp.currentHealth / (float)targetHp.maxHealth) <= finisherThreshold)
             {
-                navMeshAgent.stoppingDistance = abilityToUse.range * 0.8f;
+                targetIsLowHealth = true;
+            }
+
+            if (canKite && !targetIsLowHealth && distanceToTarget < minimumCombatRange && UnityEngine.Random.value <= chanceToKite)
+            {
+                navMeshAgent.speed = originalNavMeshSpeed * kitingSpeedMultiplier;
+                Vector3 dirAway = (transform.position - currentTarget.transform.position).normalized;
+                MoveTo(transform.position + (dirAway * 5f));
+                UpdateStatus("Kiting");
+            }
+            else if (prefersToKeepDistance && distanceToTarget <= preferredCombatDistance && distanceToTarget >= minimumCombatRange)
+            {
+                navMeshAgent.ResetPath();
+                navMeshAgent.speed = originalNavMeshSpeed;
+                abilityHolder.UseAbility(abilityToUse, currentTarget);
+                UpdateStatus($"Attacking: {currentTarget.name}");
+            }
+            else if (distanceToTarget > abilityToUse.range || (prefersToKeepDistance && distanceToTarget > preferredCombatDistance))
+            {
+                navMeshAgent.speed = originalNavMeshSpeed;
+                navMeshAgent.stoppingDistance = prefersToKeepDistance ? preferredCombatDistance : abilityToUse.range * 0.8f;
                 MoveTo(currentTarget.transform.position);
                 UpdateStatus("Closing In");
             }
             else
             {
                 navMeshAgent.ResetPath();
+                navMeshAgent.speed = originalNavMeshSpeed;
                 abilityHolder.UseAbility(abilityToUse, currentTarget);
                 UpdateStatus($"Attacking: {currentTarget.name}");
             }
@@ -503,7 +511,22 @@ public class PartyMemberAI : MonoBehaviour
             navMeshAgent.speed = originalNavMeshSpeed;
 
             Ability healAbility = abilitySelector.SelectBestAbility(currentTarget);
-            if (healAbility == null) return;
+
+            if (healAbility == null)
+            {
+                GameObject enemyToWeave = PartyAIManager.instance.GetPartyFocusTarget() ?? targeting.FindNearestEnemy();
+                if (enemyToWeave != null)
+                {
+                    Ability damageAbility = abilitySelector.SelectBestAbility(enemyToWeave);
+                    if (damageAbility != null && abilityHolder.CanUseAbility(damageAbility, enemyToWeave))
+                    {
+                        RotateTowards(enemyToWeave.transform.position);
+                        abilityHolder.UseAbility(damageAbility, enemyToWeave);
+                        UpdateStatus("Weaving Damage (Heals on CD)");
+                    }
+                }
+                return;
+            }
 
             float distanceToTarget = Vector3.Distance(transform.position, currentTarget.transform.position);
             if (distanceToTarget > healAbility.range)

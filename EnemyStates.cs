@@ -1,6 +1,5 @@
 using UnityEngine;
 using UnityEngine.AI;
-using System.Linq;
 
 // --- IDLE STATE (Patrolling & Scanning) ---
 public class IdleState : IEnemyState
@@ -10,7 +9,6 @@ public class IdleState : IEnemyState
     public void Enter(EnemyAI enemy)
     {
         enemy.SetAIStatus("Idle", "Scanning");
-        // Ensure we don't carry over momentum or old paths
         if (enemy.NavAgent != null && enemy.NavAgent.isActiveAndEnabled && enemy.NavAgent.isOnNavMesh)
         {
             enemy.NavAgent.ResetPath();
@@ -19,7 +17,6 @@ public class IdleState : IEnemyState
 
     public void Execute(EnemyAI enemy)
     {
-        // 1. Look for Target
         enemy.currentTarget = enemy.Targeting.FindBestTarget(null);
 
         if (enemy.currentTarget != null)
@@ -28,14 +25,12 @@ public class IdleState : IEnemyState
             return;
         }
 
-        // 2. Patrol Logic
         if (enemy.CollectedPatrolPoints == null || enemy.CollectedPatrolPoints.Length == 0)
         {
             enemy.SetAIStatus("Idle", "Searching...");
             return;
         }
 
-        // Check if we are physically waiting at a point
         if (enemy.IsWaitingAtPatrolPoint)
         {
             enemy.SetAIStatus("Idle", "Waiting");
@@ -47,10 +42,8 @@ public class IdleState : IEnemyState
                 MoveToCurrentPatrolPoint(enemy);
             }
         }
-        // Check if we have arrived (Remaining Distance < Threshold)
         else if (enemy.NavAgent.isOnNavMesh && !enemy.NavAgent.pathPending && enemy.NavAgent.remainingDistance < 0.5f)
         {
-            // If we have no path but aren't waiting, we might have just started or finished
             if (enemy.NavAgent.hasPath || enemy.NavAgent.velocity.sqrMagnitude < 0.1f)
             {
                 ArriveAtPatrolPoint(enemy);
@@ -141,14 +134,12 @@ public class CombatState : IEnemyState
 
     public void Execute(EnemyAI enemy)
     {
-        // 1. Check Leash
         if (enemy.currentTarget == null || Vector3.Distance(enemy.transform.position, enemy.CombatStartPosition) > enemy.chaseLeashRadius)
         {
             enemy.SwitchState(new ReturnState());
             return;
         }
 
-        // 2. Check Invalid Target
         if (enemy.IsTargetInvalid(enemy.currentTarget))
         {
             enemy.currentTarget = null;
@@ -156,7 +147,6 @@ public class CombatState : IEnemyState
             return;
         }
 
-        // 3. Check Retreat Condition
         if (enemy.Health.maxHealth > 0)
         {
             float hpPercent = (float)enemy.Health.currentHealth / enemy.Health.maxHealth;
@@ -170,7 +160,6 @@ public class CombatState : IEnemyState
             }
         }
 
-        // 4. LOS Logic
         float distToTarget = Vector3.Distance(enemy.transform.position, enemy.currentTarget.position);
         if (Time.time - lastLostSightCheckTime > LOS_CHECK_INTERVAL || distToTarget < enemy.meleeAttackRange)
         {
@@ -183,15 +172,13 @@ public class CombatState : IEnemyState
             lastKnownPosition = enemy.currentTarget.position;
             timeSinceLostSight = 0f;
 
-            // 5. Select & Use Ability
             Ability abilityToUse = enemy.AbilitySelector.SelectBestAbility(enemy.currentTarget, enemy.HasUsedInitialAbilities);
             bool isReady = abilityToUse != null && enemy.AbilityHolder.CanUseAbility(abilityToUse, enemy.currentTarget.gameObject);
             float effectiveRange = (abilityToUse != null) ? abilityToUse.range : enemy.meleeAttackRange;
 
-            // Attack Logic
             if (isReady && distToTarget <= effectiveRange)
             {
-                enemy.StopMovement(); // Uses ResetPath now
+                enemy.StopMovement();
                 enemy.SetAIStatus("Combat", $"Attacking: {abilityToUse.displayName}");
                 enemy.PerformAttack(abilityToUse);
 
@@ -200,13 +187,11 @@ public class CombatState : IEnemyState
             }
             else
             {
-                // Movement Logic
                 HandleCombatMovement(enemy, isReady, abilityToUse);
             }
         }
         else
         {
-            // Lost Sight
             if (enemy.isTimid)
             {
                 enemy.currentTarget = null;
@@ -219,7 +204,7 @@ public class CombatState : IEnemyState
 
             if (timeSinceLostSight > enemy.lostSightSearchDuration)
             {
-                enemy.currentTarget = null; // Give up
+                enemy.currentTarget = null;
             }
             else
             {
@@ -315,7 +300,6 @@ public class CombatState : IEnemyState
             }
             else
             {
-                // In Range
                 enemy.NavAgent.ResetPath();
                 enemy.SetAIStatus("Combat", "In Range");
             }
@@ -327,11 +311,13 @@ public class CombatState : IEnemyState
 public class RetreatState : IEnemyState
 {
     private float timer;
+    private float pathUpdateTimer; // Prevent framerate drops from calculating paths every frame
 
     public void Enter(EnemyAI enemy)
     {
         enemy.SetAIStatus("Retreating", "Fleeing");
         timer = enemy.retreatDuration;
+        pathUpdateTimer = 0f;
         enemy.NavAgent.speed = enemy.retreatAndKiteSpeed;
         if (enemy.AssignedSurroundPoint != null)
         {
@@ -343,9 +329,15 @@ public class RetreatState : IEnemyState
     public void Execute(EnemyAI enemy)
     {
         timer -= Time.deltaTime;
+        pathUpdateTimer -= Time.deltaTime;
+
         if (timer > 0 && enemy.currentTarget != null)
         {
-            enemy.RetreatFromTarget();
+            if (pathUpdateTimer <= 0f)
+            {
+                enemy.RetreatFromTarget();
+                pathUpdateTimer = 0.5f; // Only run the math twice a second
+            }
         }
         else
         {
@@ -367,13 +359,12 @@ public class ReturnState : IEnemyState
         enemy.SetAIStatus("Returning", "Leashing");
         enemy.ResetCombatState();
         enemy.NavAgent.speed = enemy.OriginalSpeed;
-        enemy.NavAgent.stoppingDistance = 0.5f; // Ensure we go all the way back
+        enemy.NavAgent.stoppingDistance = 0.5f;
         enemy.NavAgent.SetDestination(enemy.StartPosition);
     }
 
     public void Execute(EnemyAI enemy)
     {
-        // Check if we found a new target while returning
         enemy.currentTarget = enemy.Targeting.FindBestTarget(null);
         if (enemy.currentTarget != null)
         {
@@ -381,7 +372,6 @@ public class ReturnState : IEnemyState
             return;
         }
 
-        // Check arrival
         if (enemy.NavAgent.isOnNavMesh && !enemy.NavAgent.pathPending && enemy.NavAgent.remainingDistance <= 0.5f)
         {
             enemy.NavAgent.ResetPath();

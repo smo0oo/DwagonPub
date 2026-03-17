@@ -26,6 +26,12 @@ public class Projectile : MonoBehaviour
     private int casterLayer;
     private float lifetimeTimer;
     private PooledObject pooledObject;
+    private int activationTriggerLayer = -1;
+
+    void Awake()
+    {
+        activationTriggerLayer = LayerMask.NameToLayer("ActivationTrigger");
+    }
 
     void OnEnable()
     {
@@ -55,16 +61,11 @@ public class Projectile : MonoBehaviour
 
     private void OnTriggerEnter(Collider other)
     {
-        // AAA FIX: If the projectile hasn't received its data yet, ignore the collision so it doesn't break!
         if (sourceAbility == null) return;
-
-        // Ignore cloth physics layer to prevent projectiles hitting capes
         if (other.gameObject.layer == LayerMask.NameToLayer("ClothPhysics")) return;
 
-        // 1. Explicitly ignore ActivationTrigger (Layer 21)
-        if (other.gameObject.layer == 21) return;
+        if (activationTriggerLayer != -1 && other.gameObject.layer == activationTriggerLayer) return;
 
-        // 2. Layer Mask Check
         if (((1 << other.gameObject.layer) & collisionLayers) == 0) return;
 
         CharacterRoot hitCharacterRoot = other.GetComponentInParent<CharacterRoot>();
@@ -75,14 +76,12 @@ public class Projectile : MonoBehaviour
             Debug.Log($"[Projectile] TOUCHED: '{other.name}' | CharacterRoot: {rootName} | Layer: {other.gameObject.layer}");
         }
 
-        // 3. Ignore Caster
         if (caster != null)
         {
             CharacterRoot casterRoot = caster.GetComponentInParent<CharacterRoot>();
             if (casterRoot != null && hitCharacterRoot == casterRoot) return;
         }
 
-        // 4. Ally Pass-Through
         if (hitCharacterRoot != null && sourceAbility != null)
         {
             if (casterLayer == hitCharacterRoot.gameObject.layer && (sourceAbility.friendlyEffects == null || sourceAbility.friendlyEffects.Count == 0))
@@ -92,7 +91,6 @@ public class Projectile : MonoBehaviour
             }
         }
 
-        // 5. Explosion
         if (sourceAbility != null && sourceAbility.aoeRadius > 0)
         {
             Explode();
@@ -100,9 +98,14 @@ public class Projectile : MonoBehaviour
             return;
         }
 
-        // 6. Single Target
         SpawnImpactVFX();
-        if (hitCharacterRoot != null) ApplyEffectsToTarget(hitCharacterRoot);
+        if (hitCharacterRoot != null)
+        {
+            if (((1 << hitCharacterRoot.gameObject.layer) & damageLayers) != 0)
+            {
+                ApplyEffectsToTarget(hitCharacterRoot);
+            }
+        }
         Terminate();
     }
 
@@ -117,10 +120,9 @@ public class Projectile : MonoBehaviour
 
         foreach (var hit in hits)
         {
-            // AAA FIX: Ignore cloth physics layer in AoE explosions
             if (hit.gameObject.layer == LayerMask.NameToLayer("ClothPhysics")) continue;
 
-            if (hit.gameObject.layer == 21) continue;
+            if (activationTriggerLayer != -1 && hit.gameObject.layer == activationTriggerLayer) continue;
 
             CharacterRoot target = hit.GetComponentInParent<CharacterRoot>();
             if (target == null || affectedTargets.Contains(target)) continue;

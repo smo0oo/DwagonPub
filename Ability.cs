@@ -159,9 +159,6 @@ public class Ability : ScriptableObject
     public GameObject enemyTelegraphPrefab;
     public bool isMajorTacticalThreat = false;
 
-    [Header("Legacy / Simple Effects")]
-    public List<string> effects = new List<string>();
-
     [Header("Effects")]
     [SerializeReference] public List<IAbilityEffect> onCastEffects = new List<IAbilityEffect>();
     [SerializeReference] public List<IAbilityEffect> friendlyEffects = new List<IAbilityEffect>();

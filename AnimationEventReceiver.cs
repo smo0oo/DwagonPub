@@ -3,38 +3,42 @@ using UnityEngine;
 [RequireComponent(typeof(Animator))]
 public class AnimationEventReceiver : MonoBehaviour
 {
-    private PlayerAbilityHolder abilityHolder;
+    private PlayerAbilityHolder playerAbilityHolder;
+    private EnemyAbilityHolder enemyAbilityHolder;
 
     void Awake()
     {
-        // Find the holder on the root object
-        abilityHolder = GetComponentInParent<PlayerAbilityHolder>();
+        playerAbilityHolder = GetComponentInParent<PlayerAbilityHolder>();
+        enemyAbilityHolder = GetComponentInParent<EnemyAbilityHolder>();
     }
 
-    // These exact names will be typed into the Animation Event in Unity
     public void AE_OpenHitbox()
     {
-        if (abilityHolder != null) abilityHolder.OnAnimationEventOpenHitbox();
+        if (playerAbilityHolder != null) playerAbilityHolder.OnAnimationEventOpenHitbox();
+        else if (enemyAbilityHolder != null) enemyAbilityHolder.OnAnimationEventOpenHitbox();
     }
 
     public void AE_CloseHitbox()
     {
-        if (abilityHolder != null) abilityHolder.OnAnimationEventCloseHitbox();
+        if (playerAbilityHolder != null) playerAbilityHolder.OnAnimationEventCloseHitbox();
+        else if (enemyAbilityHolder != null) enemyAbilityHolder.OnAnimationEventCloseHitbox();
     }
 
     public void AE_SpawnCastVFX()
     {
-        if (abilityHolder != null) abilityHolder.OnAnimationEventSpawnVFX();
+        if (playerAbilityHolder != null) playerAbilityHolder.OnAnimationEventSpawnVFX();
+        else if (enemyAbilityHolder != null) enemyAbilityHolder.OnAnimationEventSpawnVFX();
     }
 
     public void AE_PlayImpactAudio()
     {
-        if (abilityHolder != null) abilityHolder.OnAnimationEventPlayAudio();
+        if (playerAbilityHolder != null) playerAbilityHolder.OnAnimationEventPlayAudio();
+        else if (enemyAbilityHolder != null) enemyAbilityHolder.OnAnimationEventPlayAudio();
     }
 
-    // --- AAA FIX: Added the frame-perfect projectile trigger ---
     public void AE_FireSingleProjectile()
     {
-        if (abilityHolder != null) abilityHolder.OnAnimationEventFireProjectile();
+        if (playerAbilityHolder != null) playerAbilityHolder.OnAnimationEventFireProjectile();
+        else if (enemyAbilityHolder != null) enemyAbilityHolder.OnAnimationEventFireProjectile();
     }
 }

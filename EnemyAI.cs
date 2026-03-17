@@ -40,9 +40,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public float RetreatCooldown { get; set; } = 10f;
 
     [Header("Instance Scaling (AAA)")]
-    [Tooltip("Set to 1 for base stats. Higher levels automatically scale HP, Damage, and Armor.")]
     [Range(1, 100)] public int enemyLevel = 1;
-
     public float CurrentDamageMultiplier { get; private set; } = 1.0f;
 
     [Header("Enemy Stats & Behavior")]
@@ -50,7 +48,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public AIBehaviorProfile behaviorProfile;
 
     [Header("Tactical Priority")]
-    [Tooltip("Identifies this enemy's role so your Party Members can prioritize who to attack first.")]
     public TacticalPriority priorityRank = TacticalPriority.Melee;
 
     [Header("Boss / Giant Settings")]
@@ -62,6 +59,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     [Header("Line of Sight")]
     public float lostSightSearchDuration = 5f;
+    private float timeSinceLastSawTarget = 0f;
 
     [Header("Combat Style")]
     public AIArchetype archetype;
@@ -138,9 +136,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
             Health.UpdateMaxHealth(scaledMaxHealth);
             Health.SetToMaxHealth();
-
             Health.damageReductionPercent = Mathf.Clamp(enemyClass.damageMitigation + armorScale, 0f, 0.85f);
-
             CurrentDamageMultiplier = enemyClass.damageMultiplier * dmgScale;
         }
 
@@ -210,6 +206,24 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             {
                 yield return wait;
                 continue;
+            }
+
+            if (currentTarget != null)
+            {
+                if (!HasLineOfSight(currentTarget))
+                {
+                    timeSinceLastSawTarget += 0.1f;
+                    if (timeSinceLastSawTarget >= lostSightSearchDuration)
+                    {
+                        currentTarget = null;
+                        timeSinceLastSawTarget = 0f;
+                        ResetCombatState();
+                    }
+                }
+                else
+                {
+                    timeSinceLastSawTarget = 0f;
+                }
             }
 
             if (NavAgent != null && NavAgent.isOnNavMesh && NavAgent.isActiveAndEnabled)
@@ -298,8 +312,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     private void UpdateAnimator()
     {
-        if (Animator == null) return;
-        if (IsInActionSequence) return;
+        if (Animator == null || IsInActionSequence) return;
 
         if (NavAgent == null || !NavAgent.isActiveAndEnabled || !NavAgent.isOnNavMesh || isStationary || (StatusEffects != null && StatusEffects.IsRooted))
         {
@@ -329,6 +342,46 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         }
     }
 
+    public void PerformCombatPositioning()
+    {
+        if (isStationary || currentTarget == null || NavAgent == null || !NavAgent.isOnNavMesh) return;
+
+        float distance = Vector3.Distance(transform.position, currentTarget.position);
+
+        if (archetype == AIArchetype.Ranged || archetype == AIArchetype.Caster)
+        {
+            if (distance < minimumRangedAttackRange)
+            {
+                NavAgent.speed = retreatAndKiteSpeed;
+                RetreatFromTarget();
+            }
+            else if (distance > preferredCombatRange)
+            {
+                NavAgent.speed = OriginalSpeed;
+                NavAgent.SetDestination(currentTarget.position);
+            }
+            else StopMovement();
+        }
+        else if (isTimid)
+        {
+            if (distance < preferredCombatRange)
+            {
+                NavAgent.speed = retreatAndKiteSpeed;
+                RetreatFromTarget();
+            }
+            else StopMovement();
+        }
+        else
+        {
+            if (distance > meleeAttackRange)
+            {
+                NavAgent.speed = OriginalSpeed;
+                NavAgent.SetDestination(currentTarget.position);
+            }
+            else StopMovement();
+        }
+    }
+
     public void PerformAttack(Ability ability)
     {
         if (StatusEffects != null && StatusEffects.IsStunned) return;
@@ -338,7 +391,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public void StopMovement()
     {
         if (isStationary) return;
-
         if (NavAgent != null && NavAgent.isActiveAndEnabled && NavAgent.isOnNavMesh)
         {
             NavAgent.ResetPath();
@@ -349,7 +401,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public void RetreatFromTarget()
     {
         if (isStationary || (StatusEffects != null && (StatusEffects.IsRooted || StatusEffects.IsStunned))) return;
-
         if (NavAgent == null || !NavAgent.isActiveAndEnabled || !NavAgent.isOnNavMesh || currentTarget == null) return;
 
         Vector3 directionAway = (transform.position - currentTarget.position).normalized;
@@ -408,8 +459,10 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public void ResetCombatState()
     {
         HasUsedInitialAbilities = false;
+
+        if (AbilityHolder != null) AbilityHolder.CancelCast();
+
         if (AssignedSurroundPoint != null) { SurroundPointManager.instance?.ReleasePoint(this); AssignedSurroundPoint = null; }
-        if (AbilityHolder.ActiveBeam != null) AbilityHolder.ActiveBeam.Interrupt();
         currentTarget = null;
     }
 
@@ -646,11 +699,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     private void ExecuteReaction(ReactiveTrigger trigger, Transform playerTransform)
     {
-        if (StatusEffects != null && (StatusEffects.IsStunned || StatusEffects.IsRooted))
-        {
-            UnityEngine.Debug.Log($"<color=grey>[Enemy Reaction] Blocked: Enemy is Stunned or Rooted.</color>");
-            return;
-        }
+        if (StatusEffects != null && (StatusEffects.IsStunned || StatusEffects.IsRooted)) return;
 
         switch (trigger.reactionAction)
         {
@@ -701,7 +750,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         if (Animator != null)
         {
             Animator.ResetTrigger(attackTriggerHash);
-            Animator.Play("RollDodge", 0, 0f);
+            Animator.Play(rollDodgeHash, 0, 0f);
         }
 
         if (Health != null) Health.isInvulnerable = true;

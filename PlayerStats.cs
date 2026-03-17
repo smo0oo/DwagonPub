@@ -3,6 +3,7 @@ using System;
 using System.Text;
 using System.Collections.Generic;
 using System.Linq;
+using System.Collections;
 
 public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
 {
@@ -50,21 +51,19 @@ public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
     [Range(1, 60)]
     public int regenTickInterval = 8;
 
-    [SerializeField, ReadOnlyInspector] private float calculatedManaRegen;
+    [SerializeField] private float calculatedManaRegen;
     private float accumulatedRegenTime = 0f;
 
-    [SerializeField]
-    private List<Ability> unlockedAbilityBase = new List<Ability>();
-    [SerializeField]
-    private List<int> unlockedAbilityRank = new List<int>();
+    [SerializeField] private List<Ability> unlockedAbilityBase = new List<Ability>();
+    [SerializeField] private List<int> unlockedAbilityRank = new List<int>();
     public Dictionary<Ability, int> unlockedAbilityRanks = new Dictionary<Ability, int>();
     public List<Ability> knownAbilities = new List<Ability>();
 
     private PlayerEquipment playerEquipment;
     private Health playerHealth;
-    private PartyManager partyManager;
+    private PlayerHotbar playerHotbar;
 
-    public int currentLevel => partyManager != null ? partyManager.partyLevel : 1;
+    public int currentLevel => PartyManager.instance != null ? PartyManager.instance.partyLevel : 1;
 
     void Awake()
     {
@@ -75,27 +74,33 @@ public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
         {
             playerEquipment = root.PlayerEquipment;
             playerHealth = root.Health;
+            playerHotbar = root.GetComponentInChildren<PlayerHotbar>();
         }
         else
         {
             Debug.LogError("PlayerStats could not find CharacterRoot on its parent hierarchy!", this);
         }
-
-        partyManager = FindFirstObjectByType<PartyManager>();
     }
 
     void Start()
     {
-        GrantDefaultAbilities();
-
         CalculateFinalStats();
         if (playerHealth != null)
         {
             playerHealth.SetToMaxHealth();
         }
-        UpdateKnownAbilities();
         currentMana = maxMana;
         OnManaChanged?.Invoke();
+
+        StartCoroutine(DelayedAbilityGrant());
+    }
+
+    private IEnumerator DelayedAbilityGrant()
+    {
+        yield return new WaitForEndOfFrame();
+
+        GrantDefaultAbilities();
+        UpdateKnownAbilities();
     }
 
     void Update()
@@ -132,20 +137,67 @@ public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
                     if (!unlockedAbilityRanks.ContainsKey(baseAbility))
                     {
                         unlockedAbilityRanks[baseAbility] = 1;
+
+                        if (playerHotbar != null)
+                        {
+                            playerHotbar.AutoAssignAbility(baseAbility);
+                        }
                     }
                 }
             }
         }
     }
 
-    public void OnBeforeSerialize() { unlockedAbilityBase.Clear(); unlockedAbilityRank.Clear(); foreach (var kvp in unlockedAbilityRanks) { unlockedAbilityBase.Add(kvp.Key); unlockedAbilityRank.Add(kvp.Value); } }
-    public void OnAfterDeserialize() { unlockedAbilityRanks = new Dictionary<Ability, int>(); for (int i = 0; i < unlockedAbilityBase.Count; i++) { if (unlockedAbilityBase[i] != null && !unlockedAbilityRanks.ContainsKey(unlockedAbilityBase[i])) { unlockedAbilityRanks.Add(unlockedAbilityBase[i], unlockedAbilityRank[i]); } } }
+    public void OnBeforeSerialize()
+    {
+        unlockedAbilityBase.Clear();
+        unlockedAbilityRank.Clear();
+        foreach (var kvp in unlockedAbilityRanks)
+        {
+            unlockedAbilityBase.Add(kvp.Key);
+            unlockedAbilityRank.Add(kvp.Value);
+        }
+    }
 
-    public void SpendMana(float amount) { currentMana -= amount; if (currentMana < 0) currentMana = 0; OnManaChanged?.Invoke(); }
+    public void OnAfterDeserialize()
+    {
+        unlockedAbilityRanks = new Dictionary<Ability, int>();
+        for (int i = 0; i < unlockedAbilityBase.Count; i++)
+        {
+            if (unlockedAbilityBase[i] != null && !unlockedAbilityRanks.ContainsKey(unlockedAbilityBase[i]))
+            {
+                unlockedAbilityRanks.Add(unlockedAbilityBase[i], unlockedAbilityRank[i]);
+            }
+        }
+    }
 
-    public float CalculateWeaponDps(ItemWeaponStats weaponStats) { if (weaponStats == null || weaponStats.baseAttackTime <= 0) { return 0f; } float avgWeaponDamage = (weaponStats.DamageLow + weaponStats.DamageHigh) / 2f; float avgHitDamage = avgWeaponDamage + secondaryStats.damageMultiplier; float critModifiedDamage = avgHitDamage * (1 + (secondaryStats.critChance / 100f)); float finalAttackTime = weaponStats.baseAttackTime / secondaryStats.attackSpeed; return critModifiedDamage / finalAttackTime; }
+    public void SpendMana(float amount)
+    {
+        currentMana -= amount;
+        if (currentMana < 0) currentMana = 0;
+        OnManaChanged?.Invoke();
+    }
 
-    public void AddSkillPoints(int amount) { unspentSkillPoints += amount; OnSkillPointsChanged?.Invoke(); }
+    public float CalculateWeaponDps(ItemWeaponStats weaponStats)
+    {
+        if (weaponStats == null || weaponStats.baseAttackTime <= 0)
+        {
+            return 0f;
+        }
+
+        float avgWeaponDamage = (weaponStats.DamageLow + weaponStats.DamageHigh) / 2f;
+        float avgHitDamage = avgWeaponDamage + secondaryStats.damageMultiplier;
+        float critModifiedDamage = avgHitDamage * (1 + (secondaryStats.critChance / 100f));
+        float finalAttackTime = weaponStats.baseAttackTime / secondaryStats.attackSpeed;
+
+        return critModifiedDamage / finalAttackTime;
+    }
+
+    public void AddSkillPoints(int amount)
+    {
+        unspentSkillPoints += amount;
+        OnSkillPointsChanged?.Invoke();
+    }
 
     public void LearnSkill(SkillNode skillToLearn)
     {
@@ -153,7 +205,6 @@ public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
 
         Ability baseAbility = skillToLearn.skillRanks[0];
 
-        // --- NEW: Check if this is the very first time we are unlocking this ability ---
         bool isNewUnlock = !unlockedAbilityRanks.ContainsKey(baseAbility) || unlockedAbilityRanks[baseAbility] == 0;
 
         unlockedAbilityRanks.TryGetValue(baseAbility, out int currentRank);
@@ -163,16 +214,51 @@ public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
         UpdateKnownAbilities();
         OnSkillPointsChanged?.Invoke();
 
-        // --- NEW: Trigger the Auto-Assign if it's a new unlock ---
-        if (isNewUnlock && HotbarManager.instance != null)
+        if (isNewUnlock && playerHotbar != null)
         {
-            HotbarManager.instance.AutoAssignAbility(baseAbility);
+            playerHotbar.AutoAssignAbility(baseAbility);
         }
     }
 
-    private void UpdateKnownAbilities() { knownAbilities.Clear(); if (characterClass == null || characterClass.classSkillTree == null) return; foreach (var skillNode in characterClass.classSkillTree.skillNodes) { if (skillNode.skillRanks.Count == 0) continue; Ability baseAbility = skillNode.skillRanks[0]; if (unlockedAbilityRanks.TryGetValue(baseAbility, out int currentRank)) { for (int i = 0; i < currentRank; i++) { if (i < skillNode.skillRanks.Count) { knownAbilities.Add(skillNode.skillRanks[i]); } } } } OnAbilitiesChanged?.Invoke(); }
+    private void UpdateKnownAbilities()
+    {
+        knownAbilities.Clear();
+        if (characterClass == null || characterClass.classSkillTree == null) return;
 
-    public void AllocateStatPoint(string statName) { if (unspentStatPoints <= 0) return; switch (statName) { case "Strength": bonusStrength++; break; case "Agility": bonusAgility++; break; case "Intelligence": bonusIntelligence++; break; case "Faith": bonusFaith++; break; } unspentStatPoints--; CalculateFinalStats(); }
+        foreach (var skillNode in characterClass.classSkillTree.skillNodes)
+        {
+            if (skillNode.skillRanks.Count == 0) continue;
+
+            Ability baseAbility = skillNode.skillRanks[0];
+            if (unlockedAbilityRanks.TryGetValue(baseAbility, out int currentRank))
+            {
+                for (int i = 0; i < currentRank; i++)
+                {
+                    if (i < skillNode.skillRanks.Count)
+                    {
+                        knownAbilities.Add(skillNode.skillRanks[i]);
+                    }
+                }
+            }
+        }
+        OnAbilitiesChanged?.Invoke();
+    }
+
+    public void AllocateStatPoint(string statName)
+    {
+        if (unspentStatPoints <= 0) return;
+
+        switch (statName)
+        {
+            case "Strength": bonusStrength++; break;
+            case "Agility": bonusAgility++; break;
+            case "Intelligence": bonusIntelligence++; break;
+            case "Faith": bonusFaith++; break;
+        }
+
+        unspentStatPoints--;
+        CalculateFinalStats();
+    }
 
     public float RestoreMana(float amount)
     {
@@ -210,11 +296,107 @@ public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
         OnManaChanged?.Invoke();
     }
 
-    private void ApplyEquipmentPrimaryStats() { if (playerEquipment == null) return; foreach (ItemStack item in playerEquipment.equippedItems.Values) { if (item == null) continue; if (item.itemData.stats is ItemArmourStats armour) { finalStrength += armour.strengthBonus; finalAgility += armour.agilityBonus; finalIntelligence += armour.intelligenceBonus; finalFaith += armour.faithBonus; } else if (item.itemData.stats is ItemWeaponStats weapon) { finalStrength += weapon.strengthBonus; finalAgility += weapon.agilityBonus; finalIntelligence += weapon.intelligenceBonus; finalFaith += weapon.faithBonus; } else if (item.itemData.stats is ItemTrinketStats trinket) { finalStrength += trinket.strengthBonus; finalAgility += trinket.agilityBonus; finalIntelligence += trinket.intelligenceBonus; finalFaith += trinket.faithBonus; } } }
+    private void ApplyEquipmentPrimaryStats()
+    {
+        if (playerEquipment == null) return;
 
-    private void CalculateSecondaryRatings(int strBeforeGear, int agiBeforeGear, int intBeforeGear, int faiBeforeGear) { float strRate = partyManager != null ? partyManager.strengthConversionRate : 1f; float agiRate = partyManager != null ? partyManager.agilityConversionRate : 1f; float intRate = partyManager != null ? partyManager.intelligenceConversionRate : 1f; float faiRate = partyManager != null ? partyManager.faithConversionRate : 1f; float armRate = partyManager != null ? partyManager.armorResistanceConversionRate : 0.25f; secondaryStats.damageRating = (int)(finalStrength * strRate); secondaryStats.blockRating = (int)(finalStrength * strRate); secondaryStats.parryRating = (int)(finalStrength * strRate); secondaryStats.critRating = (int)(finalAgility * agiRate); secondaryStats.dodgeRating = (int)(finalAgility * agiRate); secondaryStats.hasteRating = (int)(finalAgility * agiRate); secondaryStats.spellCritRating = (int)(finalIntelligence * intRate); secondaryStats.cooldownReductionRating = (int)(finalIntelligence * intRate); secondaryStats.healingBonusRating = (int)(finalFaith * faiRate); secondaryStats.magicAttackRating = (int)(finalFaith * faiRate); secondaryStats.physicalResistanceRating = 0; secondaryStats.magicResistanceRating = 0; if (playerEquipment == null) return; foreach (ItemStack item in playerEquipment.equippedItems.Values) { if (item == null) continue; if (item.itemData.stats is ItemArmourStats armour) { secondaryStats.physicalResistanceRating += (int)(armour.armourPhysRes * armRate); secondaryStats.magicResistanceRating += (int)(armour.armourMagRes * armRate); secondaryStats.blockRating += armour.blockRatingBonus; secondaryStats.parryRating += armour.parryRatingBonus; secondaryStats.critRating += armour.critRatingBonus; secondaryStats.dodgeRating += armour.dodgeRatingBonus; } else if (item.itemData.stats is ItemWeaponStats weapon) { secondaryStats.critRating += weapon.critRatingBonus; secondaryStats.hasteRating += weapon.hasteRatingBonus; } } }
+        foreach (ItemStack item in playerEquipment.equippedItems.Values)
+        {
+            if (item == null) continue;
 
-    private void ConvertRatingsToPercentages() { int playerLevel = partyManager != null ? partyManager.partyLevel : 1; float ratingDivisor = (partyManager != null ? partyManager.ratingToPercentDivisor : 50f) * playerLevel; if (ratingDivisor <= 0) ratingDivisor = 1f; float damageRoot = partyManager != null ? partyManager.directDamageLevelRoot : 2f; if (damageRoot <= 0) damageRoot = 1f; float damageLevelDivisor = Mathf.Pow(playerLevel, 1f / damageRoot); if (damageLevelDivisor <= 0) damageLevelDivisor = 1f; secondaryStats.damageMultiplier = secondaryStats.damageRating / damageLevelDivisor; secondaryStats.magicAttackDamage = secondaryStats.magicAttackRating / damageLevelDivisor; secondaryStats.blockChance = secondaryStats.blockRating / ratingDivisor * 100f; secondaryStats.parryChance = secondaryStats.parryRating / ratingDivisor * 100f; secondaryStats.critChance = secondaryStats.critRating / ratingDivisor * 100f; secondaryStats.dodgeChance = secondaryStats.dodgeRating / ratingDivisor * 100f; secondaryStats.attackSpeed = 1.0f + ((secondaryStats.hasteRating / ratingDivisor * 100f) / 100f); secondaryStats.spellCritChance = secondaryStats.spellCritRating / ratingDivisor * 100f; secondaryStats.cooldownReduction = 1.0f - ((secondaryStats.cooldownReductionRating / ratingDivisor * 100f) / 100f); secondaryStats.healingBonus = secondaryStats.healingBonusRating * 0.5f; secondaryStats.magicResistance = secondaryStats.magicResistanceRating / ratingDivisor * 100f; secondaryStats.physicalResistance = secondaryStats.physicalResistanceRating / ratingDivisor * 100f; }
+            if (item.itemData.stats is ItemArmourStats armour)
+            {
+                finalStrength += armour.strengthBonus;
+                finalAgility += armour.agilityBonus;
+                finalIntelligence += armour.intelligenceBonus;
+                finalFaith += armour.faithBonus;
+            }
+            else if (item.itemData.stats is ItemWeaponStats weapon)
+            {
+                finalStrength += weapon.strengthBonus;
+                finalAgility += weapon.agilityBonus;
+                finalIntelligence += weapon.intelligenceBonus;
+                finalFaith += weapon.faithBonus;
+            }
+            else if (item.itemData.stats is ItemTrinketStats trinket)
+            {
+                finalStrength += trinket.strengthBonus;
+                finalAgility += trinket.agilityBonus;
+                finalIntelligence += trinket.intelligenceBonus;
+                finalFaith += trinket.faithBonus;
+            }
+        }
+    }
+
+    private void CalculateSecondaryRatings(int strBeforeGear, int agiBeforeGear, int intBeforeGear, int faiBeforeGear)
+    {
+        float strRate = PartyManager.instance != null ? PartyManager.instance.strengthConversionRate : 1f;
+        float agiRate = PartyManager.instance != null ? PartyManager.instance.agilityConversionRate : 1f;
+        float intRate = PartyManager.instance != null ? PartyManager.instance.intelligenceConversionRate : 1f;
+        float faiRate = PartyManager.instance != null ? PartyManager.instance.faithConversionRate : 1f;
+        float armRate = PartyManager.instance != null ? PartyManager.instance.armorResistanceConversionRate : 0.25f;
+
+        secondaryStats.damageRating = (int)(finalStrength * strRate);
+        secondaryStats.blockRating = (int)(finalStrength * strRate);
+        secondaryStats.parryRating = (int)(finalStrength * strRate);
+        secondaryStats.critRating = (int)(finalAgility * agiRate);
+        secondaryStats.dodgeRating = (int)(finalAgility * agiRate);
+        secondaryStats.hasteRating = (int)(finalAgility * agiRate);
+        secondaryStats.spellCritRating = (int)(finalIntelligence * intRate);
+        secondaryStats.cooldownReductionRating = (int)(finalIntelligence * intRate);
+        secondaryStats.healingBonusRating = (int)(finalFaith * faiRate);
+        secondaryStats.magicAttackRating = (int)(finalFaith * faiRate);
+        secondaryStats.physicalResistanceRating = 0;
+        secondaryStats.magicResistanceRating = 0;
+
+        if (playerEquipment == null) return;
+
+        foreach (ItemStack item in playerEquipment.equippedItems.Values)
+        {
+            if (item == null) continue;
+
+            if (item.itemData.stats is ItemArmourStats armour)
+            {
+                secondaryStats.physicalResistanceRating += (int)(armour.armourPhysRes * armRate);
+                secondaryStats.magicResistanceRating += (int)(armour.armourMagRes * armRate);
+                secondaryStats.blockRating += armour.blockRatingBonus;
+                secondaryStats.parryRating += armour.parryRatingBonus;
+                secondaryStats.critRating += armour.critRatingBonus;
+                secondaryStats.dodgeRating += armour.dodgeRatingBonus;
+            }
+            else if (item.itemData.stats is ItemWeaponStats weapon)
+            {
+                secondaryStats.critRating += weapon.critRatingBonus;
+                secondaryStats.hasteRating += weapon.hasteRatingBonus;
+            }
+        }
+    }
+
+    private void ConvertRatingsToPercentages()
+    {
+        int playerLevel = PartyManager.instance != null ? PartyManager.instance.partyLevel : 1;
+        float ratingDivisor = (PartyManager.instance != null ? PartyManager.instance.ratingToPercentDivisor : 50f) * playerLevel;
+        if (ratingDivisor <= 0) ratingDivisor = 1f;
+
+        float damageRoot = PartyManager.instance != null ? PartyManager.instance.directDamageLevelRoot : 2f;
+        if (damageRoot <= 0) damageRoot = 1f;
+
+        float damageLevelDivisor = Mathf.Pow(playerLevel, 1f / damageRoot);
+        if (damageLevelDivisor <= 0) damageLevelDivisor = 1f;
+
+        secondaryStats.damageMultiplier = secondaryStats.damageRating / damageLevelDivisor;
+        secondaryStats.magicAttackDamage = secondaryStats.magicAttackRating / damageLevelDivisor;
+        secondaryStats.blockChance = secondaryStats.blockRating / ratingDivisor * 100f;
+        secondaryStats.parryChance = secondaryStats.parryRating / ratingDivisor * 100f;
+        secondaryStats.critChance = secondaryStats.critRating / ratingDivisor * 100f;
+        secondaryStats.dodgeChance = secondaryStats.dodgeRating / ratingDivisor * 100f;
+        secondaryStats.attackSpeed = 1.0f + ((secondaryStats.hasteRating / ratingDivisor * 100f) / 100f);
+        secondaryStats.spellCritChance = secondaryStats.spellCritRating / ratingDivisor * 100f;
+        secondaryStats.cooldownReduction = 1.0f - ((secondaryStats.cooldownReductionRating / ratingDivisor * 100f) / 100f);
+        secondaryStats.healingBonus = secondaryStats.healingBonusRating * 0.5f;
+        secondaryStats.magicResistance = secondaryStats.magicResistanceRating / ratingDivisor * 100f;
+        secondaryStats.physicalResistance = secondaryStats.physicalResistanceRating / ratingDivisor * 100f;
+    }
 
     private void UpdateResources()
     {
@@ -228,49 +410,107 @@ public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
 
     private void GenerateTooltips(int strBeforeGear, int agiBeforeGear, int intBeforeGear, int faiBeforeGear)
     {
-        int playerLevel = partyManager != null ? partyManager.partyLevel : 1;
-        float ratingDivisor = (partyManager != null ? partyManager.ratingToPercentDivisor : 50f) * playerLevel;
+        int playerLevel = PartyManager.instance != null ? PartyManager.instance.partyLevel : 1;
+        float ratingDivisor = (PartyManager.instance != null ? PartyManager.instance.ratingToPercentDivisor : 50f) * playerLevel;
         if (ratingDivisor <= 0) ratingDivisor = 1;
-        float strRate = partyManager != null ? partyManager.strengthConversionRate : 1f;
-        float agiRate = partyManager != null ? partyManager.agilityConversionRate : 1f;
-        float intRate = partyManager != null ? partyManager.intelligenceConversionRate : 1f;
+        float strRate = PartyManager.instance != null ? PartyManager.instance.strengthConversionRate : 1f;
+        float agiRate = PartyManager.instance != null ? PartyManager.instance.agilityConversionRate : 1f;
+        float intRate = PartyManager.instance != null ? PartyManager.instance.intelligenceConversionRate : 1f;
+
         var sb = new StringBuilder();
         string conversionText = $"Conversion: {ratingDivisor:F0} rating = 1%";
+
         int bonusCritFromGear = secondaryStats.critRating - (int)(finalAgility * agiRate);
-        sb.Clear().AppendLine($"{secondaryStats.critChance:F2}% Critical Strike Chance").AppendLine("--------------------").AppendLine($"From Agility: {(int)(agiBeforeGear * agiRate)} rating").AppendLine($"From Gear (Primary): {(int)((finalAgility - agiBeforeGear) * agiRate)} rating").AppendLine($"From Gear (Secondary): {bonusCritFromGear} rating").AppendLine("--------------------").AppendLine($"Total Rating: {secondaryStats.critRating}").Append(conversionText);
+        sb.Clear().AppendLine($"{secondaryStats.critChance:F2}% Critical Strike Chance")
+            .AppendLine("--------------------")
+            .AppendLine($"From Agility: {(int)(agiBeforeGear * agiRate)} rating")
+            .AppendLine($"From Gear (Primary): {(int)((finalAgility - agiBeforeGear) * agiRate)} rating")
+            .AppendLine($"From Gear (Secondary): {bonusCritFromGear} rating")
+            .AppendLine("--------------------")
+            .AppendLine($"Total Rating: {secondaryStats.critRating}")
+            .Append(conversionText);
         secondaryStats.critChanceTooltip = sb.ToString();
 
-        sb.Clear().AppendLine($"{secondaryStats.spellCritChance:F2}% Spell Critical Chance").AppendLine("--------------------").AppendLine($"From Intelligence: {(int)(intBeforeGear * intRate)} rating").AppendLine($"From Gear (Primary): {(int)((finalIntelligence - intBeforeGear) * intRate)} rating").AppendLine("--------------------").AppendLine($"Total Rating: {secondaryStats.spellCritRating}").Append(conversionText);
+        sb.Clear().AppendLine($"{secondaryStats.spellCritChance:F2}% Spell Critical Chance")
+            .AppendLine("--------------------")
+            .AppendLine($"From Intelligence: {(int)(intBeforeGear * intRate)} rating")
+            .AppendLine($"From Gear (Primary): {(int)((finalIntelligence - intBeforeGear) * intRate)} rating")
+            .AppendLine("--------------------")
+            .AppendLine($"Total Rating: {secondaryStats.spellCritRating}")
+            .Append(conversionText);
         secondaryStats.spellCritChanceTooltip = sb.ToString();
 
         int bonusDodgeFromGear = secondaryStats.dodgeRating - (int)(finalAgility * agiRate);
-        sb.Clear().AppendLine($"{secondaryStats.dodgeChance:F2}% Dodge Chance").AppendLine("--------------------").AppendLine($"From Agility: {(int)(agiBeforeGear * agiRate)} rating").AppendLine($"From Gear (Primary): {(int)((finalAgility - agiBeforeGear) * agiRate)} rating").AppendLine($"From Gear (Secondary): {bonusDodgeFromGear} rating").AppendLine("--------------------").AppendLine($"Total Rating: {secondaryStats.dodgeRating}").Append(conversionText);
+        sb.Clear().AppendLine($"{secondaryStats.dodgeChance:F2}% Dodge Chance")
+            .AppendLine("--------------------")
+            .AppendLine($"From Agility: {(int)(agiBeforeGear * agiRate)} rating")
+            .AppendLine($"From Gear (Primary): {(int)((finalAgility - agiBeforeGear) * agiRate)} rating")
+            .AppendLine($"From Gear (Secondary): {bonusDodgeFromGear} rating")
+            .AppendLine("--------------------")
+            .AppendLine($"Total Rating: {secondaryStats.dodgeRating}")
+            .Append(conversionText);
         secondaryStats.dodgeChanceTooltip = sb.ToString();
 
         int bonusParryFromGear = secondaryStats.parryRating - (int)(finalStrength * strRate);
-        sb.Clear().AppendLine($"{secondaryStats.parryChance:F2}% Parry Chance").AppendLine("--------------------").AppendLine($"From Strength: {(int)(strBeforeGear * strRate)} rating").AppendLine($"From Gear (Primary): {(int)((finalStrength - strBeforeGear) * strRate)} rating").AppendLine($"From Gear (Secondary): {bonusParryFromGear} rating").AppendLine("--------------------").AppendLine($"Total Rating: {secondaryStats.parryRating}").Append(conversionText);
+        sb.Clear().AppendLine($"{secondaryStats.parryChance:F2}% Parry Chance")
+            .AppendLine("--------------------")
+            .AppendLine($"From Strength: {(int)(strBeforeGear * strRate)} rating")
+            .AppendLine($"From Gear (Primary): {(int)((finalStrength - strBeforeGear) * strRate)} rating")
+            .AppendLine($"From Gear (Secondary): {bonusParryFromGear} rating")
+            .AppendLine("--------------------")
+            .AppendLine($"Total Rating: {secondaryStats.parryRating}")
+            .Append(conversionText);
         secondaryStats.parryChanceTooltip = sb.ToString();
 
         int bonusBlockFromGear = secondaryStats.blockRating - (int)(finalStrength * strRate);
-        sb.Clear().AppendLine($"{secondaryStats.blockChance:F2}% Block Chance").AppendLine("--------------------").AppendLine($"From Strength: {(int)(strBeforeGear * strRate)} rating").AppendLine($"From Gear (Primary): {(int)((finalStrength - strBeforeGear) * strRate)} rating").AppendLine($"From Gear (Secondary): {bonusBlockFromGear} rating").AppendLine("--------------------").AppendLine($"Total Rating: {secondaryStats.blockRating}").Append(conversionText);
+        sb.Clear().AppendLine($"{secondaryStats.blockChance:F2}% Block Chance")
+            .AppendLine("--------------------")
+            .AppendLine($"From Strength: {(int)(strBeforeGear * strRate)} rating")
+            .AppendLine($"From Gear (Primary): {(int)((finalStrength - strBeforeGear) * strRate)} rating")
+            .AppendLine($"From Gear (Secondary): {bonusBlockFromGear} rating")
+            .AppendLine("--------------------")
+            .AppendLine($"Total Rating: {secondaryStats.blockRating}")
+            .Append(conversionText);
         secondaryStats.blockChanceTooltip = sb.ToString();
 
         int bonusHasteFromGear = secondaryStats.hasteRating - (int)(finalAgility * agiRate);
-        sb.Clear().AppendLine($"{(secondaryStats.attackSpeed - 1.0f) * 100f:F2}% increased Attack Speed").AppendLine("--------------------").AppendLine($"From Agility: {(int)(agiBeforeGear * agiRate)} rating").AppendLine($"From Gear (Primary): {(int)((finalAgility - agiBeforeGear) * agiRate)} rating").AppendLine($"From Gear (Secondary): {bonusHasteFromGear} rating").AppendLine("--------------------").AppendLine($"Total Haste Rating: {secondaryStats.hasteRating}").Append(conversionText);
+        sb.Clear().AppendLine($"{(secondaryStats.attackSpeed - 1.0f) * 100f:F2}% increased Attack Speed")
+            .AppendLine("--------------------")
+            .AppendLine($"From Agility: {(int)(agiBeforeGear * agiRate)} rating")
+            .AppendLine($"From Gear (Primary): {(int)((finalAgility - agiBeforeGear) * agiRate)} rating")
+            .AppendLine($"From Gear (Secondary): {bonusHasteFromGear} rating")
+            .AppendLine("--------------------")
+            .AppendLine($"Total Haste Rating: {secondaryStats.hasteRating}")
+            .Append(conversionText);
         secondaryStats.attackSpeedTooltip = sb.ToString();
 
-        sb.Clear().AppendLine($"{(1.0f - secondaryStats.cooldownReduction) * 100f:F2}% Cooldown Reduction").AppendLine("--------------------").AppendLine($"From Intelligence: {(int)(intBeforeGear * intRate)} rating").AppendLine($"From Gear (Primary): {(int)((finalIntelligence - intBeforeGear) * intRate)} rating").AppendLine("--------------------").AppendLine($"Total Rating: {secondaryStats.cooldownReductionRating}").Append(conversionText);
+        sb.Clear().AppendLine($"{(1.0f - secondaryStats.cooldownReduction) * 100f:F2}% Cooldown Reduction")
+            .AppendLine("--------------------")
+            .AppendLine($"From Intelligence: {(int)(intBeforeGear * intRate)} rating")
+            .AppendLine($"From Gear (Primary): {(int)((finalIntelligence - intBeforeGear) * intRate)} rating")
+            .AppendLine("--------------------")
+            .AppendLine($"Total Rating: {secondaryStats.cooldownReductionRating}")
+            .Append(conversionText);
         secondaryStats.cooldownReductionTooltip = sb.ToString();
 
-        sb.Clear().AppendLine($"{secondaryStats.magicResistance:F2}% Magic Resistance").AppendLine("--------------------").AppendLine($"Total Rating: {secondaryStats.magicResistanceRating}").Append(conversionText);
+        sb.Clear().AppendLine($"{secondaryStats.magicResistance:F2}% Magic Resistance")
+            .AppendLine("--------------------")
+            .AppendLine($"Total Rating: {secondaryStats.magicResistanceRating}")
+            .Append(conversionText);
         secondaryStats.magicResistTooltip = sb.ToString();
 
-        sb.Clear().AppendLine($"{secondaryStats.healingBonus:F2}% Healing Bonus").AppendLine("--------------------").AppendLine($"Total Healing Rating: {secondaryStats.healingBonusRating}").Append("Conversion: 2 rating = 1% bonus");
+        sb.Clear().AppendLine($"{secondaryStats.healingBonus:F2}% Healing Bonus")
+            .AppendLine("--------------------")
+            .AppendLine($"Total Healing Rating: {secondaryStats.healingBonusRating}")
+            .Append("Conversion: 2 rating = 1% bonus");
         secondaryStats.healingBonusTooltip = sb.ToString();
 
         if (playerHealth != null)
         {
-            sb.Clear().AppendLine($"<color=green>Health: {playerHealth.maxHealth}</color>").AppendLine("--------------------").AppendLine("Base Health: 100").AppendLine($"From Strength: +{finalStrength * 10}");
+            sb.Clear().AppendLine($"<color=green>Health: {playerHealth.maxHealth}</color>")
+                .AppendLine("--------------------")
+                .AppendLine("Base Health: 100")
+                .AppendLine($"From Strength: +{finalStrength * 10}");
             secondaryStats.healthTooltip = sb.ToString();
         }
 
@@ -283,6 +523,3 @@ public class PlayerStats : MonoBehaviour, ISerializationCallbackReceiver
         secondaryStats.manaTooltip = sb.ToString();
     }
 }
-
-// Simple Helper Attribute for ReadOnly in Inspector
-public class ReadOnlyInspectorAttribute : PropertyAttribute { }

@@ -13,19 +13,17 @@ public class AbilityEditor : Editor
     private bool showPayload = false;
     private bool showVisuals = false;
     private bool showEffects = true;
-    private bool showAI = false;
+    private bool showAI = true; // Now defaults to TRUE so you don't miss the AI properties!
 
     private readonly string[] coreProps = { "abilityName", "displayName", "rank", "icon", "description", "cooldown", "manaCost" };
     private readonly string[] targetingProps = { "abilityType", "locksPlayerActivity", "requiresWeaponType", "requiredWeaponCategories", "range", "canHitCaster" };
     private readonly string[] castingProps = { "showCastBar", "canMoveWhileCasting", "castTime", "triggersGlobalCooldown", "telegraphDuration", "telegraphAnimationTrigger", "attackStyleIndex", "overrideTriggerName", "movementLockDuration", "randomizeAttackStyle", "maxRandomVariants" };
     private readonly string[] comboProps = { "nextComboLink", "comboWindow", "bypassGcdOnCombo" }; 
-    
-    // --- AAA FIX: Added toggle to the Payload Array ---
     private readonly string[] payloadProps = { "playerProjectilePrefab", "enemyProjectilePrefab", "projectileSpawnDelay", "useCoroutineForProjectiles", "projectileCount", "burstDelay", "spreadAngle", "attackBoxSize", "attackBoxCenter", "hitboxOpenDelay", "hitboxCloseDelay", "aoeRadius", "placementPrefab", "manaDrain", "tickRate" };
-    // --------------------------------------------------
-    
     private readonly string[] visualProps = { "targetingReticleOverride", "castingVFX", "castingVFXAnchor", "castingVFXPositionOffset", "castingVFXRotationOffset", "attachCastingVFX", "castVFX", "castVFXAnchor", "castVFXPositionOffset", "castVFXRotationOffset", "attachCastVFX", "castVFXDelay", "styleVFXOverrides", "hitVFX", "hitVFXPositionOffset", "hitVFXRotationOffset", "windupSound", "castSound", "impactSound", "screenShakeIntensity", "screenShakeDuration" };
-    private readonly string[] effectProps = { "effects", "onCastEffects", "friendlyEffects", "hostileEffects" };
+    
+    // Purged the legacy string array
+    private readonly string[] effectProps = { "onCastEffects", "friendlyEffects", "hostileEffects" };
     private readonly string[] aiProps = { "priority", "isAreaEffect", "usageType", "enemyTelegraphPrefab", "isMajorTacticalThreat" };
 
     public override void OnInspectorGUI()
@@ -68,7 +66,6 @@ public class AbilityEditor : Editor
         EditorGUILayout.Space(2);
     }
 
-    // --- RESTORED: All of your Context Menu Effects! ---
     [MenuItem("CONTEXT/Ability/Add On Cast Effect/Sequence Effect")] private static void AddOnCastSequenceEffect(MenuCommand command) { Ability a = (Ability)command.context; a.onCastEffects.Add(new SequenceEffect()); EditorUtility.SetDirty(a); }
     [MenuItem("CONTEXT/Ability/Add On Cast Effect/Heal Effect")] private static void AddOnCastHealEffect(MenuCommand command) { Ability a = (Ability)command.context; a.onCastEffects.Add(new HealEffect()); EditorUtility.SetDirty(a); }
     [MenuItem("CONTEXT/Ability/Add On Cast Effect/Damage Effect")] private static void AddOnCastDamageEffect(MenuCommand command) { Ability a = (Ability)command.context; a.onCastEffects.Add(new DamageEffect()); EditorUtility.SetDirty(a); }

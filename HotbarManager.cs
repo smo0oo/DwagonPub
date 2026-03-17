@@ -48,6 +48,9 @@ public class HotbarManager : MonoBehaviour
     private ChanneledBeamController activeBeam = null;
     public Ability LockingAbility { get; set; } = null;
 
+    // Helper to check if a specific character's hotbar is currently being viewed
+    public bool IsActiveHotbar(PlayerHotbar hotbar) => currentPlayerHotbar == hotbar;
+
     void Awake()
     {
         if (instance != null && instance != this) { Destroy(gameObject); }
@@ -57,7 +60,6 @@ public class HotbarManager : MonoBehaviour
     void Start()
     {
         mainCamera = Camera.main;
-        // Updated to use FindFirstObjectByType (non-obsolete)
         dragDropController = UnityEngine.Object.FindFirstObjectByType<UIDragDropController>();
 
         for (int i = 0; i < hotbarSlots.Count; i++)
@@ -302,31 +304,5 @@ public class HotbarManager : MonoBehaviour
 
         HotbarAssignment assignment = currentPlayerHotbar.hotbarSlotAssignments[hotbarIndex];
         h_slot.UpdateSlot(assignment);
-    }
-
-    // --- NEW: AAA Auto-Assign Logic ---
-    public void AutoAssignAbility(Ability ability)
-    {
-        if (currentPlayerHotbar == null || ability == null) return;
-
-        // 1. Prevent duplicates: Check if this exact ability is already on the hotbar
-        for (int i = 0; i < currentPlayerHotbar.hotbarSlotAssignments.Length; i++)
-        {
-            if (currentPlayerHotbar.hotbarSlotAssignments[i].type == HotbarAssignment.AssignmentType.Ability &&
-                currentPlayerHotbar.hotbarSlotAssignments[i].ability == ability)
-            {
-                return; // Already on the hotbar
-            }
-        }
-
-        // 2. Find the first empty slot and assign it
-        for (int i = 0; i < currentPlayerHotbar.hotbarSlotAssignments.Length; i++)
-        {
-            if (currentPlayerHotbar.hotbarSlotAssignments[i].type == HotbarAssignment.AssignmentType.Unassigned)
-            {
-                SetHotbarSlotWithAbility(i, ability);
-                break; // Stop after assigning to the first available slot
-            }
-        }
     }
 }
