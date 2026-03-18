@@ -13,16 +13,18 @@ public class AbilityEditor : Editor
     private bool showPayload = false;
     private bool showVisuals = false;
     private bool showEffects = true;
-    private bool showAI = true; // Now defaults to TRUE so you don't miss the AI properties!
+    private bool showAI = true; 
 
     private readonly string[] coreProps = { "abilityName", "displayName", "rank", "icon", "description", "cooldown", "manaCost" };
     private readonly string[] targetingProps = { "abilityType", "locksPlayerActivity", "requiresWeaponType", "requiredWeaponCategories", "range", "canHitCaster" };
     private readonly string[] castingProps = { "showCastBar", "canMoveWhileCasting", "castTime", "triggersGlobalCooldown", "telegraphDuration", "telegraphAnimationTrigger", "attackStyleIndex", "overrideTriggerName", "movementLockDuration", "randomizeAttackStyle", "maxRandomVariants" };
     private readonly string[] comboProps = { "nextComboLink", "comboWindow", "bypassGcdOnCombo" }; 
-    private readonly string[] payloadProps = { "playerProjectilePrefab", "enemyProjectilePrefab", "projectileSpawnDelay", "useCoroutineForProjectiles", "projectileCount", "burstDelay", "spreadAngle", "attackBoxSize", "attackBoxCenter", "hitboxOpenDelay", "hitboxCloseDelay", "aoeRadius", "placementPrefab", "manaDrain", "tickRate" };
-    private readonly string[] visualProps = { "targetingReticleOverride", "castingVFX", "castingVFXAnchor", "castingVFXPositionOffset", "castingVFXRotationOffset", "attachCastingVFX", "castVFX", "castVFXAnchor", "castVFXPositionOffset", "castVFXRotationOffset", "attachCastVFX", "castVFXDelay", "styleVFXOverrides", "hitVFX", "hitVFXPositionOffset", "hitVFXRotationOffset", "windupSound", "castSound", "impactSound", "screenShakeIntensity", "screenShakeDuration" };
     
-    // Purged the legacy string array
+    // --- AAA FIX: Added piercesEnemies to the Editor view ---
+    private readonly string[] payloadProps = { "projectilePrefab", "projectileSpawnDelay", "piercesEnemies", "useCoroutineForProjectiles", "projectileCount", "burstDelay", "spreadAngle", "attackBoxSize", "attackBoxCenter", "hitboxOpenDelay", "hitboxCloseDelay", "aoeRadius", "placementPrefab", "channeledBeamPrefab", "manaDrain", "tickRate" };
+    // --------------------------------------------------------
+
+    private readonly string[] visualProps = { "targetingReticleOverride", "castingVFX", "castingVFXAnchor", "castingVFXPositionOffset", "castingVFXRotationOffset", "attachCastingVFX", "castVFX", "castVFXAnchor", "castVFXPositionOffset", "castVFXRotationOffset", "attachCastVFX", "castVFXDelay", "styleVFXOverrides", "hitVFX", "hitVFXPositionOffset", "hitVFXRotationOffset", "windupSound", "castSound", "impactSound", "screenShakeIntensity", "screenShakeDuration" };
     private readonly string[] effectProps = { "onCastEffects", "friendlyEffects", "hostileEffects" };
     private readonly string[] aiProps = { "priority", "isAreaEffect", "usageType", "enemyTelegraphPrefab", "isMajorTacticalThreat" };
 

@@ -5,60 +5,37 @@ using System.Collections;
 public class AreaBombardmentController : MonoBehaviour
 {
     [Header("Storm Settings")]
-    [Tooltip("How long the bombardment lasts.")]
     public float duration = 5f;
-    [Tooltip("The radius of the area.")]
     public float radius = 6f;
-    [Tooltip("Optional: Scales the radius based on the Ability's aoeRadius (if set > 0).")]
     public bool useAbilityRadius = true;
 
     [Header("Spawning")]
-    [Tooltip("Projectiles per second.")]
     public float spawnRate = 8f;
-    [Tooltip("Height above the ground to spawn projectiles.")]
     public float spawnHeight = 12f;
-    [Tooltip("The projectile to rain down. Must have a Projectile component.")]
+    [Tooltip("Fallback projectile if the Ability doesn't have one assigned.")]
     public GameObject projectilePrefab;
 
     [Header("Randomness (AAA Polish)")]
-    [Tooltip("Randomize rotation of projectiles slightly for natural variety.")]
     public float rotationVariance = 15f;
-    [Tooltip("Randomize spawn timing slightly to prevent robotic rhythmic spawning.")]
     public float timeVariance = 0.05f;
 
     [Header("Visuals & Audio")]
     public GameObject areaIndicatorVFX;
-    [Tooltip("Optional: Overrides the impact VFX defined in the Ability for these projectiles.")]
     public GameObject projectileImpactVFX;
-
-    [Tooltip("Sound to play on loop while the storm is active.")]
     public AudioClip ambienceLoop;
     public float ambienceFadeDuration = 1.0f;
 
-    // State Data
     private GameObject caster;
     private Ability sourceAbility;
     private int casterLayer;
     private AudioSource audioSource;
     private float stopTime;
-    private bool isRuntimeClone = false;
 
     public void Initialize(GameObject caster, Ability ability)
     {
         this.caster = caster;
         this.casterLayer = caster.GetComponentInParent<CharacterRoot>()?.gameObject.layer ?? caster.layer;
-
-        if (projectileImpactVFX != null && ability != null)
-        {
-            this.sourceAbility = Instantiate(ability);
-            this.sourceAbility.name = ability.name + " (VFX Override)";
-            this.sourceAbility.hitVFX = projectileImpactVFX;
-            isRuntimeClone = true;
-        }
-        else
-        {
-            this.sourceAbility = ability;
-        }
+        this.sourceAbility = ability;
 
         if (useAbilityRadius && this.sourceAbility != null && this.sourceAbility.aoeRadius > 0)
             this.radius = this.sourceAbility.aoeRadius;
@@ -81,16 +58,7 @@ public class AreaBombardmentController : MonoBehaviour
 
         stopTime = Time.time + duration;
         StartCoroutine(BombardmentRoutine());
-
         Destroy(gameObject, duration + 5.0f);
-    }
-
-    void OnDestroy()
-    {
-        if (isRuntimeClone && sourceAbility != null)
-        {
-            Destroy(sourceAbility);
-        }
     }
 
     private IEnumerator BombardmentRoutine()
@@ -109,7 +77,9 @@ public class AreaBombardmentController : MonoBehaviour
 
     private void SpawnProjectile()
     {
-        if (projectilePrefab == null) return;
+        // --- AAA FIX: Unified Prefab Logic ---
+        GameObject prefabToSpawn = (sourceAbility != null && sourceAbility.projectilePrefab != null) ? sourceAbility.projectilePrefab : projectilePrefab;
+        if (prefabToSpawn == null) return;
 
         Vector2 randomCircle = Random.insideUnitCircle * radius;
         Vector3 groundPos = transform.position + new Vector3(randomCircle.x, 0, randomCircle.y);
@@ -123,11 +93,10 @@ public class AreaBombardmentController : MonoBehaviour
             rotation *= Quaternion.Euler(randomX, 0, randomZ);
         }
 
-        GameObject projObj = ObjectPooler.instance.Get(projectilePrefab, spawnPos, rotation);
+        GameObject projObj = ObjectPooler.instance.Get(prefabToSpawn, spawnPos, rotation);
 
         if (projObj != null)
         {
-            // --- AAA FIX: Set the proper physical layer so the Collision Matrix registers it! ---
             int playerLayer = LayerMask.NameToLayer("Player");
             int friendlyLayer = LayerMask.NameToLayer("Friendly");
 
@@ -139,14 +108,14 @@ public class AreaBombardmentController : MonoBehaviour
             {
                 projObj.layer = targetRangedLayer;
             }
-            // -----------------------------------------------------------------------------------
 
             if (projObj.TryGetComponent<Projectile>(out var projComponent))
             {
+                projComponent.vfxOverride = projectileImpactVFX;
+                // The Projectile is fully autonomous now!
                 projComponent.Initialize(sourceAbility, caster, casterLayer);
             }
 
-            // --- AAA FIX: Ignore the caster's colliders just in case ---
             Collider pCol = projObj.GetComponent<Collider>();
             if (pCol != null && caster != null)
             {
@@ -155,7 +124,6 @@ public class AreaBombardmentController : MonoBehaviour
                     Physics.IgnoreCollision(pCol, c);
                 }
             }
-            // -----------------------------------------------------------
 
             projObj.SetActive(true);
         }

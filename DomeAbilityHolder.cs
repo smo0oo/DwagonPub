@@ -32,7 +32,6 @@ public class DomeAbilityHolder : MonoBehaviour
 
         PayCostAndStartCooldown(ability, bypassCooldown);
 
-        // AAA FIX: Activate Cast VFX
         if (ability.castVFX != null)
         {
             GameObject vfx = ObjectPooler.instance.Get(ability.castVFX, transform.position, transform.rotation);
@@ -62,7 +61,6 @@ public class DomeAbilityHolder : MonoBehaviour
 
         PayCostAndStartCooldown(ability, bypassCooldown);
 
-        // AAA FIX: Activate Cast VFX
         if (ability.castVFX != null)
         {
             GameObject vfx = ObjectPooler.instance.Get(ability.castVFX, transform.position, transform.rotation);
@@ -102,7 +100,6 @@ public class DomeAbilityHolder : MonoBehaviour
 
     private void HandleGroundAOE(Ability ability, Vector3 position)
     {
-        // AAA FIX: Activate Hit VFX
         if (ability.hitVFX != null)
         {
             GameObject vfx = ObjectPooler.instance.Get(ability.hitVFX, position, Quaternion.identity);
@@ -140,7 +137,8 @@ public class DomeAbilityHolder : MonoBehaviour
 
     private void HandleProjectile(Ability ability, GameObject target)
     {
-        if (ability.playerProjectilePrefab == null) return;
+        // --- AAA FIX: Using unified projectilePrefab ---
+        if (ability.projectilePrefab == null) return;
 
         Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
         Vector3 spawnPos = spawnTransform.position;
@@ -164,7 +162,8 @@ public class DomeAbilityHolder : MonoBehaviour
             }
         }
 
-        GameObject projectileGO = ObjectPooler.instance.Get(ability.playerProjectilePrefab, spawnPos, spawnRot);
+        // --- AAA FIX: Using unified projectilePrefab ---
+        GameObject projectileGO = ObjectPooler.instance.Get(ability.projectilePrefab, spawnPos, spawnRot);
         if (projectileGO == null) return;
 
         projectileGO.layer = LayerMask.NameToLayer("FriendlyRanged");
@@ -184,7 +183,6 @@ public class DomeAbilityHolder : MonoBehaviour
             projectile.Initialize(ability, this.gameObject, this.gameObject.layer);
         }
 
-        // AAA FIX: Explicitly activate the projectile
         projectileGO.SetActive(true);
     }
 

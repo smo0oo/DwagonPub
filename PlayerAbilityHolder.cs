@@ -38,10 +38,13 @@ public class PlayerAbilityHolder : MonoBehaviour
     [Header("Targeting Settings")]
     public LayerMask targetLayers;
 
-    [Header("Aim Magnetism (AAA)")]
+    [Header("Aim Magnetism & Bias (AAA)")]
     public bool enableAimMagnetism = true;
     public float magnetismAngle = 60f;
     public float magnetismBonusRange = 2f;
+
+    [Tooltip("0 = Shoots exactly at cursor. 1 = Shoots exactly where player is facing. Blends between the two.")]
+    [Range(0f, 1f)] public float aimOrientationBias = 0.0f;
 
     [Header("Global Cooldown")]
     public float globalCooldownDuration = 1.0f;
@@ -56,7 +59,6 @@ public class PlayerAbilityHolder : MonoBehaviour
     private GameObject queuedTarget;
     private bool hasQueuedAction = false;
 
-    // --- MANUAL COMBO STATE TRACKERS ---
     private Ability lastBaseAbilityInput;
     private Ability currentComboNode;
     private float comboWindowEndTime = 0f;
@@ -67,15 +69,12 @@ public class PlayerAbilityHolder : MonoBehaviour
     private Ability currentCastingAbility;
     private Ability currentExecutingAbility;
 
-    // --- AAA ANIMATION EVENT STATE TRACKING ---
     private int currentStyleIndex = 0;
     private Quaternion currentAimRotation = Quaternion.identity;
 
-    // Projectile AE Caching
     private GameObject currentExecutingTarget;
     private Vector3 currentExecutingPosition;
     private int currentProjectileIndex = 0;
-    // ------------------------------------------
 
     private Dictionary<Ability, float> cooldowns = new Dictionary<Ability, float>();
     private PlayerStats playerStats;
@@ -385,11 +384,9 @@ public class PlayerAbilityHolder : MonoBehaviour
         currentExecutingAbility = ability;
         currentStyleIndex = styleIndex;
 
-        // --- Caching values for the Animation Events to read later! ---
         currentExecutingTarget = target;
         currentExecutingPosition = position;
         currentProjectileIndex = 0;
-        // --------------------------------------------------------------
 
         if (ActiveBeam != null) ActiveBeam.Interrupt();
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
@@ -399,7 +396,12 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (ability.abilityType == AbilityType.ForwardProjectile || ability.abilityType == AbilityType.TargetedProjectile)
         {
             Vector3 fireDir = (position - GetAnchorTransform(ability.castVFXAnchor).position).normalized;
-            if (fireDir != Vector3.zero) currentAimRotation = Quaternion.LookRotation(fireDir);
+            if (fireDir != Vector3.zero)
+            {
+                // --- AAA FIX: Blended Cast VFX Rotation! ---
+                Vector3 blendedDir = Vector3.Slerp(fireDir, transform.forward, aimOrientationBias);
+                currentAimRotation = Quaternion.LookRotation(blendedDir);
+            }
         }
 
         bool hasVFXOverride = ability.styleVFXOverrides != null && ability.styleVFXOverrides.Count > styleIndex && ability.styleVFXOverrides[styleIndex].overrideVFX != null;
@@ -426,13 +428,11 @@ public class PlayerAbilityHolder : MonoBehaviour
         {
             case AbilityType.TargetedProjectile:
             case AbilityType.ForwardProjectile:
-                // --- AAA FIX: Hybrid Projectile Trigger ---
                 if (ability.useCoroutineForProjectiles)
                 {
                     if (activeProjectileCoroutine != null) StopCoroutine(activeProjectileCoroutine);
                     activeProjectileCoroutine = StartCoroutine(ExecuteProjectileBurst(ability, target, position));
                 }
-                // If FALSE, it skips the coroutine and relies entirely on AE_FireSingleProjectile!
                 break;
 
             case AbilityType.TargetedMelee:
@@ -456,7 +456,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    // --- PUBLIC METHODS CALLED BY THE ANIMATION EVENT RECEIVER ---
     public void OnAnimationEventOpenHitbox()
     {
         if (currentExecutingAbility == null) return;
@@ -492,16 +491,13 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         int totalCount = Mathf.Max(1, currentExecutingAbility.projectileCount);
 
-        // Dynamically update position if tracking a ground point
         Vector3 targetPos = currentExecutingPosition;
         if (currentExecutingTarget == null && playerMovement != null) targetPos = playerMovement.CurrentGroundTarget;
 
         FireSingleProjectile(currentExecutingAbility, currentExecutingTarget, targetPos, currentProjectileIndex, totalCount);
 
-        // Increment so the next Animation Event on this timeline fans out cleanly!
         currentProjectileIndex++;
     }
-    // -------------------------------------------------------------
 
     private IEnumerator ExecuteProjectileBurst(Ability ability, GameObject target, Vector3 initialTargetPos)
     {
@@ -537,10 +533,12 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     private void FireSingleProjectile(Ability ability, GameObject target, Vector3 targetPos, int index, int totalCount)
     {
-        if (ability.playerProjectilePrefab == null) return;
+        if (ability.projectilePrefab == null) return;
         Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
         Vector3 spawnPos = spawnTransform.position;
         Quaternion spawnRot = spawnTransform.rotation;
+
+        Vector3 rawDirection = Vector3.zero;
 
         if (target != null)
         {
@@ -548,8 +546,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             Collider targetCollider = target.GetComponent<Collider>() ?? target.GetComponentInChildren<Collider>();
             if (targetCollider != null) targetCenter = targetCollider.bounds.center;
 
-            Vector3 direction = targetCenter - spawnPos;
-            if (direction != Vector3.zero) spawnRot = Quaternion.LookRotation(direction);
+            rawDirection = (targetCenter - spawnPos).normalized;
         }
         else
         {
@@ -558,8 +555,15 @@ public class PlayerAbilityHolder : MonoBehaviour
             float spawnHeightAboveFloor = spawnPos.y - playerFloorY;
             Vector3 adjustedTargetPos = new Vector3(targetPos.x, targetPos.y + spawnHeightAboveFloor, targetPos.z);
 
-            Vector3 direction = adjustedTargetPos - spawnPos;
-            if (direction.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(direction);
+            rawDirection = (adjustedTargetPos - spawnPos).normalized;
+        }
+
+        if (rawDirection.sqrMagnitude > 0.001f)
+        {
+            // --- AAA FIX: Blended Projectile Aiming! ---
+            // Slerp smoothly rotates between the cursor's target direction and the player's physical orientation.
+            Vector3 blendedDirection = Vector3.Slerp(rawDirection, transform.forward, aimOrientationBias);
+            spawnRot = Quaternion.LookRotation(blendedDirection);
         }
 
         if (ability.spreadAngle > 0 && totalCount > 1)
@@ -573,13 +577,12 @@ public class PlayerAbilityHolder : MonoBehaviour
             }
             else
             {
-                // If triggered sequentially (burst delay OR via sequential Animation Events)
                 angleOffset = UnityEngine.Random.Range(-ability.spreadAngle / 2f, ability.spreadAngle / 2f);
             }
             spawnRot *= Quaternion.Euler(0, angleOffset, 0);
         }
 
-        GameObject projectileGO = ObjectPooler.instance.Get(ability.playerProjectilePrefab, spawnPos, spawnRot);
+        GameObject projectileGO = ObjectPooler.instance.Get(ability.projectilePrefab, spawnPos, spawnRot);
         if (projectileGO != null)
         {
             int layerId = LayerMask.NameToLayer("FriendlyRanged");
@@ -802,7 +805,7 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     private void HandleChanneledBeam(Ability ability, GameObject target)
     {
-        GameObject prefabToSpawn = ability.playerProjectilePrefab ?? ability.enemyProjectilePrefab;
+        GameObject prefabToSpawn = ability.channeledBeamPrefab;
         if (prefabToSpawn != null)
         {
             GameObject beamObject = Instantiate(prefabToSpawn, transform.position, transform.rotation, transform);

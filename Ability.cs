@@ -93,12 +93,12 @@ public class Ability : ScriptableObject
     public bool canHitCaster = false;
 
     [Header("Projectile Settings")]
-    public GameObject playerProjectilePrefab;
-    public GameObject enemyProjectilePrefab;
+    public GameObject projectilePrefab;
     public float projectileSpawnDelay = 0f;
+    [Tooltip("If TRUE, projectile passes through enemies, damaging all in its path until it hits a wall or expires.")]
+    public bool piercesEnemies = false;
 
     [Header("Multi-Projectile Settings (AAA)")]
-    [Tooltip("If TRUE, uses the Inspector's Burst Delay Coroutine. If FALSE, ignores the Coroutine and waits for you to trigger AE_FireSingleProjectile on the Animation Timeline!")]
     public bool useCoroutineForProjectiles = true;
     public int projectileCount = 1;
     public float burstDelay = 0f;
@@ -117,6 +117,7 @@ public class Ability : ScriptableObject
     public GameObject placementPrefab;
 
     [Header("Channeled Beam")]
+    public GameObject channeledBeamPrefab;
     public float manaDrain = 15f;
     public float tickRate = 0.25f;
 

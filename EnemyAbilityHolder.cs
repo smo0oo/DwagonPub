@@ -406,7 +406,7 @@ public class EnemyAbilityHolder : MonoBehaviour
 
     private void FireSingleProjectile(Ability ability, GameObject target, Vector3 targetPos, int index, int totalCount)
     {
-        GameObject prefab = ability.enemyProjectilePrefab ?? ability.playerProjectilePrefab;
+        GameObject prefab = ability.projectilePrefab;
         if (prefab == null) return;
         Transform spawnT = projectileSpawnPoint ?? transform;
         Vector3 spawnPos = spawnT.position;
@@ -564,7 +564,21 @@ public class EnemyAbilityHolder : MonoBehaviour
 
     private void PayCostAndStartCooldown(Ability ability, bool bypassCooldown) { if (!bypassCooldown) { cooldowns[ability] = Time.time + ability.cooldown; if (ability.triggersGlobalCooldown) globalCooldownTimer = Time.time + globalCooldownDuration; } }
     public bool CanUseAbility(Ability ability, GameObject target) { if (ability == null || IsCasting) return false; if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false; if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false; return true; }
-    private void HandleChanneledBeam(Ability ability, GameObject target) { GameObject prefab = ability.enemyProjectilePrefab ?? ability.playerProjectilePrefab; if (prefab != null) { GameObject beam = Instantiate(prefab, transform.position, transform.rotation); if (beam.TryGetComponent<ChanneledBeamController>(out var b)) { b.Initialize(ability, gameObject, target); ActiveBeam = b; } } }
+
+    // --- AAA FIX: Use dedicated beam prefab ---
+    private void HandleChanneledBeam(Ability ability, GameObject target)
+    {
+        if (ability.channeledBeamPrefab != null)
+        {
+            GameObject beam = Instantiate(ability.channeledBeamPrefab, transform.position, transform.rotation, transform);
+            if (beam.TryGetComponent<ChanneledBeamController>(out var b))
+            {
+                b.Initialize(ability, gameObject, target);
+                ActiveBeam = b;
+            }
+        }
+    }
+
     private void HandleSelfCast(Ability ability) { foreach (var effect in ability.friendlyEffects) effect.Apply(gameObject, gameObject); }
 
     private Transform GetAnchorTransform(VFXAnchor anchor)
