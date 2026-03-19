@@ -389,7 +389,10 @@ public class PlayerAbilityHolder : MonoBehaviour
         currentProjectileIndex = 0;
 
         if (ActiveBeam != null) ActiveBeam.Interrupt();
+
+        // Ensure ALL abilities (including Charge) get their cost paid and cooldown started here!
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
+
         if (ability.castSound != null && ability.hitboxOpenDelay > 0) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
 
         currentAimRotation = transform.rotation;
@@ -398,7 +401,6 @@ public class PlayerAbilityHolder : MonoBehaviour
             Vector3 fireDir = (position - GetAnchorTransform(ability.castVFXAnchor).position).normalized;
             if (fireDir != Vector3.zero)
             {
-                // --- AAA FIX: Blended Cast VFX Rotation! ---
                 Vector3 blendedDir = Vector3.Slerp(fireDir, transform.forward, aimOrientationBias);
                 currentAimRotation = Quaternion.LookRotation(blendedDir);
             }
@@ -560,8 +562,6 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         if (rawDirection.sqrMagnitude > 0.001f)
         {
-            // --- AAA FIX: Blended Projectile Aiming! ---
-            // Slerp smoothly rotates between the cursor's target direction and the player's physical orientation.
             Vector3 blendedDirection = Vector3.Slerp(rawDirection, transform.forward, aimOrientationBias);
             spawnRot = Quaternion.LookRotation(blendedDirection);
         }
@@ -682,8 +682,18 @@ public class PlayerAbilityHolder : MonoBehaviour
             float animSpeed = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
             animator.SetFloat(attackSpeedHash, animSpeed);
             animator.SetInteger(attackStyleHash, styleIndex);
-            if (!string.IsNullOrEmpty(ability.overrideTriggerName)) animator.SetTrigger(ability.overrideTriggerName);
-            else animator.SetTrigger(attackHash);
+
+            if (!string.IsNullOrEmpty(ability.overrideTriggerName))
+            {
+                animator.SetTrigger(ability.overrideTriggerName);
+            }
+            else
+            {
+                if (ability.abilityType != AbilityType.ChanneledBeam)
+                {
+                    animator.SetTrigger(attackHash);
+                }
+            }
         }
     }
 
@@ -736,18 +746,18 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (ActiveBeam != null) { ActiveBeam.Interrupt(); ActiveBeam = null; }
     }
 
+    // --- AAA FIX: Channeled Beams are now included in the cooldown logic! ---
     public void PayCostAndStartCooldown(Ability ability, bool bypassCooldown = false)
     {
         if (playerStats != null) { playerStats.SpendMana(ability.manaCost); }
         if (!bypassCooldown)
         {
-            if (ability.abilityType != AbilityType.ChanneledBeam)
-            {
-                float baseCooldown = (playerMovement != null && ability == playerMovement.defaultAttackAbility) ? GetCurrentWeaponSpeed() : ability.cooldown;
-                float finalCooldown = baseCooldown / (playerStats != null ? playerStats.secondaryStats.attackSpeed : 1f);
-                if (playerStats != null) finalCooldown *= playerStats.secondaryStats.cooldownReduction;
-                cooldowns[ability] = Time.time + finalCooldown;
-            }
+            float baseCooldown = (playerMovement != null && ability == playerMovement.defaultAttackAbility) ? GetCurrentWeaponSpeed() : ability.cooldown;
+            float finalCooldown = baseCooldown / (playerStats != null ? playerStats.secondaryStats.attackSpeed : 1f);
+            if (playerStats != null) finalCooldown *= playerStats.secondaryStats.cooldownReduction;
+
+            cooldowns[ability] = Time.time + finalCooldown;
+
             if (ability.triggersGlobalCooldown)
             {
                 float effectiveGcd = globalCooldownDuration / (playerStats != null ? playerStats.secondaryStats.attackSpeed : 1f);
@@ -808,10 +818,12 @@ public class PlayerAbilityHolder : MonoBehaviour
         GameObject prefabToSpawn = ability.channeledBeamPrefab;
         if (prefabToSpawn != null)
         {
-            GameObject beamObject = Instantiate(prefabToSpawn, transform.position, transform.rotation, transform);
+            Transform anchor = GetAnchorTransform(ability.channeledBeamAnchor);
+            GameObject beamObject = Instantiate(prefabToSpawn, anchor.position, anchor.rotation, anchor);
+
             if (beamObject.TryGetComponent<ChanneledBeamController>(out var beam))
             {
-                beam.Initialize(ability, this.gameObject, target, projectileSpawnPoint);
+                beam.Initialize(ability, this.gameObject, target, anchor);
                 ActiveBeam = beam;
                 if (animator != null) animator.SetBool(isChannelingHash, true);
             }

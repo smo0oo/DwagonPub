@@ -20,9 +20,9 @@ public class AbilityEditor : Editor
     private readonly string[] castingProps = { "showCastBar", "canMoveWhileCasting", "castTime", "triggersGlobalCooldown", "telegraphDuration", "telegraphAnimationTrigger", "attackStyleIndex", "overrideTriggerName", "movementLockDuration", "randomizeAttackStyle", "maxRandomVariants" };
     private readonly string[] comboProps = { "nextComboLink", "comboWindow", "bypassGcdOnCombo" }; 
     
-    // --- AAA FIX: Added piercesEnemies to the Editor view ---
-    private readonly string[] payloadProps = { "projectilePrefab", "projectileSpawnDelay", "piercesEnemies", "useCoroutineForProjectiles", "projectileCount", "burstDelay", "spreadAngle", "attackBoxSize", "attackBoxCenter", "hitboxOpenDelay", "hitboxCloseDelay", "aoeRadius", "placementPrefab", "channeledBeamPrefab", "manaDrain", "tickRate" };
-    // --------------------------------------------------------
+    // --- AAA FIX: Added channeledBeamAnchor ---
+    private readonly string[] payloadProps = { "projectilePrefab", "projectileSpawnDelay", "piercesEnemies", "useCoroutineForProjectiles", "projectileCount", "burstDelay", "spreadAngle", "attackBoxSize", "attackBoxCenter", "hitboxOpenDelay", "hitboxCloseDelay", "aoeRadius", "placementPrefab", "channeledBeamPrefab", "channeledBeamAnchor", "manaDrain", "tickRate" };
+    // -----------------------------------------
 
     private readonly string[] visualProps = { "targetingReticleOverride", "castingVFX", "castingVFXAnchor", "castingVFXPositionOffset", "castingVFXRotationOffset", "attachCastingVFX", "castVFX", "castVFXAnchor", "castVFXPositionOffset", "castVFXRotationOffset", "attachCastVFX", "castVFXDelay", "styleVFXOverrides", "hitVFX", "hitVFXPositionOffset", "hitVFXRotationOffset", "windupSound", "castSound", "impactSound", "screenShakeIntensity", "screenShakeDuration" };
     private readonly string[] effectProps = { "onCastEffects", "friendlyEffects", "hostileEffects" };

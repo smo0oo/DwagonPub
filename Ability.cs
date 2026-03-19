@@ -118,6 +118,7 @@ public class Ability : ScriptableObject
 
     [Header("Channeled Beam")]
     public GameObject channeledBeamPrefab;
+    public VFXAnchor channeledBeamAnchor = VFXAnchor.ProjectileSpawnPoint; // <-- NEW DROPDOWN
     public float manaDrain = 15f;
     public float tickRate = 0.25f;
 

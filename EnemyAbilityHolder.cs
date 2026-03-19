@@ -349,8 +349,19 @@ public class EnemyAbilityHolder : MonoBehaviour
         if (animator != null)
         {
             animator.ResetTrigger(attackTriggerHash);
-            if (!string.IsNullOrEmpty(ability.overrideTriggerName)) animator.SetTrigger(ability.overrideTriggerName);
-            else { animator.SetInteger(attackIndexHash, styleIndex); animator.SetTrigger(attackTriggerHash); }
+
+            if (!string.IsNullOrEmpty(ability.overrideTriggerName))
+            {
+                animator.SetTrigger(ability.overrideTriggerName);
+            }
+            else
+            {
+                if (ability.abilityType != AbilityType.ChanneledBeam)
+                {
+                    animator.SetInteger(attackIndexHash, styleIndex);
+                    animator.SetTrigger(attackTriggerHash);
+                }
+            }
         }
     }
 
@@ -565,15 +576,16 @@ public class EnemyAbilityHolder : MonoBehaviour
     private void PayCostAndStartCooldown(Ability ability, bool bypassCooldown) { if (!bypassCooldown) { cooldowns[ability] = Time.time + ability.cooldown; if (ability.triggersGlobalCooldown) globalCooldownTimer = Time.time + globalCooldownDuration; } }
     public bool CanUseAbility(Ability ability, GameObject target) { if (ability == null || IsCasting) return false; if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false; if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false; return true; }
 
-    // --- AAA FIX: Use dedicated beam prefab ---
+    // --- AAA FIX: Using the newly assigned Anchor! ---
     private void HandleChanneledBeam(Ability ability, GameObject target)
     {
         if (ability.channeledBeamPrefab != null)
         {
-            GameObject beam = Instantiate(ability.channeledBeamPrefab, transform.position, transform.rotation, transform);
+            Transform anchor = GetAnchorTransform(ability.channeledBeamAnchor);
+            GameObject beam = Instantiate(ability.channeledBeamPrefab, anchor.position, anchor.rotation, anchor);
             if (beam.TryGetComponent<ChanneledBeamController>(out var b))
             {
-                b.Initialize(ability, gameObject, target);
+                b.Initialize(ability, gameObject, target, anchor);
                 ActiveBeam = b;
             }
         }
