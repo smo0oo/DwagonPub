@@ -13,7 +13,8 @@ public enum AbilityType
     Leap,
     Charge,
     Teleport,
-    DirectionalMelee
+    DirectionalMelee,
+    Grenade
 }
 
 public enum VFXAnchor
@@ -39,6 +40,13 @@ public enum AIUsageType
     DefensiveBuff,
     AllyBuff,
     Control
+}
+
+public enum ScreenShakeEpicenter
+{
+    Caster,
+    TargetOrLocation,
+    GlobalCamera
 }
 
 [CreateAssetMenu(fileName = "New Ability", menuName = "RPG/Ability")]
@@ -118,7 +126,7 @@ public class Ability : ScriptableObject
 
     [Header("Channeled Beam")]
     public GameObject channeledBeamPrefab;
-    public VFXAnchor channeledBeamAnchor = VFXAnchor.ProjectileSpawnPoint; // <-- NEW DROPDOWN
+    public VFXAnchor channeledBeamAnchor = VFXAnchor.ProjectileSpawnPoint;
     public float manaDrain = 15f;
     public float tickRate = 0.25f;
 
@@ -154,8 +162,10 @@ public class Ability : ScriptableObject
     public AudioClip impactSound;
 
     [Header("Game Feel (AAA)")]
-    [Range(0f, 2f)] public float screenShakeIntensity = 0f;
-    [Range(0f, 1f)] public float screenShakeDuration = 0f;
+    [Range(0f, 5f)] public float screenShakeIntensity = 0f;
+    [Range(0f, 5f)] public float screenShakeDuration = 0f;
+    public float screenShakeDelay = 0f;
+    public ScreenShakeEpicenter screenShakeEpicenter = ScreenShakeEpicenter.Caster;
 
     [Header("Enemy AI Settings")]
     public GameObject enemyTelegraphPrefab;

@@ -17,6 +17,10 @@ public class Projectile : MonoBehaviour
     [Tooltip("Layers to apply damage/effects to when exploding.")]
     public LayerMask damageLayers = -1;
 
+    [Header("Grenade Settings (AAA)")]
+    [Tooltip("If the Ability Type is 'Grenade', how high should the parabolic arc be?")]
+    public float grenadeArcHeight = 3f;
+
     [Header("Visuals")]
     public bool preWarmVFX = true;
     public float preWarmSeconds = 0.2f;
@@ -31,8 +35,14 @@ public class Projectile : MonoBehaviour
     private PooledObject pooledObject;
     private int activationTriggerLayer = -1;
 
-    // --- AAA FIX: Memory array to prevent multi-hitting the same target during Pierce ---
     private HashSet<CharacterRoot> hitMemory = new HashSet<CharacterRoot>();
+
+    // --- Grenade State Data ---
+    private bool isGrenade = false;
+    private Vector3 startPosition;
+    private Vector3 targetPosition;
+    private float flightDuration;
+    private float flightTimePassed;
 
     void Awake()
     {
@@ -44,36 +54,83 @@ public class Projectile : MonoBehaviour
         if (pooledObject == null) pooledObject = GetComponent<PooledObject>();
     }
 
-    public void Initialize(Ability ability, GameObject caster, int layer)
+    public void Initialize(Ability ability, GameObject caster, int layer, Vector3 targetPos = default)
     {
         this.sourceAbility = ability;
         this.caster = caster;
         this.casterLayer = layer;
         this.lifetimeTimer = lifetime;
+        this.targetPosition = targetPos;
+        this.startPosition = transform.position;
 
-        // Reset the memory array when the projectile is pulled from the Object Pool!
         hitMemory.Clear();
 
-        if (this.caster != null)
+        if (this.sourceAbility != null && this.sourceAbility.abilityType == AbilityType.Grenade)
         {
+            isGrenade = true;
+            float distance = Vector2.Distance(new Vector2(startPosition.x, startPosition.z), new Vector2(targetPosition.x, targetPosition.z));
+            flightDuration = distance > 0.1f ? distance / speed : 0.1f;
+            flightTimePassed = 0f;
+        }
+        else
+        {
+            isGrenade = false;
+        }
+
+        // --- AAA FIX: SMART TARGETING INJECTION ---
+        if (this.caster != null && this.sourceAbility != null)
+        {
+            bool hasHostileEffects = this.sourceAbility.hostileEffects != null && this.sourceAbility.hostileEffects.Count > 0;
+            bool hasFriendlyEffects = this.sourceAbility.friendlyEffects != null && this.sourceAbility.friendlyEffects.Count > 0;
+
             PartyMemberTargeting partyTargeting = this.caster.GetComponentInParent<PartyMemberTargeting>();
-            if (partyTargeting != null)
+            AITargeting aiTargeting = this.caster.GetComponentInParent<AITargeting>();
+
+            if (partyTargeting != null) // CASTER IS A PLAYER/ALLY
             {
-                this.damageLayers |= partyTargeting.enemyLayer;
-                this.collisionLayers |= partyTargeting.enemyLayer;
+                // 1. Always hit Obstacles
                 this.collisionLayers |= partyTargeting.obstacleLayers;
+
+                // 2. If it hurts enemies, add the Enemy Layer
+                if (hasHostileEffects)
+                {
+                    this.damageLayers |= partyTargeting.enemyLayer;
+                    this.collisionLayers |= partyTargeting.enemyLayer;
+                }
+
+                // 3. If it heals/buffs allies, add the Friendly/Player Layers
+                if (hasFriendlyEffects)
+                {
+                    int playerMask = 1 << LayerMask.NameToLayer("Player");
+                    int friendlyMask = 1 << LayerMask.NameToLayer("Friendly");
+                    int combinedFriendly = playerMask | friendlyMask;
+
+                    this.damageLayers |= combinedFriendly;
+                    this.collisionLayers |= combinedFriendly;
+                }
             }
-            else
+            else if (aiTargeting != null) // CASTER IS AN ENEMY
             {
-                AITargeting aiTargeting = this.caster.GetComponentInParent<AITargeting>();
-                if (aiTargeting != null)
+                // 1. Always hit Obstacles
+                this.collisionLayers |= aiTargeting.obstacleLayers;
+
+                // 2. If it hurts players, add the Player/Friendly Layers
+                if (hasHostileEffects)
                 {
                     this.damageLayers |= aiTargeting.playerLayer;
                     this.collisionLayers |= aiTargeting.playerLayer;
-                    this.collisionLayers |= aiTargeting.obstacleLayers;
+                }
+
+                // 3. If it heals/buffs other enemies, add the Enemy Layer
+                if (hasFriendlyEffects)
+                {
+                    int enemyMask = 1 << LayerMask.NameToLayer("Enemy");
+                    this.damageLayers |= enemyMask;
+                    this.collisionLayers |= enemyMask;
                 }
             }
         }
+        // ------------------------------------------
 
         if (preWarmVFX)
         {
@@ -86,17 +143,40 @@ public class Projectile : MonoBehaviour
     {
         lifetimeTimer -= Time.deltaTime;
         if (lifetimeTimer <= 0f) { Terminate(); return; }
-        transform.Translate(Vector3.forward * speed * Time.deltaTime);
+
+        if (isGrenade)
+        {
+            flightTimePassed += Time.deltaTime;
+            float progress = Mathf.Clamp01(flightTimePassed / flightDuration);
+
+            Vector3 currentPos = Vector3.Lerp(startPosition, targetPosition, progress);
+            currentPos.y += Mathf.Sin(progress * Mathf.PI) * grenadeArcHeight;
+
+            Vector3 direction = currentPos - transform.position;
+            if (direction.sqrMagnitude > 0.001f)
+            {
+                transform.rotation = Quaternion.LookRotation(direction);
+            }
+
+            transform.position = currentPos;
+
+            if (progress >= 1f)
+            {
+                ProcessImpact(null);
+            }
+        }
+        else
+        {
+            transform.Translate(Vector3.forward * speed * Time.deltaTime);
+        }
     }
 
     private void OnTriggerEnter(Collider other)
     {
         if (sourceAbility == null) return;
         if (other.gameObject.layer == LayerMask.NameToLayer("ClothPhysics")) return;
-
         if (activationTriggerLayer != -1 && other.gameObject.layer == activationTriggerLayer) return;
 
-        // If the layer isn't even in our collision mask, ignore it completely
         if (((1 << other.gameObject.layer) & collisionLayers) == 0) return;
 
         CharacterRoot hitCharacterRoot = other.GetComponentInParent<CharacterRoot>();
@@ -107,33 +187,33 @@ public class Projectile : MonoBehaviour
             Debug.Log($"[Projectile] TOUCHED: '{other.name}' | CharacterRoot: {rootName} | Layer: {other.gameObject.layer}");
         }
 
-        if (caster != null)
+        // --- AAA FIX: Prevent a projectile from instantly hitting the person who fired it ---
+        if (caster != null && hitCharacterRoot != null)
         {
             CharacterRoot casterRoot = caster.GetComponentInParent<CharacterRoot>();
-            if (casterRoot != null && hitCharacterRoot == casterRoot) return;
-        }
 
-        if (hitCharacterRoot != null && sourceAbility != null)
-        {
-            if (casterLayer == hitCharacterRoot.gameObject.layer && (sourceAbility.friendlyEffects == null || sourceAbility.friendlyEffects.Count == 0))
+            // If the projectile touched the caster, we ONLY ignore it if it's NOT a self-buff/AoE that was dropped at their feet.
+            // But generally, projectiles flying outward shouldn't instantly detonate on the caster's own chest!
+            if (casterRoot != null && hitCharacterRoot == casterRoot)
             {
-                if (debugMode) Debug.Log($"[Projectile] IGNORED: Ally '{hitCharacterRoot.name}' (No Friendly Effects).");
+                // We don't want the fireball to blow up inside the mage's hand.
                 return;
             }
         }
+        // ------------------------------------------------------------------------------------
 
+        ProcessImpact(hitCharacterRoot);
+    }
+
+    private void ProcessImpact(CharacterRoot hitCharacterRoot)
+    {
         float effectiveRadius = GetDynamicExplosionRadius();
 
-        // --- AAA FIX: The Pierce Logic Split ---
         if (hitCharacterRoot != null)
         {
-            // IF WE HIT A VALID ENEMY
-
-            // 1. Check if we already hit them. If yes, ignore them and keep flying!
             if (hitMemory.Contains(hitCharacterRoot)) return;
             hitMemory.Add(hitCharacterRoot);
 
-            // 2. Deal Damage/Explode
             if (effectiveRadius > 0f)
             {
                 Explode(effectiveRadius);
@@ -147,26 +227,16 @@ public class Projectile : MonoBehaviour
                 }
             }
 
-            // 3. To Pierce or Not To Pierce
-            if (!sourceAbility.piercesEnemies)
+            if (sourceAbility != null && !sourceAbility.piercesEnemies)
             {
                 Terminate();
             }
         }
         else
         {
-            // IF WE HIT A WALL, DITHER LAYER, OR ENVIRONMENT
+            if (effectiveRadius > 0f) Explode(effectiveRadius);
+            else SpawnImpactVFX();
 
-            if (effectiveRadius > 0f)
-            {
-                Explode(effectiveRadius);
-            }
-            else
-            {
-                SpawnImpactVFX();
-            }
-
-            // A wall ALWAYS stops a projectile, even if it pierces enemies!
             Terminate();
         }
     }
@@ -182,10 +252,7 @@ public class Projectile : MonoBehaviour
         {
             foreach (var effect in sourceAbility.hostileEffects)
             {
-                if (effect is DamageEffect dmg && dmg.isSplash)
-                {
-                    maxSplash = Mathf.Max(maxSplash, dmg.splashRadius);
-                }
+                if (effect is DamageEffect dmg && dmg.isSplash) maxSplash = Mathf.Max(maxSplash, dmg.splashRadius);
             }
         }
 
@@ -193,10 +260,7 @@ public class Projectile : MonoBehaviour
         {
             foreach (var effect in sourceAbility.friendlyEffects)
             {
-                if (effect is DamageEffect dmg && dmg.isSplash)
-                {
-                    maxSplash = Mathf.Max(maxSplash, dmg.splashRadius);
-                }
+                if (effect is DamageEffect dmg && dmg.isSplash) maxSplash = Mathf.Max(maxSplash, dmg.splashRadius);
             }
         }
 
@@ -229,15 +293,30 @@ public class Projectile : MonoBehaviour
     {
         if (sourceAbility == null) return;
 
-        bool isAlly = casterLayer == target.gameObject.layer;
-        var effects = isAlly ? sourceAbility.friendlyEffects : sourceAbility.hostileEffects;
+        // --- AAA FIX: Smart Application ---
+        // Instead of hardcoding friendly vs hostile based on layers, we just apply everything. 
+        // The Effects themselves (DamageEffect, HealEffect) already know what to do!
 
-        if (effects == null) return;
-
-        foreach (var effect in effects)
+        bool isAlly = false;
+        if (casterLayer == LayerMask.NameToLayer("Player") || casterLayer == LayerMask.NameToLayer("Friendly"))
         {
-            if (effect != null) effect.Apply(caster, target.gameObject);
+            isAlly = (target.gameObject.layer == LayerMask.NameToLayer("Player") || target.gameObject.layer == LayerMask.NameToLayer("Friendly"));
         }
+        else
+        {
+            isAlly = (target.gameObject.layer == casterLayer);
+        }
+
+        var effectsToApply = isAlly ? sourceAbility.friendlyEffects : sourceAbility.hostileEffects;
+
+        if (effectsToApply != null)
+        {
+            foreach (var effect in effectsToApply)
+            {
+                if (effect != null) effect.Apply(caster, target.gameObject);
+            }
+        }
+        // ----------------------------------
     }
 
     private void SpawnImpactVFX()

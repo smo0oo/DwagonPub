@@ -215,7 +215,8 @@ public class EnemyAbilityHolder : MonoBehaviour
             if (ability.abilityType != AbilityType.TargetedMelee &&
                 ability.abilityType != AbilityType.DirectionalMelee &&
                 ability.abilityType != AbilityType.TargetedProjectile &&
-                ability.abilityType != AbilityType.ForwardProjectile)
+                ability.abilityType != AbilityType.ForwardProjectile &&
+                ability.abilityType != AbilityType.Grenade)
             {
                 IsCasting = false;
                 currentCastingAbility = null;
@@ -239,6 +240,34 @@ public class EnemyAbilityHolder : MonoBehaviour
     private void CleanupTelegraph()
     {
         if (activeTelegraphInstance != null) { Destroy(activeTelegraphInstance); activeTelegraphInstance = null; }
+    }
+
+    private Vector3 GetCurrentShakeEpicenter(Ability ability, GameObject target, Vector3 position)
+    {
+        if (ability == null) return transform.position;
+
+        switch (ability.screenShakeEpicenter)
+        {
+            case ScreenShakeEpicenter.Caster:
+                return transform.position;
+            case ScreenShakeEpicenter.TargetOrLocation:
+                return (target != null) ? target.transform.position : position;
+            case ScreenShakeEpicenter.GlobalCamera:
+                return Camera.main != null ? Camera.main.transform.position : transform.position;
+            default:
+                return transform.position;
+        }
+    }
+
+    private IEnumerator ExecuteScreenShake(Ability ability, GameObject target, Vector3 position)
+    {
+        if (ability.screenShakeDelay > 0)
+        {
+            yield return new WaitForSeconds(ability.screenShakeDelay);
+        }
+
+        Vector3 shakePos = GetCurrentShakeEpicenter(ability, target, position);
+        PlayerAbilityHolder.TriggerCameraShake(ability.screenShakeIntensity, ability.screenShakeDuration, shakePos);
     }
 
     private void ExecuteAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown = false, bool triggerAnimation = true, int styleIndex = 0)
@@ -268,7 +297,7 @@ public class EnemyAbilityHolder : MonoBehaviour
 
         if (ability.screenShakeIntensity > 0)
         {
-            PlayerAbilityHolder.TriggerCameraShake(ability.screenShakeIntensity, ability.screenShakeDuration, transform.position);
+            StartCoroutine(ExecuteScreenShake(ability, target, position));
         }
 
         if (triggerAnimation) TriggerAttackAnimation(ability, styleIndex);
@@ -285,6 +314,7 @@ public class EnemyAbilityHolder : MonoBehaviour
                 break;
             case AbilityType.TargetedProjectile:
             case AbilityType.ForwardProjectile:
+            case AbilityType.Grenade:
                 if (ability.useCoroutineForProjectiles)
                 {
                     if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
@@ -419,10 +449,13 @@ public class EnemyAbilityHolder : MonoBehaviour
     {
         GameObject prefab = ability.projectilePrefab;
         if (prefab == null) return;
+
         Transform spawnT = projectileSpawnPoint ?? transform;
         Vector3 spawnPos = spawnT.position;
         if (spawnT == transform) spawnPos += Vector3.up * 1.5f;
         Quaternion spawnRot = spawnT.rotation;
+
+        Vector3 trueTargetPos = targetPos;
 
         if (target != null)
         {
@@ -430,11 +463,13 @@ public class EnemyAbilityHolder : MonoBehaviour
             if (target.GetComponent<Collider>() != null) tPos = target.GetComponent<Collider>().bounds.center;
             Vector3 dir = tPos - spawnPos; dir.y = 0;
             if (dir.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(dir);
+            trueTargetPos = tPos;
         }
         else
         {
             Vector3 dir = targetPos - spawnPos; dir.y = 0;
             if (dir.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(dir);
+            trueTargetPos = targetPos;
         }
 
         if (ability.spreadAngle > 0 && totalCount > 1)
@@ -451,6 +486,9 @@ public class EnemyAbilityHolder : MonoBehaviour
                 angleOffset = UnityEngine.Random.Range(-ability.spreadAngle / 2f, ability.spreadAngle / 2f);
             }
             spawnRot *= Quaternion.Euler(0, angleOffset, 0);
+
+            float dist = Vector3.Distance(spawnPos, trueTargetPos);
+            trueTargetPos = spawnPos + (spawnRot * Vector3.forward) * dist;
         }
 
         GameObject pGO = ObjectPooler.instance.Get(prefab, spawnPos, spawnRot);
@@ -463,7 +501,7 @@ public class EnemyAbilityHolder : MonoBehaviour
         {
             CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
             int layer = myRoot != null ? myRoot.gameObject.layer : gameObject.layer;
-            p.Initialize(ability, gameObject, layer);
+            p.Initialize(ability, gameObject, layer, trueTargetPos);
         }
 
         Collider pCol = pGO.GetComponent<Collider>();
@@ -576,7 +614,6 @@ public class EnemyAbilityHolder : MonoBehaviour
     private void PayCostAndStartCooldown(Ability ability, bool bypassCooldown) { if (!bypassCooldown) { cooldowns[ability] = Time.time + ability.cooldown; if (ability.triggersGlobalCooldown) globalCooldownTimer = Time.time + globalCooldownDuration; } }
     public bool CanUseAbility(Ability ability, GameObject target) { if (ability == null || IsCasting) return false; if (ability.triggersGlobalCooldown && IsOnGlobalCooldown()) return false; if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false; return true; }
 
-    // --- AAA FIX: Using the newly assigned Anchor! ---
     private void HandleChanneledBeam(Ability ability, GameObject target)
     {
         if (ability.channeledBeamPrefab != null)

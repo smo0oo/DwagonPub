@@ -3,7 +3,6 @@ using UnityEngine.UI;
 using UnityEngine.EventSystems;
 using TMPro;
 
-// Added CanvasGroup requirement for Raycast blocking during drag
 [RequireComponent(typeof(CanvasGroup))]
 public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPointerExitHandler, IPointerClickHandler, IDropTarget, IDragSource, IBeginDragHandler, IDragHandler, IEndDragHandler
 {
@@ -32,7 +31,6 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
 
     private UIIconEffect _iconEffect;
 
-    // --- IDragSource Implementation ---
     public object GetItem()
     {
         if (currentAssignment == null) return null;
@@ -52,7 +50,6 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
     {
         if (target is TrashSlot) hotbarManager.ClearHotbarSlot(SlotIndex);
     }
-    // ----------------------------------
 
     public void Initialize(HotbarManager manager, int index)
     {
@@ -77,38 +74,25 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
         }
     }
 
-    // --- DRAG IMPLEMENTATION (NEW) ---
-
     public void OnBeginDrag(PointerEventData eventData)
     {
-        // Only drag if we actually have an assignment
         if (currentAssignment == null || currentAssignment.type == HotbarAssignment.AssignmentType.Unassigned) return;
 
         if (dragDropController != null && iconImage != null)
         {
             if (canvasGroup != null) canvasGroup.blocksRaycasts = false;
-
-            // Start the drag
             dragDropController.OnBeginDrag(this, iconImage.sprite);
-
-            // Optional: Hide tooltip
             if (inventoryManager != null) inventoryManager.HideTooltip();
         }
     }
 
-    public void OnDrag(PointerEventData eventData)
-    {
-        // INTENTIONALLY EMPTY
-        // Movement is handled by UIDragDropController.LateUpdate
-    }
+    public void OnDrag(PointerEventData eventData) { }
 
     public void OnEndDrag(PointerEventData eventData)
     {
         if (canvasGroup != null) canvasGroup.blocksRaycasts = true;
         if (dragDropController != null) dragDropController.OnEndDrag();
     }
-
-    // ---------------------------------
 
     void Update()
     {
@@ -236,10 +220,15 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
                 case AbilityType.ChanneledBeam:
                     activeAbilityHolder.UseAbility(abilityToUse, (GameObject)null);
                     break;
+
+                // --- AAA FIX: Added Grenade to the execution stack! ---
                 case AbilityType.Self:
                 case AbilityType.ForwardProjectile:
-                    if (abilityToUse.abilityType == AbilityType.ForwardProjectile) activeAbilityHolder.UseAbility(abilityToUse, (GameObject)null);
-                    else activeAbilityHolder.UseAbility(abilityToUse, currentPlayer);
+                case AbilityType.Grenade:
+                    if (abilityToUse.abilityType == AbilityType.ForwardProjectile || abilityToUse.abilityType == AbilityType.Grenade)
+                        activeAbilityHolder.UseAbility(abilityToUse, (GameObject)null);
+                    else
+                        activeAbilityHolder.UseAbility(abilityToUse, currentPlayer);
                     break;
             }
         }
@@ -399,7 +388,6 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
 
     public void OnDrop(object item)
     {
-        // [FIX] Renamed variable to 'sourceHotbar' to avoid conflict
         if (dragDropController.currentSource is HotbarSlot sourceHotbar)
         {
             hotbarManager.SwapHotbarSlots(sourceHotbar.SlotIndex, this.SlotIndex);
@@ -409,7 +397,6 @@ public class HotbarSlot : MonoBehaviour, IDropHandler, IPointerEnterHandler, IPo
             int hotbarIndex = SlotIndex;
             if (item is ItemStack)
             {
-                // [FIX] Renamed variable to 'sourceInventory' to avoid conflict
                 if (dragDropController.currentSource is InventorySlot sourceInventory)
                 {
                     hotbarManager.SetHotbarSlotWithItem(hotbarIndex, sourceInventory.slotIndex);

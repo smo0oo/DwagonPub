@@ -9,7 +9,6 @@ public class DomeAbilityHolder : MonoBehaviour
 
     private Dictionary<Ability, float> cooldowns = new Dictionary<Ability, float>();
 
-    // Buffers for Non-Allocating Physics
     private Collider[] _aoeBuffer = new Collider[100];
     private List<CharacterRoot> _affectedCharactersBuffer = new List<CharacterRoot>(100);
 
@@ -17,7 +16,7 @@ public class DomeAbilityHolder : MonoBehaviour
     {
         if (ability == null) return false;
         if (cooldowns.ContainsKey(ability) && Time.time < cooldowns[ability]) return false;
-        if (ability.abilityType == AbilityType.TargetedProjectile && target == null) return false;
+        if ((ability.abilityType == AbilityType.TargetedProjectile || ability.abilityType == AbilityType.Grenade) && target == null) return false;
         return true;
     }
 
@@ -42,6 +41,7 @@ public class DomeAbilityHolder : MonoBehaviour
         {
             case AbilityType.TargetedProjectile:
             case AbilityType.ForwardProjectile:
+            case AbilityType.Grenade:
                 HandleProjectile(ability, target);
                 break;
             case AbilityType.Self:
@@ -137,12 +137,13 @@ public class DomeAbilityHolder : MonoBehaviour
 
     private void HandleProjectile(Ability ability, GameObject target)
     {
-        // --- AAA FIX: Using unified projectilePrefab ---
         if (ability.projectilePrefab == null) return;
 
         Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
         Vector3 spawnPos = spawnTransform.position;
         Quaternion spawnRot = spawnTransform.rotation;
+
+        Vector3 trueTargetPos = spawnPos + spawnRot * Vector3.forward * ability.range;
 
         if (target != null)
         {
@@ -152,8 +153,8 @@ public class DomeAbilityHolder : MonoBehaviour
                 Collider targetCollider = targetRoot.GetComponentInChildren<Collider>();
                 if (targetCollider != null)
                 {
-                    Vector3 targetPosition = targetCollider.bounds.center;
-                    Vector3 direction = targetPosition - spawnPos;
+                    trueTargetPos = targetCollider.bounds.center;
+                    Vector3 direction = trueTargetPos - spawnPos;
                     if (direction != Vector3.zero)
                     {
                         spawnRot = Quaternion.LookRotation(direction);
@@ -162,7 +163,6 @@ public class DomeAbilityHolder : MonoBehaviour
             }
         }
 
-        // --- AAA FIX: Using unified projectilePrefab ---
         GameObject projectileGO = ObjectPooler.instance.Get(ability.projectilePrefab, spawnPos, spawnRot);
         if (projectileGO == null) return;
 
@@ -180,7 +180,7 @@ public class DomeAbilityHolder : MonoBehaviour
 
         if (projectileGO.TryGetComponent<Projectile>(out var projectile))
         {
-            projectile.Initialize(ability, this.gameObject, this.gameObject.layer);
+            projectile.Initialize(ability, this.gameObject, this.gameObject.layer, trueTargetPos);
         }
 
         projectileGO.SetActive(true);

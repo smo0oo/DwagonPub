@@ -22,7 +22,7 @@ public class HoverInfoUI : MonoBehaviour
     [Tooltip("The Image component for the health bar fill.")]
     public Image healthBarFill;
     [Tooltip("The TextMeshProUGUI component to display HP numbers (e.g. '150 / 200').")]
-    public TextMeshProUGUI healthText; // [ADDED]
+    public TextMeshProUGUI healthText;
 
     [Header("Status Effects (AAA Feature)")]
     [Tooltip("Assign a GameObject with a HorizontalLayoutGroup to hold the icons.")]
@@ -162,10 +162,19 @@ public class HoverInfoUI : MonoBehaviour
             if (effect.EffectData != null && effect.EffectData.icon != null)
             {
                 GameObject newIconObj = Instantiate(statusIconPrefab, statusEffectsContainer);
-                Image iconImg = newIconObj.GetComponent<Image>();
-                if (iconImg != null)
+
+                // --- AAA FIX: Properly initialize the timer UI component! ---
+                if (newIconObj.TryGetComponent<StatusEffectIconUI>(out var iconUI))
                 {
-                    iconImg.sprite = effect.EffectData.icon;
+                    iconUI.Initialize(effect);
+                }
+                else
+                {
+                    Image iconImg = newIconObj.GetComponent<Image>();
+                    if (iconImg != null)
+                    {
+                        iconImg.sprite = effect.EffectData.icon;
+                    }
                 }
             }
         }
@@ -175,7 +184,6 @@ public class HoverInfoUI : MonoBehaviour
     {
         if (currentTargetHealth == null) return;
 
-        // [ADDED] Update Fill
         if (healthBarFill != null)
         {
             if (currentTargetHealth.maxHealth > 0)
@@ -184,7 +192,6 @@ public class HoverInfoUI : MonoBehaviour
                 healthBarFill.fillAmount = 0;
         }
 
-        // [ADDED] Update Text (e.g. "150 / 200")
         if (healthText != null)
         {
             healthText.text = $"{currentTargetHealth.currentHealth} / {currentTargetHealth.maxHealth}";

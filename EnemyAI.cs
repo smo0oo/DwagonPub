@@ -245,23 +245,29 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             return;
         }
 
+        // --- AAA FIX: Allow animations to tick during stuns! ---
         if (StatusEffects != null)
         {
             if (StatusEffects.IsStunned)
             {
                 StopMovement();
-                if (Animator != null) Animator.speed = 0f;
+
+                if (Animator != null)
+                {
+                    Animator.SetFloat(velocityXHash, 0f);
+                    Animator.SetFloat(velocityZHash, 0f);
+                }
 
                 _perfWatch.Stop();
                 LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
                 return;
             }
-            else
+            else if (StatusEffects.IsRooted)
             {
-                if (Animator != null && Animator.speed == 0f) Animator.speed = 1f;
-                if (StatusEffects.IsRooted) StopMovement();
+                StopMovement();
             }
         }
+        // -------------------------------------------------------
 
         HandleRotation();
 

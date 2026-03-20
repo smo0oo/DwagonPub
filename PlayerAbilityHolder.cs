@@ -258,7 +258,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     private GameObject FindMagneticTarget(Ability ability, Vector3 cursorPosition)
     {
         if (!enableAimMagnetism || ability == null) return null;
-        if (ability.abilityType != AbilityType.TargetedMelee && ability.abilityType != AbilityType.DirectionalMelee && ability.abilityType != AbilityType.ForwardProjectile && ability.abilityType != AbilityType.TargetedProjectile) return null;
+        if (ability.abilityType != AbilityType.TargetedMelee && ability.abilityType != AbilityType.DirectionalMelee && ability.abilityType != AbilityType.ForwardProjectile && ability.abilityType != AbilityType.TargetedProjectile && ability.abilityType != AbilityType.Grenade) return null;
 
         float searchRadius = ability.range + magnetismBonusRange;
         Collider[] hits = Physics.OverlapSphere(transform.position, searchRadius, targetLayers);
@@ -379,6 +379,36 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
+    private Vector3 GetCurrentShakeEpicenter(Ability ability, GameObject target, Vector3 position)
+    {
+        if (ability == null) return transform.position;
+
+        switch (ability.screenShakeEpicenter)
+        {
+            case ScreenShakeEpicenter.Caster:
+                return transform.position;
+            case ScreenShakeEpicenter.TargetOrLocation:
+                return (target != null) ? target.transform.position : position;
+            case ScreenShakeEpicenter.GlobalCamera:
+                return Camera.main != null ? Camera.main.transform.position : transform.position;
+            default:
+                return transform.position;
+        }
+    }
+
+    private IEnumerator ExecuteScreenShake(Ability ability, GameObject target, Vector3 position)
+    {
+        float speedMultiplier = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
+
+        if (ability.screenShakeDelay > 0)
+        {
+            yield return new WaitForSeconds(ability.screenShakeDelay / speedMultiplier);
+        }
+
+        Vector3 shakePos = GetCurrentShakeEpicenter(ability, target, position);
+        TriggerCameraShake(ability.screenShakeIntensity, ability.screenShakeDuration, shakePos);
+    }
+
     private void ExecuteAbility(Ability ability, GameObject target, Vector3 position, bool bypassCooldown = false, bool triggerAnimation = true, int styleIndex = 0)
     {
         currentExecutingAbility = ability;
@@ -390,13 +420,12 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         if (ActiveBeam != null) ActiveBeam.Interrupt();
 
-        // Ensure ALL abilities (including Charge) get their cost paid and cooldown started here!
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
 
         if (ability.castSound != null && ability.hitboxOpenDelay > 0) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
 
         currentAimRotation = transform.rotation;
-        if (ability.abilityType == AbilityType.ForwardProjectile || ability.abilityType == AbilityType.TargetedProjectile)
+        if (ability.abilityType == AbilityType.ForwardProjectile || ability.abilityType == AbilityType.TargetedProjectile || ability.abilityType == AbilityType.Grenade)
         {
             Vector3 fireDir = (position - GetAnchorTransform(ability.castVFXAnchor).position).normalized;
             if (fireDir != Vector3.zero)
@@ -412,7 +441,10 @@ public class PlayerAbilityHolder : MonoBehaviour
             if (ability.castVFXDelay > 0) StartCoroutine(SpawnVFXWithDelay(ability, currentAimRotation, styleIndex));
         }
 
-        if (ability.screenShakeIntensity > 0) OnCameraShakeRequest?.Invoke(ability.screenShakeIntensity, ability.screenShakeDuration, transform.position);
+        if (ability.screenShakeIntensity > 0)
+        {
+            StartCoroutine(ExecuteScreenShake(ability, target, position));
+        }
 
         OnPlayerAbilityUsed?.Invoke(this, ability, target, position);
 
@@ -430,6 +462,7 @@ public class PlayerAbilityHolder : MonoBehaviour
         {
             case AbilityType.TargetedProjectile:
             case AbilityType.ForwardProjectile:
+            case AbilityType.Grenade:
                 if (ability.useCoroutineForProjectiles)
                 {
                     if (activeProjectileCoroutine != null) StopCoroutine(activeProjectileCoroutine);
@@ -461,6 +494,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     public void OnAnimationEventOpenHitbox()
     {
         if (currentExecutingAbility == null) return;
+
         if (currentExecutingAbility.abilityType == AbilityType.TargetedMelee || currentExecutingAbility.abilityType == AbilityType.DirectionalMelee)
         {
             if (meleeHitbox != null) meleeHitbox.gameObject.SetActive(true);
@@ -536,11 +570,13 @@ public class PlayerAbilityHolder : MonoBehaviour
     private void FireSingleProjectile(Ability ability, GameObject target, Vector3 targetPos, int index, int totalCount)
     {
         if (ability.projectilePrefab == null) return;
+
         Transform spawnTransform = projectileSpawnPoint != null ? projectileSpawnPoint : this.transform;
         Vector3 spawnPos = spawnTransform.position;
         Quaternion spawnRot = spawnTransform.rotation;
 
         Vector3 rawDirection = Vector3.zero;
+        Vector3 trueTargetPos = targetPos;
 
         if (target != null)
         {
@@ -549,6 +585,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             if (targetCollider != null) targetCenter = targetCollider.bounds.center;
 
             rawDirection = (targetCenter - spawnPos).normalized;
+            trueTargetPos = targetCenter;
         }
         else
         {
@@ -558,6 +595,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             Vector3 adjustedTargetPos = new Vector3(targetPos.x, targetPos.y + spawnHeightAboveFloor, targetPos.z);
 
             rawDirection = (adjustedTargetPos - spawnPos).normalized;
+            trueTargetPos = adjustedTargetPos;
         }
 
         if (rawDirection.sqrMagnitude > 0.001f)
@@ -580,6 +618,9 @@ public class PlayerAbilityHolder : MonoBehaviour
                 angleOffset = UnityEngine.Random.Range(-ability.spreadAngle / 2f, ability.spreadAngle / 2f);
             }
             spawnRot *= Quaternion.Euler(0, angleOffset, 0);
+
+            float dist = Vector3.Distance(spawnPos, trueTargetPos);
+            trueTargetPos = spawnPos + (spawnRot * Vector3.forward) * dist;
         }
 
         GameObject projectileGO = ObjectPooler.instance.Get(ability.projectilePrefab, spawnPos, spawnRot);
@@ -592,7 +633,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             {
                 CharacterRoot myRoot = GetComponentInParent<CharacterRoot>();
                 int myLayer = myRoot != null ? myRoot.gameObject.layer : gameObject.layer;
-                projectile.Initialize(ability, this.gameObject, myLayer);
+                projectile.Initialize(ability, this.gameObject, myLayer, trueTargetPos);
             }
 
             Collider pCol = projectileGO.GetComponent<Collider>();
@@ -668,6 +709,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         float speedMultiplier = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
         yield return new WaitForSeconds(ability.hitboxOpenDelay / speedMultiplier);
+
         if (meleeHitbox != null) meleeHitbox.gameObject.SetActive(true);
         float duration = ability.hitboxCloseDelay - ability.hitboxOpenDelay;
         if (duration > 0) yield return new WaitForSeconds(duration / speedMultiplier);
@@ -746,18 +788,18 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (ActiveBeam != null) { ActiveBeam.Interrupt(); ActiveBeam = null; }
     }
 
-    // --- AAA FIX: Channeled Beams are now included in the cooldown logic! ---
     public void PayCostAndStartCooldown(Ability ability, bool bypassCooldown = false)
     {
         if (playerStats != null) { playerStats.SpendMana(ability.manaCost); }
         if (!bypassCooldown)
         {
-            float baseCooldown = (playerMovement != null && ability == playerMovement.defaultAttackAbility) ? GetCurrentWeaponSpeed() : ability.cooldown;
-            float finalCooldown = baseCooldown / (playerStats != null ? playerStats.secondaryStats.attackSpeed : 1f);
-            if (playerStats != null) finalCooldown *= playerStats.secondaryStats.cooldownReduction;
-
-            cooldowns[ability] = Time.time + finalCooldown;
-
+            if (ability.abilityType != AbilityType.ChanneledBeam)
+            {
+                float baseCooldown = (playerMovement != null && ability == playerMovement.defaultAttackAbility) ? GetCurrentWeaponSpeed() : ability.cooldown;
+                float finalCooldown = baseCooldown / (playerStats != null ? playerStats.secondaryStats.attackSpeed : 1f);
+                if (playerStats != null) finalCooldown *= playerStats.secondaryStats.cooldownReduction;
+                cooldowns[ability] = Time.time + finalCooldown;
+            }
             if (ability.triggersGlobalCooldown)
             {
                 float effectiveGcd = globalCooldownDuration / (playerStats != null ? playerStats.secondaryStats.attackSpeed : 1f);

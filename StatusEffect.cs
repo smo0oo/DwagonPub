@@ -18,12 +18,20 @@ public class StatusEffect : ScriptableObject
     public bool isBuff;
 
     [Header("Crowd Control & States")]
-    [Tooltip("If true, the target cannot move, attack, or dodge. Animation freezes.")]
+    [Tooltip("If true, the target cannot move, attack, or dodge.")]
     public bool isStun = false;
     [Tooltip("If true, the target cannot move or dodge, but can still cast/attack.")]
     public bool isRoot = false;
     [Tooltip("If true, the target will take 0 damage from all sources while this effect is active.")]
     public bool grantsInvulnerability = false;
+
+    [Header("Visuals & Animation (AAA)")]
+    [Tooltip("VFX spawned and attached to the target for the duration (e.g., Dizzy Birds).")]
+    public GameObject persistentVFX;
+    [Tooltip("Where should the VFX attach?")]
+    public VFXAnchor vfxAnchor = VFXAnchor.Head;
+    [Tooltip("Animator trigger to fire when applied (e.g., 'Stunned'). Ensure you have a transition out of this state when the effect ends!")]
+    public string applyAnimationTrigger;
 
     [Header("Duration")]
     public DurationType durationType;
