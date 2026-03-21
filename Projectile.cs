@@ -25,6 +25,9 @@ public class Projectile : MonoBehaviour
     public bool preWarmVFX = true;
     public float preWarmSeconds = 0.2f;
 
+    [Tooltip("If true, the impact VFX ignores the projectile's rotation and spawns flat (identity rotation). Essential for arc grenades!")]
+    public bool decoupleImpactRotation = false;
+
     [HideInInspector]
     public GameObject vfxOverride = null;
 
@@ -77,7 +80,6 @@ public class Projectile : MonoBehaviour
             isGrenade = false;
         }
 
-        // --- AAA FIX: SMART TARGETING INJECTION ---
         if (this.caster != null && this.sourceAbility != null)
         {
             bool hasHostileEffects = this.sourceAbility.hostileEffects != null && this.sourceAbility.hostileEffects.Count > 0;
@@ -86,19 +88,17 @@ public class Projectile : MonoBehaviour
             PartyMemberTargeting partyTargeting = this.caster.GetComponentInParent<PartyMemberTargeting>();
             AITargeting aiTargeting = this.caster.GetComponentInParent<AITargeting>();
 
-            if (partyTargeting != null) // CASTER IS A PLAYER/ALLY
-            {
-                // 1. Always hit Obstacles
-                this.collisionLayers |= partyTargeting.obstacleLayers;
+            this.collisionLayers = 0;
+            this.damageLayers = 0;
 
-                // 2. If it hurts enemies, add the Enemy Layer
+            if (partyTargeting != null)
+            {
+                this.collisionLayers |= partyTargeting.obstacleLayers;
                 if (hasHostileEffects)
                 {
                     this.damageLayers |= partyTargeting.enemyLayer;
                     this.collisionLayers |= partyTargeting.enemyLayer;
                 }
-
-                // 3. If it heals/buffs allies, add the Friendly/Player Layers
                 if (hasFriendlyEffects)
                 {
                     int playerMask = 1 << LayerMask.NameToLayer("Player");
@@ -109,19 +109,14 @@ public class Projectile : MonoBehaviour
                     this.collisionLayers |= combinedFriendly;
                 }
             }
-            else if (aiTargeting != null) // CASTER IS AN ENEMY
+            else if (aiTargeting != null)
             {
-                // 1. Always hit Obstacles
                 this.collisionLayers |= aiTargeting.obstacleLayers;
-
-                // 2. If it hurts players, add the Player/Friendly Layers
                 if (hasHostileEffects)
                 {
                     this.damageLayers |= aiTargeting.playerLayer;
                     this.collisionLayers |= aiTargeting.playerLayer;
                 }
-
-                // 3. If it heals/buffs other enemies, add the Enemy Layer
                 if (hasFriendlyEffects)
                 {
                     int enemyMask = 1 << LayerMask.NameToLayer("Enemy");
@@ -130,7 +125,6 @@ public class Projectile : MonoBehaviour
                 }
             }
         }
-        // ------------------------------------------
 
         if (preWarmVFX)
         {
@@ -187,20 +181,15 @@ public class Projectile : MonoBehaviour
             Debug.Log($"[Projectile] TOUCHED: '{other.name}' | CharacterRoot: {rootName} | Layer: {other.gameObject.layer}");
         }
 
-        // --- AAA FIX: Prevent a projectile from instantly hitting the person who fired it ---
         if (caster != null && hitCharacterRoot != null)
         {
             CharacterRoot casterRoot = caster.GetComponentInParent<CharacterRoot>();
 
-            // If the projectile touched the caster, we ONLY ignore it if it's NOT a self-buff/AoE that was dropped at their feet.
-            // But generally, projectiles flying outward shouldn't instantly detonate on the caster's own chest!
             if (casterRoot != null && hitCharacterRoot == casterRoot)
             {
-                // We don't want the fireball to blow up inside the mage's hand.
                 return;
             }
         }
-        // ------------------------------------------------------------------------------------
 
         ProcessImpact(hitCharacterRoot);
     }
@@ -270,8 +259,10 @@ public class Projectile : MonoBehaviour
     private void Explode(float radius)
     {
         SpawnImpactVFX();
+
+        // --- AAA FIX: Use the new router for impact explosions! ---
         if (sourceAbility != null && sourceAbility.impactSound != null)
-            AudioSource.PlayClipAtPoint(sourceAbility.impactSound, transform.position);
+            SFXManager.PlayAtPoint(sourceAbility.impactSound, transform.position);
 
         Collider[] hits = Physics.OverlapSphere(transform.position, radius, damageLayers);
         HashSet<CharacterRoot> affectedTargets = new HashSet<CharacterRoot>();
@@ -293,10 +284,6 @@ public class Projectile : MonoBehaviour
     {
         if (sourceAbility == null) return;
 
-        // --- AAA FIX: Smart Application ---
-        // Instead of hardcoding friendly vs hostile based on layers, we just apply everything. 
-        // The Effects themselves (DamageEffect, HealEffect) already know what to do!
-
         bool isAlly = false;
         if (casterLayer == LayerMask.NameToLayer("Player") || casterLayer == LayerMask.NameToLayer("Friendly"))
         {
@@ -316,7 +303,6 @@ public class Projectile : MonoBehaviour
                 if (effect != null) effect.Apply(caster, target.gameObject);
             }
         }
-        // ----------------------------------
     }
 
     private void SpawnImpactVFX()
@@ -324,8 +310,22 @@ public class Projectile : MonoBehaviour
         GameObject vfxToUse = vfxOverride != null ? vfxOverride : (sourceAbility != null ? sourceAbility.hitVFX : null);
         if (vfxToUse == null) return;
 
-        Vector3 spawnPos = transform.position + (transform.rotation * sourceAbility.hitVFXPositionOffset);
-        Quaternion spawnRot = transform.rotation * Quaternion.Euler(sourceAbility.hitVFXRotationOffset);
+        Vector3 spawnPos = transform.position;
+        Quaternion spawnRot = Quaternion.identity;
+
+        if (sourceAbility != null)
+        {
+            if (decoupleImpactRotation)
+            {
+                spawnPos += sourceAbility.hitVFXPositionOffset;
+                spawnRot = Quaternion.Euler(sourceAbility.hitVFXRotationOffset);
+            }
+            else
+            {
+                spawnPos += (transform.rotation * sourceAbility.hitVFXPositionOffset);
+                spawnRot = transform.rotation * Quaternion.Euler(sourceAbility.hitVFXRotationOffset);
+            }
+        }
 
         GameObject vfx = ObjectPooler.instance.Get(vfxToUse, spawnPos, spawnRot);
         if (vfx != null) vfx.SetActive(true);

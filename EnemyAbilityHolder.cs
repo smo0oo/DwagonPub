@@ -38,6 +38,7 @@ public class EnemyAbilityHolder : MonoBehaviour
     private EnemyAI enemyAI;
     private float globalCooldownTimer = 0f;
     private Animator animator;
+    private CharacterVoiceController voiceController;
 
     private GameObject currentCastingVFXInstance;
     private GameObject activeTelegraphInstance;
@@ -66,6 +67,7 @@ public class EnemyAbilityHolder : MonoBehaviour
         if (enemyAI == null) enemyAI = GetComponent<EnemyAI>();
 
         animator = GetComponentInChildren<Animator>();
+        voiceController = GetComponentInChildren<CharacterVoiceController>();
         activationTriggerLayer = LayerMask.NameToLayer("ActivationTrigger");
 
         if (projectileSpawnPoint == null) projectileSpawnPoint = transform;
@@ -127,6 +129,13 @@ public class EnemyAbilityHolder : MonoBehaviour
         {
             styleIndex = UnityEngine.Random.Range(0, 3);
         }
+
+        // --- AAA FIX: Play the Windup Sound instantly as a One-Shot! ---
+        if (ability.windupSound != null)
+        {
+            SFXManager.PlayAtPoint(ability.windupSound, transform.position);
+        }
+        // ---------------------------------------------------------------
 
         if (ability.castTime > 0 || ability.telegraphDuration > 0)
         {
@@ -281,7 +290,17 @@ public class EnemyAbilityHolder : MonoBehaviour
         currentStyleIndex = styleIndex;
 
         PayCostAndStartCooldown(ability, bypassCooldown);
-        if (ability.castSound != null) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
+
+        // --- AAA FIX: Instant Spells get immediate audio via SFXManager ---
+        if (ability.castSound != null && ability.hitboxOpenDelay <= 0)
+        {
+            SFXManager.PlayAtPoint(ability.castSound, transform.position);
+            if (voiceController != null && ability.voiceEffort != VoiceEffort.None)
+            {
+                voiceController.PlayEffort(ability.voiceEffort);
+            }
+        }
+        // ------------------------------------------------------------------
 
         if (ability.castVFX != null)
         {
@@ -360,11 +379,19 @@ public class EnemyAbilityHolder : MonoBehaviour
         if (vfx != null) vfx.SetActive(true);
     }
 
+    // --- AAA FIX: Melee strikes properly trigger delayed Audio ---
     public void OnAnimationEventPlayAudio()
     {
-        if (currentExecutingAbility != null && currentExecutingAbility.castSound != null)
-            AudioSource.PlayClipAtPoint(currentExecutingAbility.castSound, transform.position);
+        if (currentExecutingAbility != null)
+        {
+            if (currentExecutingAbility.castSound != null)
+                SFXManager.PlayAtPoint(currentExecutingAbility.castSound, transform.position);
+
+            if (voiceController != null && currentExecutingAbility.voiceEffort != VoiceEffort.None)
+                voiceController.PlayEffort(currentExecutingAbility.voiceEffort);
+        }
     }
+    // -------------------------------------------------------------
 
     public void OnAnimationEventFireProjectile()
     {

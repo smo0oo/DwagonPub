@@ -14,17 +14,14 @@ public class MeleeHitbox : MonoBehaviour
 
     void Awake()
     {
-        // AAA FIX: Ensure this Hitbox has a Rigidbody.
-        // Triggers interacting with Static Colliders (like Barrels) REQUIRE one side to have a Rigidbody.
         rb = GetComponent<Rigidbody>();
         if (rb == null)
         {
             rb = gameObject.AddComponent<Rigidbody>();
-            rb.isKinematic = true; // Lightweight, doesn't fall/react to gravity
+            rb.isKinematic = true;
             rb.useGravity = false;
         }
 
-        // Ensure collider is a trigger
         GetComponent<BoxCollider>().isTrigger = true;
     }
 
@@ -34,10 +31,6 @@ public class MeleeHitbox : MonoBehaviour
         caster = casterObject;
         hitTargets.Clear();
 
-        // AAA FIX: Force the Hitbox Layer
-        // Often Hitboxes inherit "Player" layer, which might not collide with "Destructible".
-        // We switch it to "FriendlyRanged" (Layer 12 usually) or "Default" to ensure it hits everything.
-        // Adjust "FriendlyRanged" to match your Projectile layer name exactly.
         int projectileLayer = LayerMask.NameToLayer("FriendlyRanged");
         if (projectileLayer != -1)
         {
@@ -47,12 +40,10 @@ public class MeleeHitbox : MonoBehaviour
 
     void OnTriggerEnter(Collider other)
     {
-        // AAA FIX: Ignore cloth physics layer so swords don't hit capes
         if (other.gameObject.layer == LayerMask.NameToLayer("ClothPhysics")) return;
 
         if (debugMode) Debug.Log($"[MeleeHitbox] Hit: {other.name} on Layer: {LayerMask.LayerToName(other.gameObject.layer)}");
 
-        // 1. Find Health (Check Parent to handle Colliders on child meshes)
         Health targetHealth = other.GetComponentInParent<Health>();
 
         if (targetHealth == null)
@@ -63,7 +54,6 @@ public class MeleeHitbox : MonoBehaviour
 
         if (hitTargets.Contains(targetHealth)) return;
 
-        // 2. Prevent Friendly Fire (Self)
         if (sourceAbility != null && !sourceAbility.canHitCaster)
         {
             Health casterHealth = caster.transform.root.GetComponentInChildren<Health>();
@@ -79,17 +69,22 @@ public class MeleeHitbox : MonoBehaviour
 
             if (casterRoot == null) return;
 
-            // 3. Alliance Logic
             bool isAlly = false;
 
-            // If the target is a Character, check layers.
-            // If the target is a Prop (targetRoot == null), it defaults to Hostile (isAlly = false).
             if (targetRoot != null)
             {
                 isAlly = (casterRoot.gameObject.layer == targetRoot.gameObject.layer);
             }
 
             if (debugMode) Debug.Log($"[MeleeHitbox] Applying Effect to {targetHealth.name}. IsAlly: {isAlly}");
+
+            // --- AAA FIX: Play the true Impact Sound at the exact point of contact! ---
+            if (sourceAbility.impactSound != null)
+            {
+                // We use SFXManager so it obeys volume sliders and 3D space perfectly
+                SFXManager.PlayAtPoint(sourceAbility.impactSound, other.transform.position);
+            }
+            // -----------------------------------------------------------------------
 
             var effectsToApply = isAlly ? sourceAbility.friendlyEffects : sourceAbility.hostileEffects;
 

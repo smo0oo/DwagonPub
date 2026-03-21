@@ -103,7 +103,6 @@ public class Ability : ScriptableObject
     [Header("Projectile Settings")]
     public GameObject projectilePrefab;
     public float projectileSpawnDelay = 0f;
-    [Tooltip("If TRUE, projectile passes through enemies, damaging all in its path until it hits a wall or expires.")]
     public bool piercesEnemies = false;
 
     [Header("Multi-Projectile Settings (AAA)")]
@@ -160,9 +159,11 @@ public class Ability : ScriptableObject
     public AudioClip windupSound;
     public AudioClip castSound;
     public AudioClip impactSound;
+    // --- NEW: Select the Voice Effort ---
+    public VoiceEffort voiceEffort = VoiceEffort.None;
 
     [Header("Game Feel (AAA)")]
-    [Range(0f, 5f)] public float screenShakeIntensity = 0f;
+    [Range(0f, 2f)] public float screenShakeIntensity = 0f;
     [Range(0f, 5f)] public float screenShakeDuration = 0f;
     public float screenShakeDelay = 0f;
     public ScreenShakeEpicenter screenShakeEpicenter = ScreenShakeEpicenter.Caster;

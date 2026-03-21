@@ -20,11 +20,16 @@ public class AbilityEditor : Editor
     private readonly string[] castingProps = { "showCastBar", "canMoveWhileCasting", "castTime", "triggersGlobalCooldown", "telegraphDuration", "telegraphAnimationTrigger", "attackStyleIndex", "overrideTriggerName", "movementLockDuration", "randomizeAttackStyle", "maxRandomVariants" };
     private readonly string[] comboProps = { "nextComboLink", "comboWindow", "bypassGcdOnCombo" }; 
     
-    // --- AAA FIX: Added channeledBeamAnchor ---
     private readonly string[] payloadProps = { "projectilePrefab", "projectileSpawnDelay", "piercesEnemies", "useCoroutineForProjectiles", "projectileCount", "burstDelay", "spreadAngle", "attackBoxSize", "attackBoxCenter", "hitboxOpenDelay", "hitboxCloseDelay", "aoeRadius", "placementPrefab", "channeledBeamPrefab", "channeledBeamAnchor", "manaDrain", "tickRate" };
-    // -----------------------------------------
 
-    private readonly string[] visualProps = { "targetingReticleOverride", "castingVFX", "castingVFXAnchor", "castingVFXPositionOffset", "castingVFXRotationOffset", "attachCastingVFX", "castVFX", "castVFXAnchor", "castVFXPositionOffset", "castVFXRotationOffset", "attachCastVFX", "castVFXDelay", "styleVFXOverrides", "hitVFX", "hitVFXPositionOffset", "hitVFXRotationOffset", "windupSound", "castSound", "impactSound", "screenShakeIntensity", "screenShakeDuration" };
+    private readonly string[] visualProps = { 
+        "targetingReticleOverride", "castingVFX", "castingVFXAnchor", "castingVFXPositionOffset", "castingVFXRotationOffset", "attachCastingVFX", 
+        "castVFX", "castVFXAnchor", "castVFXPositionOffset", "castVFXRotationOffset", "attachCastVFX", "castVFXDelay", "styleVFXOverrides", 
+        "hitVFX", "hitVFXPositionOffset", "hitVFXRotationOffset", 
+        "windupSound", "castSound", "impactSound", "voiceEffort", 
+        "screenShakeIntensity", "screenShakeDuration", "screenShakeDelay", "screenShakeEpicenter" 
+    };
+    
     private readonly string[] effectProps = { "onCastEffects", "friendlyEffects", "hostileEffects" };
     private readonly string[] aiProps = { "priority", "isAreaEffect", "usageType", "enemyTelegraphPrefab", "isMajorTacticalThreat" };
 
@@ -76,7 +81,11 @@ public class AbilityEditor : Editor
     
     [MenuItem("CONTEXT/Ability/Add Friendly Effect/Heal Effect")] private static void AddFriendlyHealEffect(MenuCommand command) { Ability a = (Ability)command.context; a.friendlyEffects.Add(new HealEffect()); EditorUtility.SetDirty(a); }
     [MenuItem("CONTEXT/Ability/Add Friendly Effect/Damage Effect")] private static void AddFriendlyDamageEffect(MenuCommand command) { Ability a = (Ability)command.context; a.friendlyEffects.Add(new DamageEffect()); EditorUtility.SetDirty(a); }
+    
+    // --- FIXED ERROR: Changed context to command.context ---
     [MenuItem("CONTEXT/Ability/Add Friendly Effect/Mana Effect")] private static void AddFriendlyManaEffect(MenuCommand command) { Ability a = (Ability)command.context; a.friendlyEffects.Add(new ManaEffect()); EditorUtility.SetDirty(a); }
+    // -------------------------------------------------------
+    
     [MenuItem("CONTEXT/Ability/Add Friendly Effect/Apply Status Effect")] private static void AddFriendlyStatusEffect(MenuCommand command) { Ability a = (Ability)command.context; a.friendlyEffects.Add(new ApplyStatusEffect()); EditorUtility.SetDirty(a); }
     [MenuItem("CONTEXT/Ability/Add Friendly Effect/Sequence Effect")] private static void AddFriendlySequenceEffect(MenuCommand command) { Ability a = (Ability)command.context; a.friendlyEffects.Add(new SequenceEffect()); EditorUtility.SetDirty(a); }
     

@@ -96,6 +96,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     private bool isFacingLocked = false;
     private Collider mainCollider;
     private Health myHealth;
+    private FootstepController footstepController;
 
     private int velocityZHash;
     private int velocityXHash;
@@ -103,10 +104,8 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
     private int weaponCategoryHash;
     private int dodgeHash;
 
-    // --- NEW IDLE HASHES ---
     private int isLongIdleHash;
     private int longIdleIndexHash;
-    // -----------------------
 
     private int frameSkipCounter = 0;
 
@@ -117,6 +116,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         partyAIManager = PartyAIManager.instance;
         movementHandler = GetComponent<CharacterMovementHandler>();
         mainCollider = GetComponent<Collider>();
+        footstepController = GetComponentInChildren<FootstepController>();
 
         CharacterRoot root = GetComponent<CharacterRoot>();
         if (root != null)
@@ -534,8 +534,14 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             animator.SetFloat(velocityXHash, vX, animationDampTime, Time.deltaTime);
         }
 
-        // --- NEW IDLE LOGIC ---
-        // Only start the timer if we are completely still and NOT doing anything else
+        // --- NEW: Feed the movement intensity over to the FootstepController ---
+        float moveIntensity = Mathf.Clamp01(new Vector2(vX, vZ).magnitude);
+        if (footstepController != null)
+        {
+            footstepController.SetMovementIntensity(moveIntensity);
+        }
+        // -----------------------------------------------------------------------
+
         if (vZ == 0f && vX == 0f && !isDodging && !IsMovingToAttack && !IsSpecialMovementActive && (abilityHolder == null || !abilityHolder.IsActivityLocked()))
         {
             currentIdleTimer += Time.deltaTime;
@@ -544,19 +550,16 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             {
                 isLongIdling = true;
 
-                // Roll the dice to pick which idle to play!
                 if (maxLongIdleVariants > 0)
                 {
                     animator.SetInteger(longIdleIndexHash, UnityEngine.Random.Range(0, maxLongIdleVariants));
                 }
 
-                // Tell the animator to enter the long idle state
                 animator.SetBool(isLongIdleHash, true);
             }
         }
         else
         {
-            // If we move, attack, dodge, or cast, instantly reset everything!
             currentIdleTimer = 0f;
             if (isLongIdling)
             {
@@ -564,7 +567,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
                 animator.SetBool(isLongIdleHash, false);
             }
         }
-        // ----------------------
     }
 
     public void TriggerDodgeRoll(Vector3 explicitDestination = default)

@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System;
 
-[RequireComponent(typeof(AudioSource))]
 public class PlayerAbilityHolder : MonoBehaviour
 {
     public static event Action<PlayerAbilityHolder, Ability, GameObject, Vector3> OnPlayerAbilityUsed;
@@ -84,7 +83,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     private PlayerEquipment playerEquipment;
     private UnityEngine.AI.NavMeshAgent navMeshAgent;
     private Animator animator;
-    private AudioSource audioSource;
+    private CharacterVoiceController voiceController;
 
     private Coroutine activeCastCoroutine;
     private Coroutine activeMeleeCoroutine;
@@ -136,7 +135,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             animator = GetComponentInChildren<Animator>();
         }
 
-        audioSource = GetComponent<AudioSource>();
+        voiceController = GetComponentInChildren<CharacterVoiceController>();
         movementHandler = GetComponentInParent<IMovementHandler>();
         meleeHitbox = GetComponentInChildren<MeleeHitbox>(true);
 
@@ -244,6 +243,13 @@ public class PlayerAbilityHolder : MonoBehaviour
             styleIndex = UnityEngine.Random.Range(0, ability.maxRandomVariants);
         }
 
+        // --- AAA FIX: Play the Windup Sound instantly as a One-Shot! ---
+        if (ability.windupSound != null)
+        {
+            SFXManager.PlayAtPoint(ability.windupSound, transform.position);
+        }
+        // ---------------------------------------------------------------
+
         if (finalCastTime > 0 || ability.telegraphDuration > 0)
         {
             if (activeCastCoroutine != null) StopCoroutine(activeCastCoroutine);
@@ -313,13 +319,6 @@ public class PlayerAbilityHolder : MonoBehaviour
             else if (hasCastTrigger) animator.SetTrigger(castTriggerHash);
         }
 
-        if (ability.windupSound != null && audioSource != null)
-        {
-            audioSource.clip = ability.windupSound;
-            audioSource.loop = true;
-            audioSource.Play();
-        }
-
         if (ability.castingVFX != null)
         {
             Transform anchor = GetAnchorTransform(ability.castingVFXAnchor);
@@ -354,7 +353,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         finally
         {
             CleanupCastingVFX();
-            if (audioSource != null && audioSource.clip == ability.windupSound) { audioSource.Stop(); audioSource.loop = false; audioSource.clip = null; }
             IsCasting = false;
             currentCastingAbility = null;
             activeCastCoroutine = null;
@@ -422,7 +420,16 @@ public class PlayerAbilityHolder : MonoBehaviour
 
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
 
-        if (ability.castSound != null && ability.hitboxOpenDelay > 0) AudioSource.PlayClipAtPoint(ability.castSound, transform.position);
+        // --- AAA FIX: Instant Spells get immediate audio via SFXManager ---
+        if (ability.castSound != null && ability.hitboxOpenDelay <= 0)
+        {
+            SFXManager.PlayAtPoint(ability.castSound, transform.position);
+            if (voiceController != null && ability.voiceEffort != VoiceEffort.None)
+            {
+                voiceController.PlayEffort(ability.voiceEffort);
+            }
+        }
+        // ------------------------------------------------------------------
 
         currentAimRotation = transform.rotation;
         if (ability.abilityType == AbilityType.ForwardProjectile || ability.abilityType == AbilityType.TargetedProjectile || ability.abilityType == AbilityType.Grenade)
@@ -513,13 +520,19 @@ public class PlayerAbilityHolder : MonoBehaviour
         SpawnCastVFX(currentExecutingAbility, currentAimRotation, currentStyleIndex);
     }
 
+    // --- AAA FIX: Melee strikes properly trigger delayed Audio ---
     public void OnAnimationEventPlayAudio()
     {
-        if (currentExecutingAbility != null && currentExecutingAbility.castSound != null)
+        if (currentExecutingAbility != null)
         {
-            AudioSource.PlayClipAtPoint(currentExecutingAbility.castSound, transform.position);
+            if (currentExecutingAbility.castSound != null)
+                SFXManager.PlayAtPoint(currentExecutingAbility.castSound, transform.position);
+
+            if (voiceController != null && currentExecutingAbility.voiceEffort != VoiceEffort.None)
+                voiceController.PlayEffort(currentExecutingAbility.voiceEffort);
         }
     }
+    // -------------------------------------------------------------
 
     public void OnAnimationEventFireProjectile()
     {
@@ -771,7 +784,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         if (activeProjectileCoroutine != null) { StopCoroutine(activeProjectileCoroutine); activeProjectileCoroutine = null; }
         if (activeLockCoroutine != null) { StopCoroutine(activeLockCoroutine); activeLockCoroutine = null; }
         if (activeMeleeCoroutine != null) { StopCoroutine(activeMeleeCoroutine); activeMeleeCoroutine = null; if (meleeHitbox != null) meleeHitbox.gameObject.SetActive(false); }
-        if (audioSource != null) { audioSource.Stop(); audioSource.clip = null; }
 
         IsCasting = false;
         currentCastingAbility = null;
@@ -820,7 +832,7 @@ public class PlayerAbilityHolder : MonoBehaviour
             if (vfx != null) { vfx.transform.localScale = ability.hitVFX.transform.localScale; vfx.SetActive(true); }
         }
 
-        if (ability.impactSound != null) AudioSource.PlayClipAtPoint(ability.impactSound, position);
+        if (ability.impactSound != null) SFXManager.PlayAtPoint(ability.impactSound, position);
 
         Collider[] _aoeBuffer = new Collider[100];
         int hitCount = Physics.OverlapSphereNonAlloc(position, ability.aoeRadius, _aoeBuffer, targetLayers);
@@ -850,7 +862,7 @@ public class PlayerAbilityHolder : MonoBehaviour
     {
         CharacterRoot casterRoot = GetComponentInParent<CharacterRoot>();
         if (casterRoot == null) return;
-        if (ability.impactSound != null) AudioSource.PlayClipAtPoint(ability.impactSound, transform.position);
+        if (ability.impactSound != null) SFXManager.PlayAtPoint(ability.impactSound, transform.position);
         if (ability.aoeRadius <= 0) { foreach (var effect in ability.friendlyEffects) effect.Apply(casterRoot.gameObject, casterRoot.gameObject); }
         else HandleGroundAOE(ability, transform.position);
     }
