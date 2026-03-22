@@ -165,6 +165,16 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     void Update()
     {
+        if (ActiveBeam != null && ActiveBeam.gameObject == null)
+        {
+            ActiveBeam = null;
+            if (animator != null) animator.SetBool(isChannelingHash, false);
+            IsCasting = false;
+            currentCastingAbility = null;
+            currentExecutingAbility = null;
+            isAnimationLockedInternal = false;
+        }
+
         if (hasQueuedAction)
         {
             if (Time.time > bufferExpirationTime) ClearInputBuffer();
@@ -243,12 +253,10 @@ public class PlayerAbilityHolder : MonoBehaviour
             styleIndex = UnityEngine.Random.Range(0, ability.maxRandomVariants);
         }
 
-        // --- AAA FIX: Play the Windup Sound instantly as a One-Shot! ---
         if (ability.windupSound != null)
         {
             SFXManager.PlayAtPoint(ability.windupSound, transform.position);
         }
-        // ---------------------------------------------------------------
 
         if (finalCastTime > 0 || ability.telegraphDuration > 0)
         {
@@ -416,24 +424,43 @@ public class PlayerAbilityHolder : MonoBehaviour
         currentExecutingPosition = position;
         currentProjectileIndex = 0;
 
-        if (ActiveBeam != null) ActiveBeam.Interrupt();
+        if (ActiveBeam != null)
+        {
+            ChanneledBeamController tempBeam = ActiveBeam;
+            ActiveBeam = null;
+            tempBeam.Interrupt();
+        }
 
         if (ability.abilityType != AbilityType.Charge) PayCostAndStartCooldown(ability, bypassCooldown);
 
-        // --- AAA FIX: Instant Spells get immediate audio via SFXManager ---
-        if (ability.castSound != null && ability.hitboxOpenDelay <= 0)
+        bool playInstantAudio = true;
+
+        if ((ability.abilityType == AbilityType.TargetedMelee || ability.abilityType == AbilityType.DirectionalMelee) && ability.hitboxOpenDelay > 0)
+        {
+            playInstantAudio = false;
+        }
+        else if ((ability.abilityType == AbilityType.TargetedProjectile || ability.abilityType == AbilityType.ForwardProjectile || ability.abilityType == AbilityType.Grenade) && ability.projectileSpawnDelay > 0)
+        {
+            playInstantAudio = false;
+        }
+
+        if (playInstantAudio && ability.castSound != null)
         {
             SFXManager.PlayAtPoint(ability.castSound, transform.position);
-            if (voiceController != null && ability.voiceEffort != VoiceEffort.None)
-            {
-                voiceController.PlayEffort(ability.voiceEffort);
-            }
+            if (voiceController != null && ability.voiceEffort != VoiceEffort.None) voiceController.PlayEffort(ability.voiceEffort);
         }
-        // ------------------------------------------------------------------
 
         currentAimRotation = transform.rotation;
         if (ability.abilityType == AbilityType.ForwardProjectile || ability.abilityType == AbilityType.TargetedProjectile || ability.abilityType == AbilityType.Grenade)
         {
+            Vector3 snapDir = (position - transform.position);
+            snapDir.y = 0;
+            if (snapDir.sqrMagnitude > 0.01f)
+            {
+                transform.rotation = Quaternion.LookRotation(snapDir.normalized);
+                currentAimRotation = transform.rotation;
+            }
+
             Vector3 fireDir = (position - GetAnchorTransform(ability.castVFXAnchor).position).normalized;
             if (fireDir != Vector3.zero)
             {
@@ -520,7 +547,6 @@ public class PlayerAbilityHolder : MonoBehaviour
         SpawnCastVFX(currentExecutingAbility, currentAimRotation, currentStyleIndex);
     }
 
-    // --- AAA FIX: Melee strikes properly trigger delayed Audio ---
     public void OnAnimationEventPlayAudio()
     {
         if (currentExecutingAbility != null)
@@ -532,7 +558,6 @@ public class PlayerAbilityHolder : MonoBehaviour
                 voiceController.PlayEffort(currentExecutingAbility.voiceEffort);
         }
     }
-    // -------------------------------------------------------------
 
     public void OnAnimationEventFireProjectile()
     {
@@ -551,7 +576,17 @@ public class PlayerAbilityHolder : MonoBehaviour
     private IEnumerator ExecuteProjectileBurst(Ability ability, GameObject target, Vector3 initialTargetPos)
     {
         float speedMultiplier = (playerStats != null) ? playerStats.secondaryStats.attackSpeed : 1f;
-        if (ability.projectileSpawnDelay > 0) yield return new WaitForSeconds(ability.projectileSpawnDelay / speedMultiplier);
+
+        if (ability.projectileSpawnDelay > 0)
+        {
+            yield return new WaitForSeconds(ability.projectileSpawnDelay / speedMultiplier);
+
+            if (ability.castSound != null)
+                SFXManager.PlayAtPoint(ability.castSound, transform.position);
+
+            if (voiceController != null && ability.voiceEffort != VoiceEffort.None)
+                voiceController.PlayEffort(ability.voiceEffort);
+        }
 
         int count = Mathf.Max(1, ability.projectileCount);
         for (int i = 0; i < count; i++)
@@ -560,9 +595,18 @@ public class PlayerAbilityHolder : MonoBehaviour
             if (h != null && h.isDowned) yield break;
 
             Vector3 currentTargetPos = initialTargetPos;
+
+            // --- LATEST AIM UPDATE FIX ---
+            // If we are mouse aiming, grab the absolutely freshest mouse coordinate 
+            // right before firing, and aggressively snap the spine to follow it!
             if (target == null && playerMovement != null)
             {
                 currentTargetPos = playerMovement.CurrentGroundTarget;
+
+                Vector3 sweepDir = (currentTargetPos - transform.position).normalized;
+                sweepDir.y = 0;
+                if (sweepDir != Vector3.zero) transform.rotation = Quaternion.LookRotation(sweepDir);
+
                 GameObject magneticTarget = FindMagneticTarget(ability, currentTargetPos);
                 if (magneticTarget != null)
                 {
@@ -597,18 +641,30 @@ public class PlayerAbilityHolder : MonoBehaviour
             Collider targetCollider = target.GetComponent<Collider>() ?? target.GetComponentInChildren<Collider>();
             if (targetCollider != null) targetCenter = targetCollider.bounds.center;
 
-            rawDirection = (targetCenter - spawnPos).normalized;
             trueTargetPos = targetCenter;
+            rawDirection = (trueTargetPos - spawnPos).normalized;
         }
         else
         {
             float playerFloorY = transform.position.y;
             if (UnityEngine.AI.NavMesh.SamplePosition(transform.position, out UnityEngine.AI.NavMeshHit myHit, 2f, UnityEngine.AI.NavMesh.AllAreas)) playerFloorY = myHit.position.y;
             float spawnHeightAboveFloor = spawnPos.y - playerFloorY;
-            Vector3 adjustedTargetPos = new Vector3(targetPos.x, targetPos.y + spawnHeightAboveFloor, targetPos.z);
 
-            rawDirection = (adjustedTargetPos - spawnPos).normalized;
-            trueTargetPos = adjustedTargetPos;
+            trueTargetPos = new Vector3(targetPos.x, targetPos.y + spawnHeightAboveFloor, targetPos.z);
+
+            Vector3 playerCenter = transform.position;
+            playerCenter.y = spawnPos.y;
+
+            rawDirection = (trueTargetPos - playerCenter);
+
+            if (rawDirection.magnitude < 0.5f)
+            {
+                rawDirection = transform.forward;
+            }
+            else
+            {
+                rawDirection.Normalize();
+            }
         }
 
         if (rawDirection.sqrMagnitude > 0.001f)
@@ -752,7 +808,12 @@ public class PlayerAbilityHolder : MonoBehaviour
         }
     }
 
-    public void CancelCast(bool isMovementInterrupt = false)
+    public void CancelCast()
+    {
+        CancelCast(false);
+    }
+
+    public void CancelCast(bool isMovementInterrupt)
     {
         bool isBusy = IsCasting || isAnimationLockedInternal || activeCastCoroutine != null || activeProjectileCoroutine != null || activeMeleeCoroutine != null || activeLockCoroutine != null || ActiveBeam != null;
         if (!isBusy) return;
@@ -797,7 +858,13 @@ public class PlayerAbilityHolder : MonoBehaviour
         isAnimationLockedInternal = false;
 
         if (CastingBarUIManager.instance != null) CastingBarUIManager.instance.StopCast();
-        if (ActiveBeam != null) { ActiveBeam.Interrupt(); ActiveBeam = null; }
+
+        if (ActiveBeam != null)
+        {
+            ChanneledBeamController tempBeam = ActiveBeam;
+            ActiveBeam = null;
+            tempBeam.Interrupt();
+        }
     }
 
     public void PayCostAndStartCooldown(Ability ability, bool bypassCooldown = false)

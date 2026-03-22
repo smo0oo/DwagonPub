@@ -89,6 +89,11 @@ public class EnemyAbilityHolder : MonoBehaviour
 
     public void CancelCast()
     {
+        CancelCast(false);
+    }
+
+    public void CancelCast(bool isMovementInterrupt)
+    {
         if (activeCastCoroutine != null) { StopCoroutine(activeCastCoroutine); activeCastCoroutine = null; }
         IsCasting = false;
 
@@ -110,7 +115,13 @@ public class EnemyAbilityHolder : MonoBehaviour
         currentExecutingAbility = null;
         CleanupCastingVFX();
         CleanupTelegraph();
-        if (ActiveBeam != null) { ActiveBeam.Interrupt(); ActiveBeam = null; }
+
+        if (ActiveBeam != null)
+        {
+            ChanneledBeamController tempBeam = ActiveBeam;
+            ActiveBeam = null;
+            tempBeam.Interrupt();
+        }
 
         OnCastFinished?.Invoke();
     }
@@ -130,12 +141,10 @@ public class EnemyAbilityHolder : MonoBehaviour
             styleIndex = UnityEngine.Random.Range(0, 3);
         }
 
-        // --- AAA FIX: Play the Windup Sound instantly as a One-Shot! ---
         if (ability.windupSound != null)
         {
             SFXManager.PlayAtPoint(ability.windupSound, transform.position);
         }
-        // ---------------------------------------------------------------
 
         if (ability.castTime > 0 || ability.telegraphDuration > 0)
         {
@@ -291,16 +300,32 @@ public class EnemyAbilityHolder : MonoBehaviour
 
         PayCostAndStartCooldown(ability, bypassCooldown);
 
-        // --- AAA FIX: Instant Spells get immediate audio via SFXManager ---
-        if (ability.castSound != null && ability.hitboxOpenDelay <= 0)
+        bool playInstantAudio = true;
+
+        if ((ability.abilityType == AbilityType.TargetedMelee || ability.abilityType == AbilityType.DirectionalMelee) && ability.hitboxOpenDelay > 0)
+        {
+            playInstantAudio = false;
+        }
+        else if ((ability.abilityType == AbilityType.TargetedProjectile || ability.abilityType == AbilityType.ForwardProjectile || ability.abilityType == AbilityType.Grenade) && ability.projectileSpawnDelay > 0)
+        {
+            playInstantAudio = false;
+        }
+
+        if (playInstantAudio && ability.castSound != null)
         {
             SFXManager.PlayAtPoint(ability.castSound, transform.position);
-            if (voiceController != null && ability.voiceEffort != VoiceEffort.None)
+            if (voiceController != null && ability.voiceEffort != VoiceEffort.None) voiceController.PlayEffort(ability.voiceEffort);
+        }
+
+        if (ability.abilityType == AbilityType.ForwardProjectile || ability.abilityType == AbilityType.TargetedProjectile || ability.abilityType == AbilityType.Grenade)
+        {
+            Vector3 snapDir = (position - transform.position);
+            snapDir.y = 0;
+            if (snapDir.sqrMagnitude > 0.01f)
             {
-                voiceController.PlayEffort(ability.voiceEffort);
+                transform.rotation = Quaternion.LookRotation(snapDir.normalized);
             }
         }
-        // ------------------------------------------------------------------
 
         if (ability.castVFX != null)
         {
@@ -379,7 +404,6 @@ public class EnemyAbilityHolder : MonoBehaviour
         if (vfx != null) vfx.SetActive(true);
     }
 
-    // --- AAA FIX: Melee strikes properly trigger delayed Audio ---
     public void OnAnimationEventPlayAudio()
     {
         if (currentExecutingAbility != null)
@@ -391,7 +415,6 @@ public class EnemyAbilityHolder : MonoBehaviour
                 voiceController.PlayEffort(currentExecutingAbility.voiceEffort);
         }
     }
-    // -------------------------------------------------------------
 
     public void OnAnimationEventFireProjectile()
     {
@@ -449,7 +472,15 @@ public class EnemyAbilityHolder : MonoBehaviour
         currentCastingAbility = ability;
 
         if (ability.projectileSpawnDelay > 0)
+        {
             yield return new WaitForSeconds(ability.projectileSpawnDelay);
+
+            if (ability.castSound != null)
+                SFXManager.PlayAtPoint(ability.castSound, transform.position);
+
+            if (voiceController != null && ability.voiceEffort != VoiceEffort.None)
+                voiceController.PlayEffort(ability.voiceEffort);
+        }
 
         int count = Mathf.Max(1, ability.projectileCount);
 
@@ -458,7 +489,15 @@ public class EnemyAbilityHolder : MonoBehaviour
             if (enemyAI != null && enemyAI.Health.currentHealth <= 0) break;
 
             Vector3 currentTargetPos = initialTargetPos;
-            if (target != null) currentTargetPos = target.transform.position;
+
+            if (target != null)
+            {
+                currentTargetPos = target.transform.position;
+
+                Vector3 snapDir = (currentTargetPos - transform.position);
+                snapDir.y = 0;
+                if (snapDir.sqrMagnitude > 0.01f) transform.rotation = Quaternion.LookRotation(snapDir.normalized);
+            }
 
             FireSingleProjectile(ability, target, currentTargetPos, i, count);
 
@@ -488,16 +527,27 @@ public class EnemyAbilityHolder : MonoBehaviour
         {
             Vector3 tPos = target.transform.position;
             if (target.GetComponent<Collider>() != null) tPos = target.GetComponent<Collider>().bounds.center;
-            Vector3 dir = tPos - spawnPos; dir.y = 0;
-            if (dir.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(dir);
             trueTargetPos = tPos;
+        }
+
+        Vector3 playerCenter = transform.position;
+        playerCenter.y = spawnPos.y;
+
+        Vector3 flatTarget = trueTargetPos;
+        flatTarget.y = spawnPos.y;
+
+        Vector3 rawDirection = (flatTarget - playerCenter);
+
+        if (rawDirection.magnitude < 0.5f)
+        {
+            rawDirection = transform.forward;
         }
         else
         {
-            Vector3 dir = targetPos - spawnPos; dir.y = 0;
-            if (dir.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(dir);
-            trueTargetPos = targetPos;
+            rawDirection.Normalize();
         }
+
+        if (rawDirection.sqrMagnitude > 0.001f) spawnRot = Quaternion.LookRotation(rawDirection);
 
         if (ability.spreadAngle > 0 && totalCount > 1)
         {

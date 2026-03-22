@@ -47,9 +47,17 @@ public class Projectile : MonoBehaviour
     private float flightDuration;
     private float flightTimePassed;
 
+    // --- AAA FIX: Cache the Inspector layers for pooling! ---
+    private LayerMask initialCollisionLayers;
+    private LayerMask initialDamageLayers;
+
     void Awake()
     {
         activationTriggerLayer = LayerMask.NameToLayer("ActivationTrigger");
+
+        // Take a snapshot of whatever you set in the Inspector!
+        initialCollisionLayers = collisionLayers;
+        initialDamageLayers = damageLayers;
     }
 
     void OnEnable()
@@ -80,6 +88,11 @@ public class Projectile : MonoBehaviour
             isGrenade = false;
         }
 
+        // --- AAA FIX: Reset to Inspector defaults instead of 0 ---
+        this.collisionLayers = initialCollisionLayers;
+        this.damageLayers = initialDamageLayers;
+        // ---------------------------------------------------------
+
         if (this.caster != null && this.sourceAbility != null)
         {
             bool hasHostileEffects = this.sourceAbility.hostileEffects != null && this.sourceAbility.hostileEffects.Count > 0;
@@ -88,12 +101,11 @@ public class Projectile : MonoBehaviour
             PartyMemberTargeting partyTargeting = this.caster.GetComponentInParent<PartyMemberTargeting>();
             AITargeting aiTargeting = this.caster.GetComponentInParent<AITargeting>();
 
-            this.collisionLayers = 0;
-            this.damageLayers = 0;
-
             if (partyTargeting != null)
             {
+                // ADD the targeting rules on top of the base Inspector rules
                 this.collisionLayers |= partyTargeting.obstacleLayers;
+
                 if (hasHostileEffects)
                 {
                     this.damageLayers |= partyTargeting.enemyLayer;
@@ -112,6 +124,7 @@ public class Projectile : MonoBehaviour
             else if (aiTargeting != null)
             {
                 this.collisionLayers |= aiTargeting.obstacleLayers;
+
                 if (hasHostileEffects)
                 {
                     this.damageLayers |= aiTargeting.playerLayer;
@@ -260,7 +273,6 @@ public class Projectile : MonoBehaviour
     {
         SpawnImpactVFX();
 
-        // --- AAA FIX: Use the new router for impact explosions! ---
         if (sourceAbility != null && sourceAbility.impactSound != null)
             SFXManager.PlayAtPoint(sourceAbility.impactSound, transform.position);
 
