@@ -207,8 +207,6 @@ public class PartyManager : MonoBehaviour
 
             bool isMemberActive = (member == ActivePlayer);
 
-            // --- THE FIX: STRICT CORPSE CHECK ---
-            // Verify if this specific character is downed so we don't accidentally revive their AI!
             Health memberHealth = member.GetComponentInChildren<Health>();
             bool isDead = memberHealth != null && (memberHealth.isDowned || memberHealth.currentHealth <= 0);
 
@@ -255,7 +253,45 @@ public class PartyManager : MonoBehaviour
     public void AddExperience(int amount) { if (amount <= 0) return; currentXP += amount; while (currentXP >= xpToNextLevel) { LevelUp(); } OnXPChanged?.Invoke(); }
     public void SetLevel(int newLevel) { if (newLevel <= 0) return; int levelDifference = newLevel - partyLevel; partyLevel = newLevel; currentXP = 0; xpToNextLevel = CalculateXPForLevel(partyLevel + 1); if (levelDifference > 0) { DistributeStatPoints(levelDifference); } OnLevelUp?.Invoke(); OnXPChanged?.Invoke(); }
     private void LevelUp() { partyLevel++; currentXP -= xpToNextLevel; xpToNextLevel = CalculateXPForLevel(partyLevel + 1); DistributeStatPoints(1); OnLevelUp?.Invoke(); }
-    private void DistributeStatPoints(int levelsGained) { if (partyMembers == null) return; foreach (GameObject playerGO in partyMembers) { PlayerStats stats = playerGO.GetComponentInChildren<PlayerStats>(); if (stats != null) { stats.unspentStatPoints += pointsPerLevel * levelsGained; stats.AddSkillPoints(skillPointsPerLevel * levelsGained); stats.CalculateFinalStats(); } } }
+
+    private void DistributeStatPoints(int levelsGained)
+    {
+        if (partyMembers == null) return;
+        foreach (GameObject playerGO in partyMembers)
+        {
+            if (playerGO == null) continue;
+
+            PlayerStats stats = playerGO.GetComponentInChildren<PlayerStats>();
+            if (stats != null)
+            {
+                stats.unspentStatPoints += pointsPerLevel * levelsGained;
+                stats.AddSkillPoints(skillPointsPerLevel * levelsGained);
+
+                // Recalculate stats to grab the fresh Max Health & Max Mana values
+                stats.CalculateFinalStats();
+
+                // --- AAA FIX: 100% Mana Replenish ---
+                stats.RestoreMana(stats.maxMana);
+            }
+
+            Health h = playerGO.GetComponentInChildren<Health>();
+            if (h != null)
+            {
+                // --- AAA FIX: 100% Health Replenish & Miracle Revives ---
+                if (h.isDowned || h.currentHealth <= 0)
+                {
+                    // If they are dead, leveling up acts as a miracle and completely revives them!
+                    h.Revive(1.0f);
+                }
+                else
+                {
+                    // Normal full heal
+                    h.SetToMaxHealth();
+                }
+            }
+        }
+    }
+
     private int CalculateXPForLevel(int level) { return 100 * level; }
     #endregion
 }

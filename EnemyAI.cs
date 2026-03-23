@@ -126,19 +126,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     void Start()
     {
-        if (enemyClass != null && Health != null)
-        {
-            float hpScale = Mathf.Pow(1.15f, enemyLevel - 1);
-            float dmgScale = Mathf.Pow(1.10f, enemyLevel - 1);
-            float armorScale = (enemyLevel - 1) * 0.02f;
-
-            int scaledMaxHealth = Mathf.RoundToInt(enemyClass.maxHealth * hpScale);
-
-            Health.UpdateMaxHealth(scaledMaxHealth);
-            Health.SetToMaxHealth();
-            Health.damageReductionPercent = Mathf.Clamp(enemyClass.damageMitigation + armorScale, 0f, 0.85f);
-            CurrentDamageMultiplier = enemyClass.damageMultiplier * dmgScale;
-        }
+        // Apply the initial scaling based on the Inspector setting (or SceneInfo injection)
+        SetLevel(enemyLevel);
 
         StartPosition = transform.position;
         OriginalSpeed = NavAgent.speed;
@@ -245,7 +234,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             return;
         }
 
-        // --- AAA FIX: Allow animations to tick during stuns! ---
         if (StatusEffects != null)
         {
             if (StatusEffects.IsStunned)
@@ -267,7 +255,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
                 StopMovement();
             }
         }
-        // -------------------------------------------------------
 
         HandleRotation();
 
@@ -812,4 +799,25 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         if (AssignedSurroundPoint != null) SurroundPointManager.instance?.ReleasePoint(this);
         PlayerAbilityHolder.OnPlayerAbilityUsed -= HandlePlayerAbilityUsed;
     }
+
+    // --- AAA FIX: Dynamic Level Scaling ---
+    public void SetLevel(int newLevel)
+    {
+        enemyLevel = newLevel;
+
+        if (enemyClass != null && Health != null)
+        {
+            float hpScale = Mathf.Pow(1.15f, enemyLevel - 1);
+            float dmgScale = Mathf.Pow(1.10f, enemyLevel - 1);
+            float armorScale = (enemyLevel - 1) * 0.02f;
+
+            int scaledMaxHealth = Mathf.RoundToInt(enemyClass.maxHealth * hpScale);
+
+            Health.UpdateMaxHealth(scaledMaxHealth);
+            Health.SetToMaxHealth();
+            Health.damageReductionPercent = Mathf.Clamp(enemyClass.damageMitigation + armorScale, 0f, 0.85f);
+            CurrentDamageMultiplier = enemyClass.damageMultiplier * dmgScale;
+        }
+    }
+    // --------------------------------------
 }
