@@ -123,9 +123,6 @@ public class Health : MonoBehaviour
         if (isInvulnerable || debugGodMode || isDead || isDowned) return;
 
         // --- AAA FIX: HIT STOP ---
-        // Inside Health.cs -> TakeDamage()
-        // Debug.Log("TakeDamage fired! Telling GameManager to Hit Stop...");
-
         if (GameManager.instance != null)
         {
             GameManager.instance.TriggerHitStop(0.05f, 0.1f);
@@ -394,8 +391,20 @@ public class Health : MonoBehaviour
     {
         if (root != null)
         {
+            // Standard fallback (Ensures Enemies and standard NPCs still work perfectly)
             if (root.PlayerMovement != null) root.PlayerMovement.enabled = canFight;
             if (root.PartyMemberAI != null) root.PartyMemberAI.enabled = canFight;
+
+            // --- AAA FIX: Respect Party Manager Controls ---
+            // If this is a Party Member, DO NOT blindly turn on PlayerMovement!
+            if (PartyManager.instance != null && PartyManager.instance.partyMembers.Contains(root.gameObject))
+            {
+                bool isCurrentlyActive = (PartyManager.instance.ActivePlayer == root.gameObject);
+
+                if (root.PlayerMovement != null) root.PlayerMovement.enabled = (canFight && isCurrentlyActive);
+                if (root.PartyMemberAI != null) root.PartyMemberAI.enabled = (canFight && !isCurrentlyActive);
+            }
+            // -----------------------------------------------
         }
     }
 

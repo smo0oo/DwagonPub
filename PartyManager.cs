@@ -16,6 +16,11 @@ public class PartyManager : MonoBehaviour
 
     public bool playerSwitchingEnabled { get; private set; } = true;
 
+    [Header("Universal Revival System")]
+    [Tooltip("The Soul Orb to drop when a party member dies in standard gameplay.")]
+    public GameObject soulOrbPrefab;
+    private bool[] wasDowned; // Tracks who is currently on the floor
+
     [Header("Party Resources")]
     public int currencyGold = 0;
 
@@ -63,6 +68,8 @@ public class PartyManager : MonoBehaviour
 
     void Start()
     {
+        wasDowned = new bool[partyMembers.Count];
+
         if (partyMembers.Count > 0)
         {
             SetActivePlayer(0);
@@ -71,6 +78,31 @@ public class PartyManager : MonoBehaviour
 
     void Update()
     {
+        // --- AAA FEATURE: Universal Soul Orb Tracking ---
+        if (wasDowned != null && wasDowned.Length == partyMembers.Count)
+        {
+            for (int i = 0; i < partyMembers.Count; i++)
+            {
+                if (partyMembers[i] == null) continue;
+                Health h = partyMembers[i].GetComponentInChildren<Health>();
+                if (h != null)
+                {
+                    // They just fell down!
+                    if (h.isDowned && !wasDowned[i])
+                    {
+                        wasDowned[i] = true;
+                        SpawnSoulOrb(i, partyMembers[i].transform.position);
+                    }
+                    // They got back up!
+                    else if (!h.isDowned && wasDowned[i])
+                    {
+                        wasDowned[i] = false;
+                    }
+                }
+            }
+        }
+        // ------------------------------------------------
+
         if (ActivePlayer != null)
         {
             bool isInvalid = !ActivePlayer.activeInHierarchy;
@@ -93,6 +125,66 @@ public class PartyManager : MonoBehaviour
         {
             SwitchToNextLivingMember();
         }
+    }
+
+    private void SpawnSoulOrb(int index, Vector3 position)
+    {
+        // Let DualModeManager handle its own specialized orb dropping if it's active
+        if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive) return;
+
+        if (soulOrbPrefab != null)
+        {
+            GameObject orb = Instantiate(soulOrbPrefab, position + (Vector3.up * 1.5f), Quaternion.identity);
+
+            // --- AAA FIX: Use GetComponentInChildren to ensure we find it even if it's nested! ---
+            SoulOrb orbScript = orb.GetComponentInChildren<SoulOrb>();
+            if (orbScript != null)
+            {
+                orbScript.memberIndexToRevive = index;
+                Debug.Log($"[PartyManager] Spawned Soul Orb for Index {index}. ID successfully assigned.");
+            }
+            else
+            {
+                Debug.LogError("[PartyManager] Spawned an orb, but it has no SoulOrb.cs script attached to it!");
+            }
+        }
+    }
+
+    public void RevivePartyMember(int index, Vector3 position)
+    {
+        Debug.Log($"[PartyManager] Executing Revive for Index {index}...");
+
+        if (index < 0 || index >= partyMembers.Count) return;
+        GameObject member = partyMembers[index];
+        if (member == null) return;
+
+        // --- AAA FIX: Hyper-safe NavMesh Teleportation ---
+        UnityEngine.AI.NavMeshAgent agent = member.GetComponent<UnityEngine.AI.NavMeshAgent>();
+        if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
+        {
+            agent.Warp(position);
+        }
+        else
+        {
+            // If the agent is disabled or knocked off the mesh, manually move their body safely
+            member.transform.position = position;
+        }
+        // -------------------------------------------------
+
+        // Perform the actual revival (50% health)
+        Health h = member.GetComponentInChildren<Health>();
+        if (h != null)
+        {
+            h.Revive(0.5f);
+            Debug.Log($"[PartyManager] Health.Revive(0.5f) successfully fired for {member.name}.");
+        }
+        else
+        {
+            Debug.LogError($"[PartyManager] Could not find a Health component on {member.name}!");
+        }
+
+        // Force a re-evaluation of all AI scripts to ensure controls are assigned correctly
+        SetActivePlayer(activePlayerIndex);
     }
 
     public void CheckPartyStatus()
@@ -267,27 +359,15 @@ public class PartyManager : MonoBehaviour
                 stats.unspentStatPoints += pointsPerLevel * levelsGained;
                 stats.AddSkillPoints(skillPointsPerLevel * levelsGained);
 
-                // Recalculate stats to grab the fresh Max Health & Max Mana values
                 stats.CalculateFinalStats();
-
-                // --- AAA FIX: 100% Mana Replenish ---
                 stats.RestoreMana(stats.maxMana);
             }
 
             Health h = playerGO.GetComponentInChildren<Health>();
             if (h != null)
             {
-                // --- AAA FIX: 100% Health Replenish & Miracle Revives ---
-                if (h.isDowned || h.currentHealth <= 0)
-                {
-                    // If they are dead, leveling up acts as a miracle and completely revives them!
-                    h.Revive(1.0f);
-                }
-                else
-                {
-                    // Normal full heal
-                    h.SetToMaxHealth();
-                }
+                if (h.isDowned || h.currentHealth <= 0) h.Revive(1.0f);
+                else h.SetToMaxHealth();
             }
         }
     }

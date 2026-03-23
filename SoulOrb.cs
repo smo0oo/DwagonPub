@@ -18,30 +18,42 @@ public class SoulOrb : MonoBehaviour, IInteractable
     {
         if (isCollected) return;
 
-        if (DualModeManager.instance != null && memberIndexToRevive != -1)
+        Debug.Log($"[Soul Orb] Interacted! Attempting to revive Party Index: {memberIndexToRevive}");
+
+        // Ensure we have a valid index before proceeding
+        if (memberIndexToRevive != -1)
         {
             isCollected = true;
 
             // --- AAA POLISH: Play VFX and Sound ---
             if (pickupVFX != null)
             {
-                // Spawn the VFX exactly where the orb is
                 GameObject vfx = Instantiate(pickupVFX, transform.position, Quaternion.identity);
-
-                // Backup cleanup: destroys the VFX object after 5 seconds just in case 
-                // the particle system doesn't have an auto-destroy script attached to it.
                 Destroy(vfx, 5f);
             }
 
             if (pickupSound != null)
             {
-                // Plays the sound at the orb's location in 3D space
                 AudioSource.PlayClipAtPoint(pickupSound, transform.position);
             }
             // --------------------------------------
 
-            // Execute the revival
-            DualModeManager.instance.ReviveMember(memberIndexToRevive, transform.position);
+            // 1. If Dual Mode is active, use its specialized logic
+            if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
+            {
+                Debug.Log("[Soul Orb] Routing to DualModeManager.");
+                DualModeManager.instance.ReviveMember(memberIndexToRevive, transform.position);
+            }
+            // 2. Otherwise, use the Universal Party Revival!
+            else if (PartyManager.instance != null)
+            {
+                Debug.Log("[Soul Orb] Routing to PartyManager.");
+                PartyManager.instance.RevivePartyMember(memberIndexToRevive, transform.position);
+            }
+            else
+            {
+                Debug.LogError("[Soul Orb] CRITICAL: No active Manager found to process the revival!");
+            }
 
             if (FloatingTextManager.instance != null)
                 FloatingTextManager.instance.ShowEvent("Soul Restored!", transform.position + Vector3.up * 2);
@@ -51,7 +63,7 @@ public class SoulOrb : MonoBehaviour, IInteractable
         }
         else
         {
-            Debug.LogError($"SoulOrb Error: Invalid member index ({memberIndexToRevive}) or missing Manager.");
+            Debug.LogError($"[Soul Orb] Interaction failed! memberIndexToRevive is still -1. The spawner failed to assign an ID!");
         }
     }
 }
