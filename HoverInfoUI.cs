@@ -67,7 +67,8 @@ public class HoverInfoUI : MonoBehaviour
         {
             Health hitHealth = hit.collider.GetComponentInParent<Health>();
 
-            if (hitHealth != null)
+            // Don't show hover info for things that are completely dead
+            if (hitHealth != null && hitHealth.currentHealth > 0)
             {
                 if (hitHealth != currentTargetHealth)
                 {
@@ -143,6 +144,17 @@ public class HoverInfoUI : MonoBehaviour
         }
 
         currentTargetHealth = null;
+
+        // --- AAA FIX: Wipe the container clean so ghost icons don't persist! ---
+        if (statusEffectsContainer != null)
+        {
+            foreach (Transform child in statusEffectsContainer)
+            {
+                Destroy(child.gameObject);
+            }
+        }
+        // -----------------------------------------------------------------------
+
         infoPanel.SetActive(false);
     }
 
@@ -163,7 +175,6 @@ public class HoverInfoUI : MonoBehaviour
             {
                 GameObject newIconObj = Instantiate(statusIconPrefab, statusEffectsContainer);
 
-                // --- AAA FIX: Properly initialize the timer UI component! ---
                 if (newIconObj.TryGetComponent<StatusEffectIconUI>(out var iconUI))
                 {
                     iconUI.Initialize(effect);
