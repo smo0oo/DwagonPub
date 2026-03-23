@@ -25,10 +25,8 @@ public class DomeBattleManager : MonoBehaviour
 
     private LootBagUI _lootBagRef;
 
-    // --- OPTIMIZATION VARS ---
     private float winCheckTimer = 0f;
-    private const float WIN_CHECK_INTERVAL = 1.0f; // Check every 1 second
-    // -------------------------
+    private const float WIN_CHECK_INTERVAL = 1.0f;
 
     void Awake()
     {
@@ -38,37 +36,36 @@ public class DomeBattleManager : MonoBehaviour
 
     void OnDestroy()
     {
-        if (_lootBagRef != null)
-        {
-            LootBagUI.OnLootBagClosed -= OnLootBagClosed;
-        }
+        if (_lootBagRef != null) LootBagUI.OnLootBagClosed -= OnLootBagClosed;
     }
 
     void Start()
     {
-        // Force Initialize the Wagon Hotbar
         WagonHotbarManager hotbar = FindAnyObjectByType<WagonHotbarManager>();
-        if (hotbar != null)
-        {
-            hotbar.InitializeAndShow();
-        }
-        else
-        {
-            Debug.LogWarning("DomeBattleManager: Could not find WagonHotbarManager in the scene.");
-        }
+        if (hotbar != null) hotbar.InitializeAndShow();
 
-        if (resourceManager == null)
-        {
-            resourceManager = WagonResourceManager.instance ?? FindAnyObjectByType<WagonResourceManager>();
-        }
-
+        if (resourceManager == null) resourceManager = WagonResourceManager.instance ?? FindAnyObjectByType<WagonResourceManager>();
         if (exitZoneObject != null) exitZoneObject.SetActive(false);
 
         if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
         {
-            if (DualModeManager.instance.pendingBossBuff != null)
+            if (DualModeManager.instance.pendingBossBuff != null) ApplyBossBuff(DualModeManager.instance.pendingBossBuff);
+
+            // --- AAA FIX: Dynamic UI for Rescue Mode ---
+            if (DualModeManager.instance.isRescueDefending)
             {
-                ApplyBossBuff(DualModeManager.instance.pendingBossBuff);
+                if (startNightButton != null)
+                {
+                    TextMeshProUGUI btnText = startNightButton.GetComponentInChildren<TextMeshProUGUI>();
+                    if (btnText != null) btnText.text = "Deploy Rescue";
+                    else
+                    {
+                        Text standardText = startNightButton.GetComponentInChildren<Text>();
+                        if (standardText != null) standardText.text = "Deploy Rescue";
+                    }
+                }
+
+                if (waveStatusText != null) waveStatusText.text = "Phase: <color=orange>Rescue Defense!</color>";
             }
         }
 
@@ -78,10 +75,7 @@ public class DomeBattleManager : MonoBehaviour
             startInPrepPhase = false;
             StartCoroutine(StartAmbushSequence());
         }
-        else
-        {
-            EnterPrepPhase();
-        }
+        else EnterPrepPhase();
 
         bool uiBlocked = false;
         var lootUI = FindFirstObjectByType<LootBagUI>();
@@ -93,15 +87,9 @@ public class DomeBattleManager : MonoBehaviour
         }
 
         var setupUI = FindFirstObjectByType<DualModeSetupUI>();
-        if (setupUI != null && setupUI.IsVisible)
-        {
-            uiBlocked = true;
-        }
+        if (setupUI != null && setupUI.IsVisible) uiBlocked = true;
 
-        if (uiBlocked && prepPhasePanel != null)
-        {
-            prepPhasePanel.SetActive(false);
-        }
+        if (uiBlocked && prepPhasePanel != null) prepPhasePanel.SetActive(false);
 
         if (GameManager.instance != null && GameManager.instance.justExitedDungeon)
         {
@@ -116,10 +104,7 @@ public class DomeBattleManager : MonoBehaviour
                 }
             }
 
-            if (waveStatusText != null)
-            {
-                waveStatusText.text = "Phase: <color=yellow>Final Stand</color>";
-            }
+            if (waveStatusText != null) waveStatusText.text = "Phase: <color=yellow>Final Stand</color>";
         }
 
         if (startNightButton != null) startNightButton.onClick.AddListener(OnStartNightClicked);
@@ -139,42 +124,28 @@ public class DomeBattleManager : MonoBehaviour
 
     private void CheckForWinCondition()
     {
-        // 1. If wave spawner is still busy spawning, we can't win yet
         if (waveSpawner != null && waveSpawner.IsSpawning) return;
 
-        // 2. Efficient check for enemies
         GameObject[] enemies = GameObject.FindGameObjectsWithTag("Enemy");
-
         bool anyAlive = false;
         foreach (var enemy in enemies)
         {
             Health h = enemy.GetComponent<Health>();
-            if (h != null && h.currentHealth > 0 && !h.isDowned)
-            {
-                anyAlive = true;
-                break;
-            }
+            if (h != null && h.currentHealth > 0 && !h.isDowned) { anyAlive = true; break; }
         }
 
-        if (!anyAlive)
-        {
-            OnVictory();
-        }
+        if (!anyAlive) OnVictory();
     }
 
     private void OnLootBagClosed()
     {
-        if (!IsBattleActive && prepPhasePanel != null)
-        {
-            prepPhasePanel.SetActive(true);
-        }
+        if (!IsBattleActive && prepPhasePanel != null) prepPhasePanel.SetActive(true);
         LootBagUI.OnLootBagClosed -= OnLootBagClosed;
     }
 
     private string GetCurrentSpawnID()
     {
-        if (GameManager.instance != null && !string.IsNullOrEmpty(GameManager.instance.lastSpawnPointID))
-            return GameManager.instance.lastSpawnPointID;
+        if (GameManager.instance != null && !string.IsNullOrEmpty(GameManager.instance.lastSpawnPointID)) return GameManager.instance.lastSpawnPointID;
         return "WagonCenter";
     }
 
@@ -182,7 +153,11 @@ public class DomeBattleManager : MonoBehaviour
     {
         IsBattleActive = false;
         if (prepPhasePanel != null) prepPhasePanel.SetActive(true);
-        if (waveStatusText != null) waveStatusText.text = "Phase: <color=green>Preparation</color>";
+
+        // Preserve the orange warning text if we are in rescue mode!
+        if (waveStatusText != null && (DualModeManager.instance == null || !DualModeManager.instance.isRescueDefending))
+            waveStatusText.text = "Phase: <color=green>Preparation</color>";
+
         if (waveSpawner != null) waveSpawner.StopSpawning();
     }
 
@@ -214,7 +189,7 @@ public class DomeBattleManager : MonoBehaviour
 
         if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
         {
-            Debug.Log("Dual Mode Defense Complete. Returning to Dungeon...");
+            Debug.Log("Dual Mode Defense Complete.");
             StartCoroutine(DualModeVictoryRoutine());
             return;
         }
@@ -222,30 +197,35 @@ public class DomeBattleManager : MonoBehaviour
         if (exitZoneObject != null)
         {
             exitZoneObject.SetActive(true);
-            if (FloatingTextManager.instance != null)
-                FloatingTextManager.instance.ShowAIStatus("Road Open!", exitZoneObject.transform.position + Vector3.up * 2);
+            if (FloatingTextManager.instance != null) FloatingTextManager.instance.ShowAIStatus("Road Open!", exitZoneObject.transform.position + Vector3.up * 2);
         }
     }
 
     private IEnumerator DualModeVictoryRoutine()
     {
         yield return new WaitForSeconds(3.0f);
-        DualModeManager.instance.SwitchToDungeon();
+
+        // --- AAA FIX: Route Victory Correctly ---
+        if (DualModeManager.instance.isRescueDefending)
+        {
+            Debug.Log("Rescue Defense Won! Deploying to Dungeon...");
+            DualModeManager.instance.DeployRescueTeam();
+        }
+        else
+        {
+            DualModeManager.instance.SwitchToDungeon();
+        }
     }
 
     private void ApplyBossBuff(Ability buffAbility)
     {
-        Debug.Log($"Applying Boss Buff: {buffAbility.name}");
         if (PartyAIManager.instance != null)
         {
             foreach (var member in PartyAIManager.instance.AllPartyAIs)
             {
                 if (member.gameObject.activeInHierarchy)
                 {
-                    foreach (var effect in buffAbility.friendlyEffects)
-                    {
-                        effect.Apply(member.gameObject, member.gameObject);
-                    }
+                    foreach (var effect in buffAbility.friendlyEffects) effect.Apply(member.gameObject, member.gameObject);
                 }
             }
         }

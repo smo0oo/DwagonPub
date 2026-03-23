@@ -136,7 +136,7 @@ public class PartyManager : MonoBehaviour
         {
             GameObject orb = Instantiate(soulOrbPrefab, position + (Vector3.up * 1.5f), Quaternion.identity);
 
-            // --- AAA FIX: Use GetComponentInChildren to ensure we find it even if it's nested! ---
+            // Safe fetch
             SoulOrb orbScript = orb.GetComponentInChildren<SoulOrb>();
             if (orbScript != null)
             {
@@ -244,13 +244,26 @@ public class PartyManager : MonoBehaviour
         }
     }
 
+    // --- AAA FEATURE: The Rescue Defense Wipe Check ---
     private IEnumerator HandlePartyWipe()
     {
         yield return new WaitForSeconds(2.0f);
         if (DualModeManager.instance != null && DualModeManager.instance.isDualModeActive)
         {
-            Debug.Log("Dual Mode Wipe Detected. Initiating Rescue Logic...");
-            DualModeManager.instance.StartRescueMission();
+            // If we are currently trying to win the rescue wave, OR in the dungeon attempting the rescue...
+            // And we wipe AGAIN? That is a total game over.
+            if (DualModeManager.instance.isRescueDefending || DualModeManager.instance.isRescueMissionActive)
+            {
+                Debug.Log("Total Dual Mode Wipe. Reloading last save...");
+                if (SaveManager.instance != null) SaveManager.instance.LoadGame();
+                else UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
+            }
+            else
+            {
+                // This replaces the old StartRescueMission. Now it sends them to the Dome to fight!
+                Debug.Log("Dungeon Team Wipe Detected. Initiating Rescue Defense...");
+                DualModeManager.instance.StartRescueSequence();
+            }
         }
         else
         {
@@ -259,6 +272,7 @@ public class PartyManager : MonoBehaviour
             else UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
         }
     }
+    // --------------------------------------------------
 
     public void ToggleMovementMode()
     {
@@ -366,6 +380,7 @@ public class PartyManager : MonoBehaviour
             Health h = playerGO.GetComponentInChildren<Health>();
             if (h != null)
             {
+                // Full revive if downed, otherwise full heal
                 if (h.isDowned || h.currentHealth <= 0) h.Revive(1.0f);
                 else h.SetToMaxHealth();
             }

@@ -15,6 +15,7 @@ public class DualModeManager : MonoBehaviour
     [Header("State")]
     public bool isDualModeActive = false;
     public bool isRescueMissionActive = false;
+    public bool isRescueDefending = false; // --- AAA FEATURE: Defending for the right to rescue! ---
 
     [Header("Teams")]
     public List<int> dungeonTeamIndices = new List<int>();
@@ -55,6 +56,7 @@ public class DualModeManager : MonoBehaviour
     {
         isDualModeActive = true;
         isRescueMissionActive = false;
+        isRescueDefending = false;
         dungeonTeamIndices = new List<int>(groupA);
         wagonTeamIndices = new List<int>(groupB);
         defenseSceneName = domeScene;
@@ -204,6 +206,7 @@ public class DualModeManager : MonoBehaviour
     {
         isDualModeActive = false;
         isRescueMissionActive = false;
+        isRescueDefending = false;
         pendingBossBuff = null;
         dungeonLootBag.Clear();
         dungeonTeamIndices.Clear();
@@ -230,11 +233,12 @@ public class DualModeManager : MonoBehaviour
         Debug.Log("Dual Mode has ended. Returning to standard gameplay.");
     }
 
-    public void StartRescueMission()
+    // --- AAA UPDATE: STEP 1 - INITIATE DEFENSE ---
+    public void StartRescueSequence()
     {
         if (!isDualModeActive || PartyManager.instance == null) return;
 
-        isRescueMissionActive = true;
+        isRescueDefending = true; // Flag that we need to defend first!
         fallenHeroes.Clear();
 
         List<GameObject> allMembers = PartyManager.instance.partyMembers;
@@ -253,11 +257,22 @@ public class DualModeManager : MonoBehaviour
 
         if (SceneStateManager.instance != null && InventoryManager.instance != null)
         {
-            string currentScene = SceneManager.GetActiveScene().name;
-            SceneStateManager.instance.CaptureSceneState(currentScene, InventoryManager.instance.worldItemPrefab);
+            pendingDungeonScene = SceneManager.GetActiveScene().name; // Save exactly which floor they died on
+            SceneStateManager.instance.CaptureSceneState(pendingDungeonScene, InventoryManager.instance.worldItemPrefab);
         }
 
-        if (GameManager.instance != null) GameManager.instance.ReloadCurrentLevel("Entrance");
+        // Send the player immediately to the Dome to fight for the rescue!
+        if (GameManager.instance != null) GameManager.instance.LoadLevel(defenseSceneName, "WagonCenter");
+    }
+
+    // --- AAA UPDATE: STEP 2 - DEPLOY RESCUE ---
+    public void DeployRescueTeam()
+    {
+        // Called by DomeBattleManager after they win the wave
+        isRescueDefending = false;
+        isRescueMissionActive = true;
+
+        if (GameManager.instance != null) GameManager.instance.LoadLevel(pendingDungeonScene, "Entrance");
     }
 
     public void ReviveMember(int index, Vector3 revivePosition)
@@ -321,6 +336,8 @@ public class DualModeManager : MonoBehaviour
 
         foreach (int index in dungeonTeamIndices)
         {
+            if (!ValidateIndex(index)) continue;
+
             if (!allMembers[index].activeInHierarchy)
             {
                 allRescued = false;
@@ -337,11 +354,67 @@ public class DualModeManager : MonoBehaviour
 
         if (allRescued)
         {
-            Debug.Log("Rescue Successful! All members revived.");
-            if (FloatingTextManager.instance != null && PartyManager.instance.ActivePlayer != null)
+            Debug.Log("Rescue Successful! Initiating Emergency Extraction.");
+            StartCoroutine(EmergencyExtractionSequence());
+        }
+    }
+
+    // --- AAA UPDATE: STEP 3 - EMERGENCY EXTRACTION ---
+    private IEnumerator EmergencyExtractionSequence()
+    {
+        // 1. Lock all player inputs instantly so they can't exploit the full 4/5-man team
+        if (PartyManager.instance != null)
+        {
+            PartyManager.instance.SetPlayerSwitching(false);
+            foreach (GameObject member in PartyManager.instance.partyMembers)
             {
-                FloatingTextManager.instance.ShowEvent("Rescue Complete!", PartyManager.instance.ActivePlayer.transform.position + Vector3.up * 3);
+                if (member == null || !member.activeInHierarchy) continue;
+
+                // Freeze player controls
+                PlayerMovement pm = member.GetComponent<PlayerMovement>();
+                if (pm != null) pm.enabled = false;
+
+                // Freeze AI controls
+                PartyMemberAI ai = member.GetComponent<PartyMemberAI>();
+                if (ai != null) ai.enabled = false;
+
+                // Stop physical movement
+                NavMeshAgent agent = member.GetComponent<NavMeshAgent>();
+                if (agent != null && agent.isOnNavMesh)
+                {
+                    agent.isStopped = true;
+                    agent.ResetPath();
+                    agent.velocity = Vector3.zero;
+                }
             }
+        }
+
+        // 2. Display the extraction warning to the player
+        if (FloatingTextManager.instance != null && PartyManager.instance != null && PartyManager.instance.ActivePlayer != null)
+        {
+            FloatingTextManager.instance.ShowEvent("EMERGENCY EXTRACTION...", PartyManager.instance.ActivePlayer.transform.position + Vector3.up * 3);
+        }
+
+        // 3. Wait for dramatic effect
+        yield return new WaitForSeconds(3.0f);
+
+        // 4. Abort the run! 
+        Debug.Log("Aborting Dungeon Run: Returning entire party to the Dome.");
+
+        MergeLootToMainInventory(); // They get to keep what they found so far
+        pendingBossBuff = null;     // But they forfeit the boss reward!
+
+        // Dissolve the split teams and reunite the UI BEFORE loading the scene
+        EndDualMode();
+
+        if (GameManager.instance != null)
+        {
+            // --- AAA FIX: Set this to TRUE to bypass the Dual Mode Setup Menu! ---
+            // Treats it as a standard "Final Stand" team wave, allowing the player to win and exit the node normally!
+            GameManager.instance.SetJustExitedDungeon(true);
+
+            // Warp everyone back to the safety of the Wagon
+            GameManager.instance.LoadLevel(defenseSceneName, "WagonCenter");
         }
     }
 
