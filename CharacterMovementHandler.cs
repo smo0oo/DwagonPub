@@ -11,7 +11,7 @@ public class CharacterMovementHandler : MonoBehaviour, IMovementHandler
     public bool handleStandardMovement = true;
 
     [Header("Collision Checks")]
-    [Tooltip("Layers that will block the Leap ability (e.g. Walls, Default).")]
+    [Tooltip("Layers that will block the Leap and Charge abilities (e.g. Walls, Default).")]
     public LayerMask obstacleLayers;
 
     public bool IsSpecialMovementActive { get; private set; } = false;
@@ -46,7 +46,6 @@ public class CharacterMovementHandler : MonoBehaviour, IMovementHandler
             handleStandardMovement = false;
         }
 
-        // --- FIX: Check for BOTH types of parameters ---
         if (animator != null)
         {
             speedHash = Animator.StringToHash("Speed");
@@ -147,7 +146,6 @@ public class CharacterMovementHandler : MonoBehaviour, IMovementHandler
     {
         if (IsSpecialMovementActive) return;
 
-        // --- NEW: Collision Prevention ---
         Vector3 startPos = transform.position;
         // Lift origin slightly so we don't hit the floor immediately, but keep it relevant to body height
         Vector3 rayOrigin = startPos + Vector3.up * 1.0f;
@@ -159,17 +157,13 @@ public class CharacterMovementHandler : MonoBehaviour, IMovementHandler
         // Check for walls/obstacles
         if (Physics.Raycast(rayOrigin, direction, out RaycastHit hit, distance, obstacleLayers))
         {
-            // We hit a wall. Stop the leap shortly before the wall.
             Vector3 hitPoint = hit.point;
 
             // Back off 0.5 units from the wall to prevent clipping
             Vector3 backOff = direction * 0.5f;
             hitPoint -= backOff;
-
-            // Set Y back to original destination Y (or hit point Y if it's terrain)
             hitPoint.y = destination.y;
 
-            // Verify this new point is actually on the NavMesh so we don't get stuck in a wall
             if (NavMesh.SamplePosition(hitPoint, out NavMeshHit navHit, 2.0f, NavMesh.AllAreas))
             {
                 destination = navHit.position;
@@ -179,7 +173,6 @@ public class CharacterMovementHandler : MonoBehaviour, IMovementHandler
                 destination = hitPoint;
             }
         }
-        // ---------------------------------
 
         StartCoroutine(LeapRoutine(destination, onLandAction));
     }
@@ -233,9 +226,14 @@ public class CharacterMovementHandler : MonoBehaviour, IMovementHandler
     private IEnumerator ChargeRoutine(GameObject target, Ability ability)
     {
         IsSpecialMovementActive = true;
-        if (navAgent != null) navAgent.enabled = false;
 
-        float chargeSpeed = 20f;
+        if (navAgent != null)
+        {
+            navAgent.ResetPath();
+            navAgent.enabled = false;
+        }
+
+        float chargeSpeed = 35f; // Fast, aggressive dash speed
         float stopDistance = 1.5f;
         float maxTime = 2.0f;
         float timer = 0f;
@@ -243,17 +241,35 @@ public class CharacterMovementHandler : MonoBehaviour, IMovementHandler
         while (target != null && timer < maxTime)
         {
             timer += Time.deltaTime;
-            float dist = Vector3.Distance(transform.position, target.transform.position);
+
+            // Keep the destination perfectly flat on the ground so the character doesn't fly up into the air
+            Vector3 targetPos = target.transform.position;
+            targetPos.y = transform.position.y;
+
+            float dist = Vector3.Distance(transform.position, targetPos);
 
             if (dist <= stopDistance) break;
 
-            Vector3 dir = (target.transform.position - transform.position).normalized;
-            transform.position += dir * chargeSpeed * Time.deltaTime;
-            transform.rotation = Quaternion.LookRotation(dir);
+            Vector3 moveDirection = (targetPos - transform.position).normalized;
+
+            // Safety Check: Are we about to charge through a wall?
+            if (Physics.Raycast(transform.position + Vector3.up * 0.5f, moveDirection, out RaycastHit hit, 1.0f, obstacleLayers))
+            {
+                break; // Hit a wall, stop the charge instantly!
+            }
+
+            // MoveTowards prevents overshooting the target and completely eliminates orbiting
+            transform.position = Vector3.MoveTowards(transform.position, targetPos, chargeSpeed * Time.deltaTime);
+
+            if (moveDirection != Vector3.zero)
+            {
+                transform.rotation = Quaternion.LookRotation(moveDirection);
+            }
 
             yield return null;
         }
 
+        // Clean snap back onto the NavMesh
         if (navAgent != null)
         {
             navAgent.enabled = true;
