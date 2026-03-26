@@ -6,6 +6,7 @@ using TMPro;
 using UnityEngine.Splines;
 using UnityEngine.UI;
 using Cinemachine;
+using PixelCrushers.DialogueSystem;
 
 public class WorldMapManager : MonoBehaviour
 {
@@ -49,6 +50,17 @@ public class WorldMapManager : MonoBehaviour
     public Button campButton;
     public Button forageButton;
 
+    [Header("UI - Narrative Foraging")]
+    public GameObject forageEventPanel;
+    public Image forageEventImage;
+    public TextMeshProUGUI forageEventTitleText;
+    public TextMeshProUGUI forageEventStoryText;
+    public Button forageAcceptButton;
+    public TextMeshProUGUI forageAcceptButtonText;
+    public Button forageEnterDungeonButton;
+
+    private ForageEventData currentActiveForageEvent;
+
     [Header("Scene References")]
     public WagonController wagonController;
     public WagonResourceManager resourceManager;
@@ -77,6 +89,8 @@ public class WorldMapManager : MonoBehaviour
         if (roadsidePanel != null) roadsidePanel.SetActive(false);
         if (haltButton != null) haltButton.gameObject.SetActive(false);
 
+        if (forageEventPanel != null) forageEventPanel.SetActive(false);
+
         if (confirmTravelButton != null) confirmTravelButton.onClick.AddListener(OnConfirmTravel);
         if (cancelTravelButton != null) cancelTravelButton.onClick.AddListener(OnCancelTravel);
         if (enterButton != null) enterButton.onClick.AddListener(OnEnterLocation);
@@ -88,17 +102,18 @@ public class WorldMapManager : MonoBehaviour
         if (campButton != null) campButton.onClick.AddListener(OnCampClicked);
         if (forageButton != null) forageButton.onClick.AddListener(OnForageClicked);
 
+        if (forageAcceptButton != null) forageAcceptButton.onClick.AddListener(OnForageAcceptClicked);
+        if (forageEnterDungeonButton != null) forageEnterDungeonButton.onClick.AddListener(OnForageEnterDungeonClicked);
+
         if (resourceManager == null) resourceManager = FindAnyObjectByType<WagonResourceManager>();
     }
 
-    // --- NEW: Helper for GameManager to find the real destination ---
     public LocationNode GetFinalDestination()
     {
         if (longTermDestination != null) return longTermDestination;
         if (currentPlannedPath != null && currentPlannedPath.Count > 0) return currentPlannedPath.Last();
         return null;
     }
-    // ---------------------------------------------------------------
 
     public void RestoreJourneyState(SplineContainer spline, float progress, bool reverse)
     {
@@ -132,7 +147,6 @@ public class WorldMapManager : MonoBehaviour
             currentLocation = originNode;
             currentActiveConnection = connection;
 
-            // --- UPDATED: Robust Path Restoration ---
             if (GameManager.instance != null && !string.IsNullOrEmpty(GameManager.instance.lastLongTermDestinationID))
             {
                 var target = allNodes.FirstOrDefault(n => n.locationName == GameManager.instance.lastLongTermDestinationID);
@@ -143,15 +157,9 @@ public class WorldMapManager : MonoBehaviour
                     if (trip.isValid && trip.path.Count > 1)
                     {
                         currentPlannedPath = trip.path;
-                        Debug.Log($"[WorldMapManager] Restored multi-leg journey: {originNode.locationName} -> {target.locationName} (Steps: {currentPlannedPath.Count})");
-                    }
-                    else
-                    {
-                        Debug.LogWarning($"[WorldMapManager] Failed to recalculate trip from {originNode.locationName} to {target.locationName}");
                     }
                 }
             }
-            // ----------------------------------------
 
             ShowRoadsidePanel();
 
@@ -159,10 +167,6 @@ public class WorldMapManager : MonoBehaviour
             if (haltButton != null) haltButton.gameObject.SetActive(false);
 
             originNode.SetRoadsVisibilityExcept(spline, false);
-        }
-        else
-        {
-            Debug.LogWarning("WorldMapManager: Could not find matching RoadConnection for restored spline.");
         }
     }
 
@@ -223,17 +227,14 @@ public class WorldMapManager : MonoBehaviour
             {
                 float progress = Mathf.Clamp(wagonController.TravelProgress, 0f, 1f);
 
-                // --- UPDATED: Robust Multi-Leg Resumption ---
                 if (currentPlannedPath != null && currentPlannedPath.Count > 1)
                 {
                     StartCoroutine(ExecuteResumedJourney(progress));
                 }
                 else if (currentActiveConnection != null && currentActiveConnection.destinationNode != null)
                 {
-                    // Fallback to single leg if path was lost
                     if (progress > 0.99f)
                     {
-                        Debug.Log("Resume: Already at destination. Triggering Arrival.");
                         SetCurrentLocation(currentActiveConnection.destinationNode, true);
                         ShowArrivalPanel();
                     }
@@ -242,7 +243,6 @@ public class WorldMapManager : MonoBehaviour
                         StartCoroutine(TravelToNode(currentActiveConnection.destinationNode, progress));
                     }
                 }
-                // --------------------------------------------
             }
         }
 
@@ -261,7 +261,6 @@ public class WorldMapManager : MonoBehaviour
 
             if (i == startIndex && progress > 0.99f)
             {
-                Debug.Log($"[ExecuteResumedJourney] Already at end of leg to {legEnd.locationName}. Skipping travel.");
                 SetCurrentLocation(legEnd, true);
 
                 if (legEnd == currentPlannedPath.Last())
@@ -274,11 +273,7 @@ public class WorldMapManager : MonoBehaviour
 
             yield return StartCoroutine(TravelToNode(legEnd, progress));
 
-            if (currentLocation != legEnd)
-            {
-                Debug.Log("Journey interrupted or halted!");
-                yield break;
-            }
+            if (currentLocation != legEnd) yield break;
         }
     }
 
@@ -295,45 +290,136 @@ public class WorldMapManager : MonoBehaviour
         }
     }
 
-    private void OnForageClicked()
-    {
-        timeOfDay = (timeOfDay + 1f) % 24f;
-        if (resourceManager != null) resourceManager.ConsumeForTime(1f);
-
-        string result = "Foraged for 1 hour...\n";
-        bool foundSomething = false;
-
-        if (currentActiveConnection != null && currentActiveConnection.forageLootTable != null)
-        {
-            if (Random.value <= currentActiveConnection.forageSuccessChance)
-            {
-                foreach (var drop in currentActiveConnection.forageLootTable.potentialDrops)
-                {
-                    if (Random.value <= drop.dropChance)
-                    {
-                        int qty = Random.Range(drop.minQuantity, drop.maxQuantity + 1);
-                        if (InventoryManager.instance != null)
-                        {
-                            InventoryManager.instance.HandleLoot(drop.itemData, qty);
-                            result += $"Found {qty} {drop.itemData.displayName}!\n";
-                            foundSomething = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!foundSomething) result += "Found nothing useful.";
-        if (roadsideInfoText != null) roadsideInfoText.text = result;
-    }
-
     private void ShowRoadsidePanel()
     {
         if (roadsidePanel != null) roadsidePanel.SetActive(true);
         if (roadsideInfoText != null) roadsideInfoText.text = "The wagon is stopped. What is your command?";
     }
 
-    // --- MAIN UPDATE: Logic for Checking Traversal ---
+    private void OnForageClicked()
+    {
+        timeOfDay = (timeOfDay + 1f) % 24f;
+        if (resourceManager != null) resourceManager.ConsumeForTime(1f);
+
+        if (currentActiveConnection == null || currentActiveConnection.possibleForageEvents.Count == 0)
+        {
+            if (roadsideInfoText != null) roadsideInfoText.text = "You search the area, but find nothing of interest.";
+            return;
+        }
+
+        int totalWeight = currentActiveConnection.possibleForageEvents.Sum(e => e.weight);
+        int randomRoll = Random.Range(0, totalWeight);
+
+        ForageEventData rolledEvent = null;
+        int currentWeightSum = 0;
+
+        foreach (var eventWeight in currentActiveConnection.possibleForageEvents)
+        {
+            currentWeightSum += eventWeight.weight;
+            if (randomRoll < currentWeightSum)
+            {
+                rolledEvent = eventWeight.eventData;
+                break;
+            }
+        }
+
+        if (rolledEvent == null) return;
+
+        currentActiveForageEvent = rolledEvent;
+        isUiBusy = true;
+
+        if (roadsidePanel != null) roadsidePanel.SetActive(false);
+
+        if (forageEventTitleText != null) forageEventTitleText.text = rolledEvent.eventName;
+        if (forageEventStoryText != null) forageEventStoryText.text = rolledEvent.storySnippet;
+        if (forageAcceptButtonText != null) forageAcceptButtonText.text = rolledEvent.acceptButtonText;
+
+        if (forageEventImage != null)
+        {
+            if (rolledEvent.contextualArt != null)
+            {
+                forageEventImage.sprite = rolledEvent.contextualArt;
+                forageEventImage.gameObject.SetActive(true);
+            }
+            else
+            {
+                forageEventImage.gameObject.SetActive(false);
+            }
+        }
+
+        if (forageAcceptButton != null) forageAcceptButton.gameObject.SetActive(true);
+
+        if (forageEnterDungeonButton != null)
+        {
+            if (rolledEvent.eventType == ForageEventType.HiddenDungeon || rolledEvent.eventType == ForageEventType.Ambush)
+            {
+                forageEnterDungeonButton.gameObject.SetActive(true);
+            }
+            else
+            {
+                forageEnterDungeonButton.gameObject.SetActive(false);
+            }
+        }
+
+        if (forageEventPanel != null) forageEventPanel.SetActive(true);
+    }
+
+    private void OnForageAcceptClicked()
+    {
+        if (currentActiveForageEvent != null && currentActiveForageEvent.rewardTable != null)
+        {
+            string lootSummary = "Obtained:\n";
+            bool foundSomething = false;
+
+            foreach (var drop in currentActiveForageEvent.rewardTable.potentialDrops)
+            {
+                if (Random.value <= drop.dropChance)
+                {
+                    int qty = Random.Range(drop.minQuantity, drop.maxQuantity + 1);
+                    if (InventoryManager.instance != null)
+                    {
+                        InventoryManager.instance.HandleLoot(drop.itemData, qty);
+                        lootSummary += $"{qty}x {drop.itemData.displayName}\n";
+                        foundSomething = true;
+                    }
+                }
+            }
+
+            if (roadsideInfoText != null)
+            {
+                roadsideInfoText.text = foundSomething ? lootSummary : "The cache was empty...";
+            }
+        }
+
+        if (currentActiveForageEvent != null && !string.IsNullOrEmpty(currentActiveForageEvent.conversationTitle))
+        {
+            if (forageEventPanel != null) forageEventPanel.SetActive(false);
+            DialogueManager.StartConversation(currentActiveForageEvent.conversationTitle);
+        }
+        else
+        {
+            if (forageEventPanel != null) forageEventPanel.SetActive(false);
+            ShowRoadsidePanel();
+        }
+
+        currentActiveForageEvent = null;
+        isUiBusy = false;
+    }
+
+    private void OnForageEnterDungeonClicked()
+    {
+        if (currentActiveForageEvent == null || string.IsNullOrEmpty(currentActiveForageEvent.linkedSceneName)) return;
+
+        if (forageEventPanel != null) forageEventPanel.SetActive(false);
+        isUiBusy = false;
+
+        if (GameManager.instance != null)
+        {
+            GameManager.instance.SetLocationType(NodeType.Event);
+            GameManager.instance.LoadLevel(currentActiveForageEvent.linkedSceneName, "DungeonEntrance", "WorldMap");
+        }
+    }
+
     public void OnLocationClicked(LocationNode destinationNode)
     {
         if (currentLocation == null) return;
@@ -346,18 +432,15 @@ public class WorldMapManager : MonoBehaviour
             currentPlannedPath = tripData.path;
             SetLongTermDestination(destinationNode);
 
-            // --- TRAVERSAL CHECK START ---
             bool pathBlocked = false;
             string blockingReason = "";
 
-            // Scan the entire path for any segment that is blocked
             for (int i = 0; i < currentPlannedPath.Count - 1; i++)
             {
                 LocationNode from = currentPlannedPath[i];
                 LocationNode to = currentPlannedPath[i + 1];
 
                 string missingTags;
-                // Requires LocationNode.CanTravelTo() to support 'out string' signature
                 if (!from.CanTravelTo(to, out missingTags))
                 {
                     pathBlocked = true;
@@ -365,7 +448,6 @@ public class WorldMapManager : MonoBehaviour
                     break;
                 }
             }
-            // --- TRAVERSAL CHECK END ---
 
             float arrivalTime = (timeOfDay + tripData.totalHours) % 24;
             string warning = "";
@@ -379,19 +461,16 @@ public class WorldMapManager : MonoBehaviour
                 }
             }
 
-            // --- UI UPDATE LOGIC ---
             if (pathBlocked)
             {
-                // RED UI for Blocked Path
                 confirmationText.text = $"<color=red>CANNOT TRAVEL</color>\n" +
                                         $"<color=red>{blockingReason}</color>\n\n" +
                                         $"Visit the Workshop to upgrade your wagon.";
 
-                confirmTravelButton.interactable = false; // Disable travel
+                confirmTravelButton.interactable = false;
             }
             else
             {
-                // Standard UI for Valid Path
                 float currentFuel = (resourceManager != null) ? resourceManager.currentFuel : 0;
                 float currentRations = (resourceManager != null) ? resourceManager.currentRations : 0;
                 string fuelColor = (currentFuel >= tripData.estimatedFuelCost) ? "black" : "red";
@@ -403,15 +482,11 @@ public class WorldMapManager : MonoBehaviour
                                         $"Food: <color={foodColor}>{tripData.estimatedRationsCost:F0}</color>" +
                                         $"{warning}";
 
-                confirmTravelButton.interactable = true; // Enable travel
+                confirmTravelButton.interactable = true;
             }
 
             travelConfirmationPanel.SetActive(true);
             isUiBusy = true;
-        }
-        else
-        {
-            Debug.Log("No valid path to target.");
         }
     }
 
@@ -441,11 +516,7 @@ public class WorldMapManager : MonoBehaviour
         {
             LocationNode legEnd = currentPlannedPath[i + 1];
             yield return StartCoroutine(TravelToNode(legEnd));
-            if (currentLocation != legEnd)
-            {
-                Debug.Log("Journey interrupted!");
-                yield break;
-            }
+            if (currentLocation != legEnd) yield break;
         }
     }
 
@@ -528,7 +599,6 @@ public class WorldMapManager : MonoBehaviour
                 int diceRoll = Random.Range(0, 11);
                 if (diceRoll <= currentActiveConnection.ambushChance)
                 {
-                    Debug.Log("Ambush!");
                     string ambushScene = currentActiveConnection.combatSceneName;
                     if (string.IsNullOrEmpty(ambushScene)) ambushScene = defaultDomeBattleScene;
                     GameManager.instance.LoadLevel(ambushScene, "AmbushSpawn");
@@ -572,7 +642,7 @@ public class WorldMapManager : MonoBehaviour
             {
                 wagonController.transform.position = currentLocation.transform.position;
                 wagonController.transform.rotation = currentLocation.transform.rotation;
-                wagonController.SetCurrentNode(node); // Sync controller
+                wagonController.SetCurrentNode(node);
             }
             UpdateGPSHighlight();
         }
@@ -618,9 +688,6 @@ public class WorldMapManager : MonoBehaviour
             lastHoveredNode = currentHoveredNode;
         }
 
-        // Mouse Click handling is delegated to WagonController or handled here as fallback
-        // We leave this here for hovering logic, but the actual 'Click' triggers OnLocationClicked via the controller usually.
-        // If you want direct clicks to work too:
         if (Input.GetMouseButtonDown(0) && currentHoveredNode != null)
         {
             OnLocationClicked(currentHoveredNode);
@@ -656,13 +723,11 @@ public class WorldMapManager : MonoBehaviour
 
         if (GameManager.instance != null && currentLocation != null)
         {
-            Debug.Log($"WorldMapManager: Setting Location Type to {currentLocation.nodeType}");
             GameManager.instance.SetLocationType(currentLocation.nodeType);
 
             if (DualModeManager.instance != null)
             {
                 DualModeManager.instance.queuedDungeonScene = currentLocation.dualModeDungeonScene;
-                Debug.Log($"WorldMapManager: Queued dungeon scene '{currentLocation.dualModeDungeonScene}' for DualMode.");
             }
 
             string spawnPointID = "WorldMapArrival";

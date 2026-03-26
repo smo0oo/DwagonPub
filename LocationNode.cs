@@ -5,6 +5,14 @@ using UnityEngine.Splines;
 // --- Node Types ---
 public enum NodeType { Scene, Event, Waypoint, DualModeLocation }
 
+// --- NEW: Weighted Event Pool Struct ---
+[System.Serializable]
+public struct ForageEventWeight
+{
+    public ForageEventData eventData;
+    [Range(1, 100)] public int weight;
+}
+
 [System.Serializable]
 public class RoadConnection
 {
@@ -26,8 +34,10 @@ public class RoadConnection
     [Header("Combat & Events")]
     public string combatSceneName = "DomeBattle";
     [Range(0, 10)] public int ambushChance = 2;
-    public LootTable forageLootTable;
-    public float forageSuccessChance = 0.5f;
+
+    // --- UPDATED: The Event Pool ---
+    [Header("Narrative Foraging")]
+    public List<ForageEventWeight> possibleForageEvents = new List<ForageEventWeight>();
 }
 
 public class LocationNode : MonoBehaviour
@@ -68,7 +78,6 @@ public class LocationNode : MonoBehaviour
         }
     }
 
-    // --- LOGIC: Can we travel? ---
     public bool CanTravelTo(LocationNode target, out string missingTags)
     {
         missingTags = "";
@@ -99,27 +108,21 @@ public class LocationNode : MonoBehaviour
         return null;
     }
 
-    // --- VISUALS: Render Logic ---
     public void SetRoadsVisibility(bool isVisible)
     {
         foreach (var connection in connections)
         {
             if (connection.roadSpline != null)
             {
-                // FIX: Search in Children because Spline generators often put meshes on child objects
                 MeshRenderer roadRenderer = connection.roadSpline.GetComponentInChildren<MeshRenderer>();
-
                 if (roadRenderer != null)
                 {
                     roadRenderer.enabled = isVisible;
-
-                    // Apply Color Warning
                     if (isVisible)
                     {
-                        // Note: Ensure your road material uses a shader with a main color property (e.g. _BaseColor or _Color)
-                        if (roadRenderer.material.HasProperty("_BaseColor")) // URP/HDRP
+                        if (roadRenderer.material.HasProperty("_BaseColor"))
                             roadRenderer.material.SetColor("_BaseColor", connection.roadColor);
-                        else if (roadRenderer.material.HasProperty("_Color")) // Standard
+                        else if (roadRenderer.material.HasProperty("_Color"))
                             roadRenderer.material.color = connection.roadColor;
                     }
                 }

@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.VFX;
+using UnityEngine.Events;
 using System;
 using System.Collections;
 
@@ -13,6 +14,10 @@ public class Health : MonoBehaviour
     public event Action OnDowned;
     public event Action OnRevived;
     public event Action OnDeath;
+
+    [Header("Inspector Events")]
+    [Tooltip("Hook up the ProceduralHitReaction script here.")]
+    public UnityEvent<float> onProceduralFlinch;
 
     [Header("Health Stats")]
     public int maxHealth = 100;
@@ -155,6 +160,12 @@ public class Health : MonoBehaviour
         int damageToDeal = Mathf.Max(0, Mathf.FloorToInt(finalDamage));
 
         currentHealth -= damageToDeal;
+
+        // --- TRIGGER PROCEDURAL FLINCH ---
+        if (damageToDeal > 0)
+        {
+            onProceduralFlinch?.Invoke((float)damageToDeal);
+        }
 
         // --- AAA FIX: POISE & KNOCKBACK ---
         currentPoise -= poiseDamage;

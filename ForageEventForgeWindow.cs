@@ -121,6 +121,7 @@ public class ForageEventForgeWindow : EditorWindow
             case ForageEventType.Jackpot: return new Color(1f, 0.8f, 0.4f);
             case ForageEventType.Ambush: return new Color(1f, 0.5f, 0.5f);
             case ForageEventType.HiddenDungeon: return new Color(0.8f, 0.6f, 1f);
+            case ForageEventType.DialogueEvent: return new Color(0.4f, 0.8f, 1f);
             default: return Color.white;
         }
     }
@@ -224,7 +225,6 @@ public class ForageEventForgeWindow : EditorWindow
         SerializedProperty nameProp = so.FindProperty("eventName");
         GUILayout.Label("Event Title (UI Header)", EditorStyles.miniLabel);
 
-        // Corrected bold text field implementation
         GUIStyle titleStyle = new GUIStyle(EditorStyles.textField);
         titleStyle.fontStyle = FontStyle.Bold;
         nameProp.stringValue = EditorGUILayout.TextField(nameProp.stringValue, titleStyle);
@@ -255,6 +255,7 @@ public class ForageEventForgeWindow : EditorWindow
         SerializedProperty lootProp = so.FindProperty("rewardTable");
         SerializedProperty sceneProp = so.FindProperty("linkedSceneName");
         SerializedProperty btnProp = so.FindProperty("acceptButtonText");
+        SerializedProperty convoProp = so.FindProperty("conversationTitle");
 
         EditorGUILayout.PropertyField(btnProp);
         GUILayout.Space(5);
@@ -271,6 +272,15 @@ public class ForageEventForgeWindow : EditorWindow
             {
                 EditorGUILayout.HelpBox("A Linked Scene Name is required for Ambush or Hidden Dungeon events!", MessageType.Warning);
             }
+        }
+
+        GUILayout.Space(5);
+        GUILayout.Label("Pixel Crushers Integration", EditorStyles.boldLabel);
+        EditorGUILayout.PropertyField(convoProp, new GUIContent("Dialogue Conversation"));
+
+        if (!string.IsNullOrEmpty(convoProp.stringValue))
+        {
+            EditorGUILayout.HelpBox("When this event is accepted, it will trigger the Dialogue System. You can use Lua in that conversation to start/stop quests!", MessageType.Info);
         }
 
         EditorGUILayout.EndVertical();
