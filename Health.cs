@@ -1,35 +1,32 @@
 using UnityEngine;
 using UnityEngine.VFX;
-using UnityEngine.Events;
 using System;
 using System.Collections;
+using UnityEngine.AI;
 
 public class Health : MonoBehaviour
 {
-    // --- Events ---
+    // --- Global Events ---
     public static event Action<DamageInfo> OnDamageTaken;
     public static event Action<HealInfo> OnHealed;
-    public event Action OnHealthChanged;
 
+    // --- Local Events ---
+    public event Action OnHealthChanged;
     public event Action OnDowned;
     public event Action OnRevived;
     public event Action OnDeath;
 
-    [Header("Inspector Events")]
-    [Tooltip("Hook up the ProceduralHitReaction script here.")]
-    public UnityEvent<float> onProceduralFlinch;
+    // NEW: Local event just for this specific entity taking damage
+    public event Action<int> OnTakeLocalDamage;
 
     [Header("Health Stats")]
     public int maxHealth = 100;
     public int currentHealth;
 
-    // --- AAA GAME FEEL: POISE & KNOCKBACK ---
     [Header("Poise & Knockback (AAA)")]
     public float maxPoise = 100f;
     public float currentPoise;
-    [Tooltip("How fast Poise recovers per second when not taking damage.")]
     public float poiseRegenRate = 15f;
-    // ----------------------------------------
 
     [Header("Death Settings")]
     public bool destroyOnDeath = true;
@@ -42,7 +39,6 @@ public class Health : MonoBehaviour
     public SurfaceDefinition surfaceDefinition;
     public Vector3 hitVFXOffset = new Vector3(0, 1.5f, 0);
 
-    // --- State ---
     public bool isDowned { get; private set; } = false;
 
     [Header("AI Settings")]
@@ -52,13 +48,16 @@ public class Health : MonoBehaviour
     [HideInInspector] public float damageReductionPercent = 0f;
     [HideInInspector] public Health forwardDamageTo = null;
 
-    // --- Components ---
+    // --- Cached Components (Massive Performance Boost) ---
     private LootGenerator lootGenerator;
-    private bool isDead = false;
     private EnemyHealthUI healthUI;
     private PlayerStats playerStats;
     private CharacterRoot root;
+    private NavMeshAgent cachedAgent;
+    private EnemyAbilityHolder cachedEnemyCaster;
+    private Animator cachedFallbackAnimator;
 
+    private bool isDead = false;
     private int originalLayer;
     private static int ignoreRaycastLayer = -1;
 
@@ -71,6 +70,7 @@ public class Health : MonoBehaviour
     {
         if (ignoreRaycastLayer == -1) ignoreRaycastLayer = LayerMask.NameToLayer("Ignore Raycast");
 
+        // Cache everything once on startup
         lootGenerator = GetComponent<LootGenerator>();
         healthUI = GetComponentInChildren<EnemyHealthUI>();
         root = GetComponentInParent<CharacterRoot>();
@@ -78,7 +78,15 @@ public class Health : MonoBehaviour
         if (root != null)
         {
             playerStats = root.PlayerStats;
+            cachedAgent = root.GetComponent<NavMeshAgent>();
         }
+        else
+        {
+            cachedAgent = GetComponent<NavMeshAgent>();
+        }
+
+        cachedEnemyCaster = GetComponent<EnemyAbilityHolder>() ?? GetComponentInChildren<EnemyAbilityHolder>();
+        cachedFallbackAnimator = GetComponentInChildren<Animator>();
 
         currentHealth = maxHealth;
         currentPoise = maxPoise;
@@ -94,7 +102,6 @@ public class Health : MonoBehaviour
 
     void Update()
     {
-        // Regenerate Poise
         if (currentPoise < maxPoise && !isDead && !isDowned)
         {
             currentPoise += poiseRegenRate * Time.deltaTime;
@@ -127,20 +134,14 @@ public class Health : MonoBehaviour
 
         if (isInvulnerable || debugGodMode || isDead || isDowned) return;
 
-        // --- AAA FIX: HIT STOP ---
         if (GameManager.instance != null)
         {
             GameManager.instance.TriggerHitStop(0.05f, 0.1f);
         }
-        else
-        {
-            Debug.LogError("GameManager.instance is NULL! Hit Stop cannot fire.");
-        }
-        // -------------------------
 
         int healthBeforeDamage = currentHealth;
-
         float finalDamage = amount;
+
         if (playerStats != null)
         {
             if (UnityEngine.Random.value < (playerStats.secondaryStats.dodgeChance / 100f))
@@ -161,36 +162,24 @@ public class Health : MonoBehaviour
 
         currentHealth -= damageToDeal;
 
-        // --- TRIGGER PROCEDURAL FLINCH ---
+        // Local event call - ultra fast, only listeners on THIS object care
         if (damageToDeal > 0)
         {
-            onProceduralFlinch?.Invoke((float)damageToDeal);
+            OnTakeLocalDamage?.Invoke(damageToDeal);
         }
 
-        // --- AAA FIX: POISE & KNOCKBACK ---
         currentPoise -= poiseDamage;
 
-        // ONLY Flinch and Knockback if the enemy survived the hit!
         if (currentHealth > 0 && currentPoise <= 0)
         {
-            currentPoise = maxPoise; // Shatter and reset
+            currentPoise = maxPoise;
 
-            // Trigger the Flinch animation
             if (root != null && root.Animator != null) root.Animator.SetTrigger(FlinchHash);
-            else
-            {
-                Animator anim = GetComponentInChildren<Animator>();
-                if (anim != null) anim.SetTrigger(FlinchHash);
-            }
+            else if (cachedFallbackAnimator != null) cachedFallbackAnimator.SetTrigger(FlinchHash);
 
-            // --- AAA TACTICAL COMBAT: INTERRUPT CASTING ---
-            // If the enemy is hit hard enough to flinch, cancel their attack!
             if (root != null && root.PlayerAbilityHolder != null) root.PlayerAbilityHolder.CancelCast();
-            EnemyAbilityHolder enemyCaster = GetComponent<EnemyAbilityHolder>() ?? GetComponentInChildren<EnemyAbilityHolder>();
-            if (enemyCaster != null) enemyCaster.CancelCast();
-            // ----------------------------------------------
+            if (cachedEnemyCaster != null) cachedEnemyCaster.CancelCast();
 
-            // Physically push them back if the attack has weight
             if (knockback > 0f && caster != null)
             {
                 Vector3 pushDir = (transform.position - caster.transform.position).normalized;
@@ -198,7 +187,6 @@ public class Health : MonoBehaviour
                 StartCoroutine(ApplyKnockback(pushDir, knockback));
             }
         }
-        // ----------------------------------
 
         if (surfaceDefinition != null && damageToDeal > 0)
         {
@@ -265,25 +253,24 @@ public class Health : MonoBehaviour
     private IEnumerator ApplyKnockback(Vector3 direction, float force, float duration = 0.2f)
     {
         float elapsed = 0f;
-        var agent = root != null ? root.GetComponent<UnityEngine.AI.NavMeshAgent>() : GetComponent<UnityEngine.AI.NavMeshAgent>();
 
-        if (agent != null && agent.isOnNavMesh)
+        if (cachedAgent != null && cachedAgent.isOnNavMesh)
         {
-            bool wasStopped = agent.isStopped;
-            agent.isStopped = true;
+            bool wasStopped = cachedAgent.isStopped;
+            cachedAgent.isStopped = true;
 
             while (elapsed < duration)
             {
-                if (isDead || isDowned) break; // Abort pushback if they die mid-slide
+                if (isDead || isDowned) break;
 
                 elapsed += Time.deltaTime;
                 float t = elapsed / duration;
                 float strength = Mathf.Lerp(force, 0, t);
-                agent.Move(direction * strength * Time.deltaTime * 10f);
+                cachedAgent.Move(direction * strength * Time.deltaTime * 10f);
                 yield return null;
             }
 
-            if (agent.isOnNavMesh && !isDead && !isDowned) agent.isStopped = wasStopped;
+            if (cachedAgent.isOnNavMesh && !isDead && !isDowned) cachedAgent.isStopped = wasStopped;
         }
     }
 
@@ -293,19 +280,13 @@ public class Health : MonoBehaviour
         isDowned = true;
         currentHealth = 0;
 
-        Debug.Log($"{name} is DOWNED!");
-
         ToggleCombatCapability(false);
 
-        if (root != null)
+        if (cachedAgent != null && cachedAgent.isActiveAndEnabled && cachedAgent.isOnNavMesh)
         {
-            var agent = root.GetComponent<UnityEngine.AI.NavMeshAgent>();
-            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
-            {
-                agent.isStopped = true;
-                agent.ResetPath();
-                agent.velocity = Vector3.zero;
-            }
+            cachedAgent.isStopped = true;
+            cachedAgent.ResetPath();
+            cachedAgent.velocity = Vector3.zero;
         }
 
         gameObject.layer = ignoreRaycastLayer;
@@ -315,7 +296,6 @@ public class Health : MonoBehaviour
             root.Animator.SetFloat("VelocityX", 0f);
             root.Animator.SetFloat("VelocityZ", 0f);
             root.Animator.SetTrigger(DeathHash);
-
             StartCoroutine(ApplyDownedBoolDelayed(root.Animator));
         }
 
@@ -340,8 +320,6 @@ public class Health : MonoBehaviour
         if (currentHealth <= 0) currentHealth = 1;
         currentPoise = maxPoise;
 
-        Debug.Log($"{name} has REVIVED with {currentHealth} HP!");
-
         if (root != null && root.Animator != null)
         {
             root.Animator.SetBool(IsDownedHash, false);
@@ -350,14 +328,10 @@ public class Health : MonoBehaviour
 
         ToggleCombatCapability(true);
 
-        if (root != null)
+        if (cachedAgent != null)
         {
-            var agent = root.GetComponent<UnityEngine.AI.NavMeshAgent>();
-            if (agent != null)
-            {
-                agent.enabled = true;
-                agent.isStopped = false;
-            }
+            cachedAgent.enabled = true;
+            cachedAgent.isStopped = false;
         }
 
         gameObject.layer = originalLayer;
@@ -373,15 +347,11 @@ public class Health : MonoBehaviour
 
         ToggleCombatCapability(false);
 
-        if (root != null)
+        if (cachedAgent != null && cachedAgent.isActiveAndEnabled && cachedAgent.isOnNavMesh)
         {
-            var agent = root.GetComponent<UnityEngine.AI.NavMeshAgent>();
-            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
-            {
-                agent.isStopped = true;
-                agent.ResetPath();
-                agent.velocity = Vector3.zero;
-            }
+            cachedAgent.isStopped = true;
+            cachedAgent.ResetPath();
+            cachedAgent.velocity = Vector3.zero;
         }
 
         gameObject.layer = ignoreRaycastLayer;
@@ -391,23 +361,17 @@ public class Health : MonoBehaviour
             root.Animator.SetFloat("VelocityX", 0f);
             root.Animator.SetFloat("VelocityZ", 0f);
             root.Animator.SetBool(IsDownedHash, true);
-
             root.Animator.Play("Death", 0, 1.0f);
         }
-
-        Debug.Log($"{name} forcibly set to DOWNED state.");
     }
 
     private void ToggleCombatCapability(bool canFight)
     {
         if (root != null)
         {
-            // Standard fallback (Ensures Enemies and standard NPCs still work perfectly)
             if (root.PlayerMovement != null) root.PlayerMovement.enabled = canFight;
             if (root.PartyMemberAI != null) root.PartyMemberAI.enabled = canFight;
 
-            // --- AAA FIX: Respect Party Manager Controls ---
-            // If this is a Party Member, DO NOT blindly turn on PlayerMovement!
             if (PartyManager.instance != null && PartyManager.instance.partyMembers.Contains(root.gameObject))
             {
                 bool isCurrentlyActive = (PartyManager.instance.ActivePlayer == root.gameObject);
@@ -415,7 +379,6 @@ public class Health : MonoBehaviour
                 if (root.PlayerMovement != null) root.PlayerMovement.enabled = (canFight && isCurrentlyActive);
                 if (root.PartyMemberAI != null) root.PartyMemberAI.enabled = (canFight && !isCurrentlyActive);
             }
-            // -----------------------------------------------
         }
     }
 
@@ -443,18 +406,13 @@ public class Health : MonoBehaviour
         isDead = true;
 
         OnDeath?.Invoke();
-
         ToggleCombatCapability(false);
 
-        if (root != null)
+        if (cachedAgent != null && cachedAgent.isActiveAndEnabled && cachedAgent.isOnNavMesh)
         {
-            var agent = root.GetComponent<UnityEngine.AI.NavMeshAgent>();
-            if (agent != null && agent.isActiveAndEnabled && agent.isOnNavMesh)
-            {
-                agent.isStopped = true;
-                agent.ResetPath();
-                agent.velocity = Vector3.zero;
-            }
+            cachedAgent.isStopped = true;
+            cachedAgent.ResetPath();
+            cachedAgent.velocity = Vector3.zero;
         }
 
         if (root != null && root.Animator != null)
@@ -463,22 +421,17 @@ public class Health : MonoBehaviour
             root.Animator.SetFloat("VelocityZ", 0f);
             root.Animator.SetTrigger(DeathHash);
         }
-        else
+        else if (cachedFallbackAnimator != null)
         {
-            Animator anim = GetComponentInChildren<Animator>();
-            if (anim != null)
-            {
-                anim.SetFloat("VelocityX", 0f);
-                anim.SetFloat("VelocityZ", 0f);
-                anim.SetTrigger(DeathHash);
-            }
+            cachedFallbackAnimator.SetFloat("VelocityX", 0f);
+            cachedFallbackAnimator.SetFloat("VelocityZ", 0f);
+            cachedFallbackAnimator.SetTrigger(DeathHash);
         }
 
         if (lootGenerator != null) lootGenerator.DropLoot();
 
         Collider col = GetComponent<Collider>();
         if (col != null) col.enabled = false;
-
         if (healthUI != null) healthUI.gameObject.SetActive(false);
 
         Destroy(gameObject, 3f);
