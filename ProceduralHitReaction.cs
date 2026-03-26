@@ -29,17 +29,16 @@ public class ProceduralHitReaction : MonoBehaviour
         seedY = Random.Range(0f, 100f);
         seedZ = Random.Range(0f, 100f);
 
+        // Hook the event here so it stays listening even when the component is disabled
+        if (myHealth != null) myHealth.OnTakeLocalDamage += HandleLocalDamage;
+
         // Start disabled to save CPU. We only wake up when hit.
         this.enabled = false;
     }
 
-    void OnEnable()
+    void OnDestroy()
     {
-        if (myHealth != null) myHealth.OnTakeLocalDamage += HandleLocalDamage;
-    }
-
-    void OnDisable()
-    {
+        // Unsubscribe when the object is destroyed to prevent memory leaks
         if (myHealth != null) myHealth.OnTakeLocalDamage -= HandleLocalDamage;
     }
 
@@ -69,7 +68,7 @@ public class ProceduralHitReaction : MonoBehaviour
 
         currentTrauma = Mathf.Clamp(currentTrauma + addedTrauma, 0f, maxTraumaAngle);
 
-        // Wake the script up so LateUpdate starts running
+        // Wake the script up so LateUpdate starts running the math
         this.enabled = true;
     }
 
@@ -77,7 +76,7 @@ public class ProceduralHitReaction : MonoBehaviour
     {
         if (currentTrauma <= 0.01f)
         {
-            // Trauma is over. Go to sleep to save CPU.
+            // Trauma is over. Go back to sleep to save CPU.
             currentTrauma = 0f;
             this.enabled = false;
             return;

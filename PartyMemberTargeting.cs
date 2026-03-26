@@ -1,6 +1,5 @@
 using UnityEngine;
 using System.Collections.Generic;
-using System.Linq;
 
 public enum TacticalPriority
 {
@@ -31,7 +30,9 @@ public class PartyMemberTargeting : MonoBehaviour
     [Range(0f, 1f)]
     public float healThreshold = 0.75f;
 
+    // --- OPTIMIZATION CACHES ---
     private Collider[] _enemyBuffer = new Collider[50];
+    private List<EnemyAI> _validEnemiesCache = new List<EnemyAI>(50); // Reused list to prevent GC Spikes
 
     public PartyMemberAI FindWoundedAlly()
     {
@@ -45,15 +46,14 @@ public class PartyMemberTargeting : MonoBehaviour
         {
             if (ai == null || !ai.gameObject.activeInHierarchy) continue;
 
-            Health healthComponent = ai.GetComponent<Health>();
-            if (healthComponent == null)
+            // OPTIMIZATION: TryGetComponent is much faster than GetComponent
+            if (!ai.TryGetComponent<Health>(out Health healthComponent))
             {
                 CharacterRoot root = ai.GetComponentInParent<CharacterRoot>();
                 if (root != null) healthComponent = root.Health;
             }
 
-            if (healthComponent == null) continue;
-            if (healthComponent.isDowned || healthComponent.currentHealth <= 0) continue;
+            if (healthComponent == null || healthComponent.isDowned || healthComponent.currentHealth <= 0) continue;
 
             float healthPercent = (float)healthComponent.currentHealth / healthComponent.maxHealth;
 
@@ -69,28 +69,40 @@ public class PartyMemberTargeting : MonoBehaviour
 
     public GameObject FindNearestEnemy()
     {
+        // OPTIMIZATION: Clear the existing list instead of making a new one (Zero Garbage)
+        _validEnemiesCache.Clear();
+
         int hitCount = Physics.OverlapSphereNonAlloc(transform.position, aggressiveScanRadius, _enemyBuffer, enemyLayer);
-        List<EnemyAI> validEnemies = new List<EnemyAI>();
 
         for (int i = 0; i < hitCount; i++)
         {
             Collider col = _enemyBuffer[i];
-            Health h = col.GetComponent<Health>() ?? col.GetComponentInParent<Health>();
+
+            if (!col.TryGetComponent<Health>(out Health h))
+            {
+                h = col.GetComponentInParent<Health>();
+            }
+
             if (h == null || h.isDowned || h.currentHealth <= 0) continue;
             if (!HasLineOfSight(col.transform)) continue;
 
-            EnemyAI enemy = col.GetComponent<EnemyAI>() ?? col.GetComponentInParent<EnemyAI>();
-            if (enemy != null) validEnemies.Add(enemy);
+            if (!col.TryGetComponent<EnemyAI>(out EnemyAI enemy))
+            {
+                enemy = col.GetComponentInParent<EnemyAI>();
+            }
+
+            if (enemy != null) _validEnemiesCache.Add(enemy);
         }
 
-        if (validEnemies.Count == 0) return null;
+        if (_validEnemiesCache.Count == 0) return null;
 
         foreach (TacticalPriority rank in priorityOrder)
         {
             EnemyAI bestEnemyInRank = null;
             float minDistance = float.MaxValue;
 
-            foreach (var enemy in validEnemies)
+            // Iterate over our cached list instead of creating a new one
+            foreach (var enemy in _validEnemiesCache)
             {
                 if (enemy.priorityRank == rank)
                 {

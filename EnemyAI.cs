@@ -103,6 +103,9 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
     private Transform _cachedPlayerTransform;
 
+    // --- OPTIMIZATION CACHE ---
+    private NavMeshPath cachedRetreatPath;
+
     void Awake()
     {
         NavAgent = GetComponent<NavMeshAgent>();
@@ -122,11 +125,12 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         idleIndexHash = Animator.StringToHash("IdleIndex");
         walkIndexHash = Animator.StringToHash("WalkIndex");
         rollDodgeHash = Animator.StringToHash("RollDodge");
+
+        cachedRetreatPath = new NavMeshPath();
     }
 
     void Start()
     {
-        // Apply the initial scaling based on the Inspector setting (or SceneInfo injection)
         SetLevel(enemyLevel);
 
         StartPosition = transform.position;
@@ -157,6 +161,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     void OnEnable()
     {
         PlayerAbilityHolder.OnPlayerAbilityUsed += HandlePlayerAbilityUsed;
+        Health.OnDamageTaken += HandleDamageTaken;
+
         if (Health != null) { Health.OnHealthChanged += HandleHealthChanged; Health.OnDeath += OnDeath; }
         if (AbilityHolder != null) { AbilityHolder.OnCastStarted += HandleCastStarted; AbilityHolder.OnCastFinished += HandleCastFinished; }
         if (!isDead) StartCoroutine(AIThinkRoutine());
@@ -165,10 +171,24 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     void OnDisable()
     {
         PlayerAbilityHolder.OnPlayerAbilityUsed -= HandlePlayerAbilityUsed;
+        Health.OnDamageTaken -= HandleDamageTaken;
+
         if (Health != null) { Health.OnHealthChanged -= HandleHealthChanged; Health.OnDeath -= OnDeath; }
         if (AbilityHolder != null) { AbilityHolder.OnCastStarted -= HandleCastStarted; AbilityHolder.OnCastFinished -= HandleCastFinished; }
         StopAllCoroutines();
         if (NavAgent != null && NavAgent.isActiveAndEnabled && NavAgent.isOnNavMesh) { NavAgent.ResetPath(); NavAgent.velocity = Vector3.zero; }
+    }
+
+    private void HandleDamageTaken(DamageInfo info)
+    {
+        if (isDead || info.Target != gameObject) return;
+
+        if (currentTarget == null && info.Caster != null)
+        {
+            currentTarget = info.Caster.transform;
+            timeSinceLastSawTarget = 0f;
+            SetAIStatus("Alert", "Investigating Attack");
+        }
     }
 
     public void SwitchState(IEnemyState newState)
@@ -408,8 +428,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
             if (NavMesh.SamplePosition(samplePos, out NavMeshHit hit, 2.0f, NavMesh.AllAreas))
             {
-                NavMeshPath path = new NavMeshPath();
-                if (NavAgent.CalculatePath(hit.position, path) && path.status == NavMeshPathStatus.PathComplete)
+                if (NavAgent.CalculatePath(hit.position, cachedRetreatPath) && cachedRetreatPath.status == NavMeshPathStatus.PathComplete)
                 {
                     bestPoint = hit.position;
                     found = true;
@@ -800,7 +819,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         PlayerAbilityHolder.OnPlayerAbilityUsed -= HandlePlayerAbilityUsed;
     }
 
-    // --- AAA FIX: Dynamic Level Scaling ---
     public void SetLevel(int newLevel)
     {
         enemyLevel = newLevel;
@@ -819,5 +837,4 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             CurrentDamageMultiplier = enemyClass.damageMultiplier * dmgScale;
         }
     }
-    // --------------------------------------
 }

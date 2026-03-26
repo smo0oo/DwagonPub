@@ -109,6 +109,17 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
 
     private int frameSkipCounter = 0;
 
+    // --- OPTIMIZATION CACHES ---
+    private float lastPathCalcTime = 0f;
+    private const float PATH_CALC_COOLDOWN = 0.1f; // Max 10 NavMesh calculations per second
+
+    private float lastHeadLookRaycastTime = 0f;
+    private const float HEAD_LOOK_RAYCAST_COOLDOWN = 0.05f; // Max 20 raycasts per second for head turning
+
+    // Shared list to completely eliminate Garbage Collection (GC) allocations during UI checks
+    private static List<RaycastResult> uiRaycastResults = new List<RaycastResult>(10);
+    // ---------------------------
+
     void Awake()
     {
         navMeshAgent = GetComponent<NavMeshAgent>();
@@ -255,6 +266,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
     }
 
+    // --- OPTIMIZED UI CHECK ---
     private bool IsPointerOverBlockingUI()
     {
         if (!EventSystem.current.IsPointerOverGameObject()) return false;
@@ -264,12 +276,13 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             position = Input.mousePosition
         };
 
-        List<RaycastResult> results = new List<RaycastResult>();
-        EventSystem.current.RaycastAll(pointerData, results);
+        // Clear the static list instead of creating a new one (Zero Garbage)
+        uiRaycastResults.Clear();
+        EventSystem.current.RaycastAll(pointerData, uiRaycastResults);
 
-        foreach (var result in results)
+        for (int i = 0; i < uiRaycastResults.Count; i++)
         {
-            if (result.gameObject.GetComponentInParent<LootLabel>() != null) continue;
+            if (uiRaycastResults[i].gameObject.GetComponentInParent<LootLabel>() != null) continue;
             return true;
         }
 
@@ -287,25 +300,35 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         ApplyGenericHeadLook();
     }
 
+    // --- OPTIMIZED HEAD LOOK RAYCAST ---
     private void UpdateHeadLookLogic()
     {
         if (mainCamera == null) return;
-
-        Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
-        int groundLayerMask = LayerMask.GetMask("Terrain", "Water");
 
         Vector3 targetLookPos = transform.position + transform.forward * 5f;
 
         if (TargetObject != null)
         {
             targetLookPos = TargetObject.transform.position;
+            CurrentGroundTarget = targetLookPos;
         }
-        else if (Physics.Raycast(ray, out RaycastHit hit, 100f, groundLayerMask))
+        else
         {
-            targetLookPos = hit.point;
+            // Only raycast the terrain a few times a second, not every frame. Use cached position between frames.
+            if (Time.time >= lastHeadLookRaycastTime + HEAD_LOOK_RAYCAST_COOLDOWN)
+            {
+                lastHeadLookRaycastTime = Time.time;
+                Ray ray = mainCamera.ScreenPointToRay(Input.mousePosition);
+                int groundLayerMask = LayerMask.GetMask("Terrain", "Water");
+
+                if (Physics.Raycast(ray, out RaycastHit hit, 100f, groundLayerMask))
+                {
+                    CurrentGroundTarget = hit.point;
+                }
+            }
+            targetLookPos = CurrentGroundTarget;
         }
 
-        CurrentGroundTarget = targetLookPos;
         targetLookPos.y = transform.position.y + headLookHeight;
         CurrentLookTarget = targetLookPos;
         CurrentHeadLookPosition = Vector3.Lerp(CurrentHeadLookPosition, CurrentLookTarget, Time.deltaTime * headLookSpeed);
@@ -396,17 +419,22 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
                 {
                     navMeshAgent.stoppingDistance = 0f;
                     navMeshAgent.SetDestination(hitPoint);
+                    lastPathCalcTime = Time.time; // Reset path calc timer on initial click
                 }
                 clickLockoutFrames = 2;
             }
         }
     }
 
+    // --- OPTIMIZED HOLD MOVEMENT ---
     private void HandleHoldMovement()
     {
         if (myHealth != null && myHealth.isDowned) return;
         if (clickLockoutFrames > 0) return;
         if (Input.GetKey(KeyCode.LeftControl)) return;
+
+        // ONLY allow NavMesh recalculation 10 times a second, NOT 140 times a second.
+        if (Time.time < lastPathCalcTime + PATH_CALC_COOLDOWN) return;
 
         if (abilityHolder != null) abilityHolder.CancelCast(true);
 
@@ -425,6 +453,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
                 {
                     navMeshAgent.stoppingDistance = 0f;
                     navMeshAgent.SetDestination(hit.point);
+                    lastPathCalcTime = Time.time; // Set the cooldown timestamp
                 }
             }
         }
@@ -534,13 +563,11 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             animator.SetFloat(velocityXHash, vX, animationDampTime, Time.deltaTime);
         }
 
-        // --- NEW: Feed the movement intensity over to the FootstepController ---
         float moveIntensity = Mathf.Clamp01(new Vector2(vX, vZ).magnitude);
         if (footstepController != null)
         {
             footstepController.SetMovementIntensity(moveIntensity);
         }
-        // -----------------------------------------------------------------------
 
         if (vZ == 0f && vX == 0f && !isDodging && !IsMovingToAttack && !IsSpecialMovementActive && (abilityHolder == null || !abilityHolder.IsActivityLocked()))
         {
