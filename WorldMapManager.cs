@@ -298,7 +298,9 @@ public class WorldMapManager : MonoBehaviour
 
     private void OnForageClicked()
     {
-        timeOfDay = (timeOfDay + 1f) % 24f;
+        timeOfDay += 1f;
+        if (timeOfDay >= 24f) timeOfDay -= 24f;
+
         if (resourceManager != null) resourceManager.ConsumeForTime(1f);
 
         if (currentActiveConnection == null || currentActiveConnection.possibleForageEvents.Count == 0)
@@ -449,13 +451,13 @@ public class WorldMapManager : MonoBehaviour
                 }
             }
 
-            float arrivalTime = (timeOfDay + tripData.totalHours) % 24;
+            float arrivalTime = (timeOfDay + tripData.totalHours) % 24f;
             string warning = "";
 
             if (tripData.totalHours > 0)
             {
                 float endTime = timeOfDay + tripData.totalHours;
-                if (endTime >= nightfallHour || (timeOfDay < nightfallHour && endTime % 24 >= nightfallHour))
+                if (endTime >= nightfallHour || (timeOfDay < nightfallHour && endTime % 24f >= nightfallHour))
                 {
                     warning = "\n<color=red>[WARNING] Arriving at Night!</color>";
                 }
@@ -553,10 +555,9 @@ public class WorldMapManager : MonoBehaviour
         float remainingPercent = 1f - safeStart;
         float remainingHours = currentActiveConnection.travelTimeHours * remainingPercent;
 
-        float journeyStartTime = timeOfDay;
-        float journeyEndTime = journeyStartTime + remainingHours;
-        float previousTime = journeyStartTime;
+        float previousRelativeProgress = 0f;
         int dayOfLastAmbush = -1;
+        int currentDay = 0;
 
         while (wagonController != null && wagonController.IsTraveling)
         {
@@ -578,24 +579,33 @@ public class WorldMapManager : MonoBehaviour
                 relativeProgress = 1f;
             }
 
-            timeOfDay = Mathf.Lerp(journeyStartTime, journeyEndTime, relativeProgress);
+            // AAA DELTA TIME FIX: Add progress natively so we never overwrite manual clock changes
+            float deltaProgress = relativeProgress - previousRelativeProgress;
+            float deltaTimeHours = remainingHours * deltaProgress;
 
-            float deltaTimeHours = timeOfDay - previousTime;
-            if (deltaTimeHours < 0) deltaTimeHours += 24f;
+            timeOfDay += deltaTimeHours;
+
+            // Handle day transitions securely
+            while (timeOfDay >= 24f)
+            {
+                timeOfDay -= 24f;
+                currentDay++;
+            }
 
             if (resourceManager != null && deltaTimeHours > 0)
             {
                 resourceManager.ConsumeForTravel(deltaTimeHours);
             }
-            previousTime = timeOfDay;
 
-            int currentDay = Mathf.FloorToInt(timeOfDay / 24f);
-            float timeIn24hCycle = timeOfDay % 24f;
-            bool isNightTime = timeIn24hCycle >= nightfallHour;
+            previousRelativeProgress = relativeProgress;
+
+            bool isNightTime = timeOfDay >= nightfallHour;
             bool canBeAmbushedToday = currentDay > dayOfLastAmbush;
 
             if (isNightTime && canBeAmbushedToday)
             {
+                dayOfLastAmbush = currentDay; // Prevent multiple ambushes per night phase
+
                 int diceRoll = Random.Range(0, 11);
                 if (diceRoll <= currentActiveConnection.ambushChance)
                 {
@@ -616,7 +626,6 @@ public class WorldMapManager : MonoBehaviour
         }
 
         currentActiveConnection = null;
-        timeOfDay = journeyEndTime % 24;
 
         if (destination != null)
         {
@@ -742,5 +751,13 @@ public class WorldMapManager : MonoBehaviour
     }
 
     public void OnContinueJourney() { arrivalPanel.SetActive(false); isUiBusy = false; }
-    public void OnWait() { timeOfDay += 1; if (timeOfDay >= 24) timeOfDay -= 24; if (resourceManager != null) resourceManager.ConsumeForTime(1f); ShowArrivalPanel(); }
+
+    public void OnWait()
+    {
+        timeOfDay += 1f;
+        if (timeOfDay >= 24f) timeOfDay -= 24f;
+
+        if (resourceManager != null) resourceManager.ConsumeForTime(1f);
+        ShowArrivalPanel();
+    }
 }

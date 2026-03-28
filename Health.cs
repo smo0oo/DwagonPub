@@ -16,7 +16,6 @@ public class Health : MonoBehaviour
     public event Action OnRevived;
     public event Action OnDeath;
 
-    // NEW: Local event just for this specific entity taking damage
     public event Action<int> OnTakeLocalDamage;
 
     [Header("Health Stats")]
@@ -48,7 +47,7 @@ public class Health : MonoBehaviour
     [HideInInspector] public float damageReductionPercent = 0f;
     [HideInInspector] public Health forwardDamageTo = null;
 
-    // --- Cached Components (Massive Performance Boost) ---
+    // --- Cached Components ---
     private LootGenerator lootGenerator;
     private EnemyHealthUI healthUI;
     private PlayerStats playerStats;
@@ -70,7 +69,6 @@ public class Health : MonoBehaviour
     {
         if (ignoreRaycastLayer == -1) ignoreRaycastLayer = LayerMask.NameToLayer("Ignore Raycast");
 
-        // Cache everything once on startup
         lootGenerator = GetComponent<LootGenerator>();
         healthUI = GetComponentInChildren<EnemyHealthUI>();
         root = GetComponentInParent<CharacterRoot>();
@@ -126,6 +124,7 @@ public class Health : MonoBehaviour
 
     public void TakeDamage(int amount, DamageEffect.DamageType damageType, bool isCrit, GameObject caster, float knockback = 0f, int poiseDamage = 0)
     {
+        // 1. Forward damage (e.g., Dome edge markers forward damage to the main Dome)
         if (forwardDamageTo != null)
         {
             forwardDamageTo.TakeDamage(amount, damageType, isCrit, caster, knockback, poiseDamage);
@@ -142,6 +141,7 @@ public class Health : MonoBehaviour
         int healthBeforeDamage = currentHealth;
         float finalDamage = amount;
 
+        // 2. Player-specific mitigations
         if (playerStats != null)
         {
             if (UnityEngine.Random.value < (playerStats.secondaryStats.dodgeChance / 100f))
@@ -157,19 +157,19 @@ public class Health : MonoBehaviour
                 finalDamage *= (1 - playerStats.secondaryStats.physicalResistance / 100f);
         }
 
+        // 3. Global Mitigation (This perfectly handles the Dome's damageReductionPercent!)
         finalDamage *= (1f - damageReductionPercent);
-        int damageToDeal = Mathf.Max(0, Mathf.FloorToInt(finalDamage));
 
+        int damageToDeal = Mathf.Max(0, Mathf.FloorToInt(finalDamage));
         currentHealth -= damageToDeal;
 
-        // Local event call - ultra fast, only listeners on THIS object care
         if (damageToDeal > 0)
         {
             OnTakeLocalDamage?.Invoke(damageToDeal);
         }
 
+        // 4. Poise & Knockback
         currentPoise -= poiseDamage;
-
         if (currentHealth > 0 && currentPoise <= 0)
         {
             currentPoise = maxPoise;
@@ -188,6 +188,7 @@ public class Health : MonoBehaviour
             }
         }
 
+        // 5. Visuals & Audio
         if (surfaceDefinition != null && damageToDeal > 0)
         {
             surfaceDefinition.GetReaction(damageType, out GameObject prefab, out VisualEffectAsset graph, out AudioClip sound);
