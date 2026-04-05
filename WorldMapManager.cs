@@ -579,13 +579,11 @@ public class WorldMapManager : MonoBehaviour
                 relativeProgress = 1f;
             }
 
-            // AAA DELTA TIME FIX: Add progress natively so we never overwrite manual clock changes
             float deltaProgress = relativeProgress - previousRelativeProgress;
             float deltaTimeHours = remainingHours * deltaProgress;
 
             timeOfDay += deltaTimeHours;
 
-            // Handle day transitions securely
             while (timeOfDay >= 24f)
             {
                 timeOfDay -= 24f;
@@ -604,7 +602,7 @@ public class WorldMapManager : MonoBehaviour
 
             if (isNightTime && canBeAmbushedToday)
             {
-                dayOfLastAmbush = currentDay; // Prevent multiple ambushes per night phase
+                dayOfLastAmbush = currentDay;
 
                 int diceRoll = Random.Range(0, 11);
                 if (diceRoll <= currentActiveConnection.ambushChance)
@@ -711,7 +709,12 @@ public class WorldMapManager : MonoBehaviour
     private void ShowArrivalPanel()
     {
         isUiBusy = true;
-        arrivalText.text = $"You have arrived at {currentLocation.locationName}.\nTime is {Mathf.Floor(timeOfDay)}:00.";
+
+        int hours = Mathf.FloorToInt(timeOfDay);
+        int minutes = Mathf.FloorToInt((timeOfDay % 1f) * 60f);
+
+        arrivalText.text = $"You have arrived at {currentLocation.locationName}.\nTime is {hours:D2}:{minutes:D2}.";
+
         arrivalPanel.SetActive(true);
 
         if (currentLocation.nodeType == NodeType.Scene ||
