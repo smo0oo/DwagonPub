@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.VFX;
 using System.Collections;
 using System.Collections.Generic;
 using System;
@@ -508,10 +509,6 @@ public class PlayerAbilityHolder : MonoBehaviour
             case AbilityType.DirectionalMelee:
                 if (activeMeleeCoroutine != null) { StopCoroutine(activeMeleeCoroutine); meleeHitbox.gameObject.SetActive(false); }
                 meleeHitbox.Setup(ability, this.gameObject);
-                BoxCollider collider = meleeHitbox.GetComponent<BoxCollider>();
-                collider.size = ability.attackBoxSize;
-                collider.center = ability.attackBoxCenter;
-
                 if (ability.hitboxOpenDelay > 0) activeMeleeCoroutine = StartCoroutine(PerformMeleeAttackWithTimers(ability));
                 break;
 
@@ -543,7 +540,6 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     public void OnAnimationEventSpawnVFX()
     {
-        // AAA FIX: Check both execution and casting states so the event works on ANY animation frame!
         Ability activeAbility = currentExecutingAbility != null ? currentExecutingAbility : currentCastingAbility;
         if (activeAbility == null) return;
 
@@ -719,6 +715,10 @@ public class PlayerAbilityHolder : MonoBehaviour
         Vector3 posOffset = ability.castVFXPositionOffset;
         Vector3 rotOffset = ability.castVFXRotationOffset;
 
+        bool passData = false;
+        string propName = "";
+        Vector2 customVec = Vector2.zero;
+
         if (ability.styleVFXOverrides != null && styleIndex < ability.styleVFXOverrides.Count)
         {
             var styleOverride = ability.styleVFXOverrides[styleIndex];
@@ -728,6 +728,10 @@ public class PlayerAbilityHolder : MonoBehaviour
                 posOffset = styleOverride.positionOffset;
                 rotOffset = styleOverride.rotationOffset;
             }
+
+            passData = styleOverride.passCustomData;
+            propName = styleOverride.propertyName;
+            customVec = styleOverride.customData;
         }
 
         if (vfxPrefab == null) return;
@@ -741,6 +745,17 @@ public class PlayerAbilityHolder : MonoBehaviour
             vfxInstance.transform.localRotation = Quaternion.Euler(rotOffset);
             vfxInstance.SetActive(true);
             if (!ability.attachCastVFX) vfxInstance.transform.SetParent(null);
+
+            if (passData && !string.IsNullOrEmpty(propName))
+            {
+                var vfxGraph = vfxInstance.GetComponentInChildren<UnityEngine.VFX.VisualEffect>();
+                if (vfxGraph != null && vfxGraph.HasVector2(propName))
+                {
+                    vfxGraph.SetVector2(propName, customVec);
+                }
+
+                vfxInstance.SendMessage("OnReceiveCustomVFXData", customVec, SendMessageOptions.DontRequireReceiver);
+            }
         }
     }
 

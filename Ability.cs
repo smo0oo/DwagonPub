@@ -117,6 +117,14 @@ public class Ability : ScriptableObject
     public float hitboxOpenDelay = 0.4f;
     public float hitboxCloseDelay = 0.5f;
 
+    [Header("Dynamic Hitbox (AAA)")]
+    [Tooltip("If true, the hitbox will smoothly interpolate from the starting size/center to the end size/center while active.")]
+    public bool useDynamicHitbox = false;
+    public Vector3 endAttackBoxSize = new Vector3(2, 2, 4);
+    public Vector3 endAttackBoxCenter = new Vector3(0, 1, 2);
+    [Tooltip("Controls the easing of the hitbox expansion over its active duration. 0 is start size, 1 is end size.")]
+    public AnimationCurve hitboxScaleCurve = AnimationCurve.Linear(0f, 0f, 1f, 1f);
+
     [Header("Area of Effect")]
     public float aoeRadius = 5f;
 
@@ -159,7 +167,6 @@ public class Ability : ScriptableObject
     public AudioClip windupSound;
     public AudioClip castSound;
     public AudioClip impactSound;
-    // --- NEW: Select the Voice Effort ---
     public VoiceEffort voiceEffort = VoiceEffort.None;
 
     [Header("Game Feel (AAA)")]
@@ -184,4 +191,11 @@ public struct StyleVFXOverride
     public GameObject overrideVFX;
     public Vector3 positionOffset;
     public Vector3 rotationOffset;
+
+    [Header("Custom VFX Graph Data")]
+    [Tooltip("If true, injects the Vector2 data below into the instantiated VFX Prefab.")]
+    public bool passCustomData;
+    [Tooltip("The exact string name of the exposed Vector2 property in your VFX Graph (e.g., 'CustomData', 'Scale').")]
+    public string propertyName;
+    public Vector2 customData;
 }

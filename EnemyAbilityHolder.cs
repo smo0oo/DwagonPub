@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.VFX;
 using System.Collections;
 using System.Collections.Generic;
 using System;
@@ -398,13 +399,10 @@ public class EnemyAbilityHolder : MonoBehaviour
 
     public void OnAnimationEventSpawnVFX()
     {
-        // AAA FIX: Smart fallback for wind-up animations
         Ability activeAbility = currentExecutingAbility != null ? currentExecutingAbility : currentCastingAbility;
-        if (activeAbility == null || activeAbility.castVFX == null) return;
+        if (activeAbility == null) return;
 
-        Transform anchor = GetAnchorTransform(activeAbility.castVFXAnchor);
-        GameObject vfx = ObjectPooler.instance.Get(activeAbility.castVFX, anchor.position, anchor.rotation);
-        if (vfx != null) vfx.SetActive(true);
+        SpawnCastVFX(activeAbility, null, currentStyleIndex);
     }
 
     public void OnAnimationEventPlayAudio()
@@ -598,11 +596,15 @@ public class EnemyAbilityHolder : MonoBehaviour
 
     private void CheckHit(Ability ability)
     {
-        float boxLength = ability.range + 0.5f;
-        float boxWidth = ability.attackBoxSize.x > 0 ? ability.attackBoxSize.x : 2f;
-        float boxHeight = ability.attackBoxSize.y > 0 ? ability.attackBoxSize.y : 2f;
+        Vector3 targetSize = ability.useDynamicHitbox ? ability.endAttackBoxSize : ability.attackBoxSize;
+        Vector3 targetCenter = ability.useDynamicHitbox ? ability.endAttackBoxCenter : ability.attackBoxCenter;
 
-        Vector3 center = transform.position + (transform.forward * (boxLength / 2f)) + (Vector3.up * 1f);
+        float boxWidth = targetSize.x > 0 ? targetSize.x : 2f;
+        float boxHeight = targetSize.y > 0 ? targetSize.y : 2f;
+        float boxLength = targetSize.z > 0 ? targetSize.z : ability.range + 0.5f;
+
+        Vector3 centerOffset = (transform.forward * (boxLength / 2f)) + targetCenter;
+        Vector3 center = transform.position + centerOffset;
         Vector3 halfExtents = new Vector3(boxWidth / 2f, boxHeight / 2f, boxLength / 2f);
 
         int hitCount = Physics.OverlapBoxNonAlloc(center, halfExtents, hitBuffer, transform.rotation, aoeTargetLayers);
@@ -725,6 +727,58 @@ public class EnemyAbilityHolder : MonoBehaviour
             if (anchor == VFXAnchor.Center) return animator.GetBoneTransform(HumanBodyBones.Chest) ?? transform;
         }
         return projectileSpawnPoint ?? transform;
+    }
+
+    private void SpawnCastVFX(Ability ability, Quaternion? overrideRotation = null, int styleIndex = 0)
+    {
+        Transform anchor = GetAnchorTransform(ability.castVFXAnchor);
+        Quaternion spawnRot = overrideRotation ?? anchor.rotation;
+        GameObject vfxPrefab = ability.castVFX;
+        Vector3 posOffset = ability.castVFXPositionOffset;
+        Vector3 rotOffset = ability.castVFXRotationOffset;
+
+        bool passData = false;
+        string propName = "";
+        Vector2 customVec = Vector2.zero;
+
+        if (ability.styleVFXOverrides != null && styleIndex < ability.styleVFXOverrides.Count)
+        {
+            var styleOverride = ability.styleVFXOverrides[styleIndex];
+            if (styleOverride.overrideVFX != null)
+            {
+                vfxPrefab = styleOverride.overrideVFX;
+                posOffset = styleOverride.positionOffset;
+                rotOffset = styleOverride.rotationOffset;
+            }
+
+            passData = styleOverride.passCustomData;
+            propName = styleOverride.propertyName;
+            customVec = styleOverride.customData;
+        }
+
+        if (vfxPrefab == null) return;
+
+        GameObject vfxInstance = ObjectPooler.instance.Get(vfxPrefab, anchor.position, spawnRot);
+        if (vfxInstance != null)
+        {
+            vfxInstance.transform.SetParent(anchor, false);
+            vfxInstance.transform.localScale = vfxPrefab.transform.localScale;
+            vfxInstance.transform.localPosition = posOffset;
+            vfxInstance.transform.localRotation = Quaternion.Euler(rotOffset);
+            vfxInstance.SetActive(true);
+            if (!ability.attachCastVFX) vfxInstance.transform.SetParent(null);
+
+            if (passData && !string.IsNullOrEmpty(propName))
+            {
+                var vfxGraph = vfxInstance.GetComponentInChildren<UnityEngine.VFX.VisualEffect>();
+                if (vfxGraph != null && vfxGraph.HasVector2(propName))
+                {
+                    vfxGraph.SetVector2(propName, customVec);
+                }
+
+                vfxInstance.SendMessage("OnReceiveCustomVFXData", customVec, SendMessageOptions.DontRequireReceiver);
+            }
+        }
     }
 
     void Update() { if (ActiveBeam != null && ActiveBeam.gameObject == null) ActiveBeam = null; }
