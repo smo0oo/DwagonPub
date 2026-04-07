@@ -136,11 +136,6 @@ public class ProceduralWeaponTrail : MonoBehaviour
         {
             TrailSection currentSection = sections[i];
 
-            // Calculate how old this section is (0.0 = brand new, 1.0 = about to expire)
-            float age = Time.time - currentSection.TimeCreated;
-            float lifePercent = 1f - (age / trailDuration);
-            lifePercent = Mathf.Clamp01(lifePercent);
-
             // Create 2 vertices per section (one at the base, one at the tip)
             // Convert world space positions to local space so the mesh moves correctly with the weapon root
             vertices[vertexCount] = transform.InverseTransformPoint(currentSection.BasePosition);
@@ -153,8 +148,8 @@ public class ProceduralWeaponTrail : MonoBehaviour
             uvs[vertexCount] = new Vector2(u, 0f);
             uvs[vertexCount + 1] = new Vector2(u, 1f);
 
-            // Vertex Colors: Fade the alpha out as the trail gets older (near the tail)
-            Color fadeColor = new Color(1f, 1f, 1f, lifePercent);
+            // Vertex Colors: Guarantee 0% alpha at the absolute tail and 100% at the absolute head
+            Color fadeColor = new Color(1f, 1f, 1f, u);
             colors[vertexCount] = fadeColor;
             colors[vertexCount + 1] = fadeColor;
 

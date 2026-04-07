@@ -398,9 +398,12 @@ public class EnemyAbilityHolder : MonoBehaviour
 
     public void OnAnimationEventSpawnVFX()
     {
-        if (currentExecutingAbility == null || currentExecutingAbility.castVFX == null) return;
-        Transform anchor = GetAnchorTransform(currentExecutingAbility.castVFXAnchor);
-        GameObject vfx = ObjectPooler.instance.Get(currentExecutingAbility.castVFX, anchor.position, anchor.rotation);
+        // AAA FIX: Smart fallback for wind-up animations
+        Ability activeAbility = currentExecutingAbility != null ? currentExecutingAbility : currentCastingAbility;
+        if (activeAbility == null || activeAbility.castVFX == null) return;
+
+        Transform anchor = GetAnchorTransform(activeAbility.castVFXAnchor);
+        GameObject vfx = ObjectPooler.instance.Get(activeAbility.castVFX, anchor.position, anchor.rotation);
         if (vfx != null) vfx.SetActive(true);
     }
 

@@ -6,16 +6,36 @@ public class AnimationEventReceiver : MonoBehaviour
     private PlayerAbilityHolder playerAbilityHolder;
     private EnemyAbilityHolder enemyAbilityHolder;
     private FootstepController footstepController;
-
     private PlayerEquipment playerEquipment;
     private ProceduralWeaponTrail[] cachedTrails;
 
     void Awake()
     {
-        playerAbilityHolder = GetComponentInParent<PlayerAbilityHolder>();
-        enemyAbilityHolder = GetComponentInParent<EnemyAbilityHolder>();
-        footstepController = GetComponentInParent<FootstepController>();
-        playerEquipment = GetComponentInParent<PlayerEquipment>();
+        // 1. Try to find the master CharacterRoot script to search the entire prefab
+        CharacterRoot charRoot = GetComponentInParent<CharacterRoot>();
+
+        if (charRoot != null)
+        {
+            playerAbilityHolder = charRoot.GetComponentInChildren<PlayerAbilityHolder>(true);
+            enemyAbilityHolder = charRoot.GetComponentInChildren<EnemyAbilityHolder>(true);
+            footstepController = charRoot.GetComponentInChildren<FootstepController>(true);
+            playerEquipment = charRoot.GetComponentInChildren<PlayerEquipment>(true);
+        }
+        else
+        {
+            // 2. Fallback: Search up, then search the absolute root of this object tree
+            Transform entityRoot = transform.root;
+
+            playerAbilityHolder = GetComponentInParent<PlayerAbilityHolder>() ?? entityRoot.GetComponentInChildren<PlayerAbilityHolder>(true);
+            enemyAbilityHolder = GetComponentInParent<EnemyAbilityHolder>() ?? entityRoot.GetComponentInChildren<EnemyAbilityHolder>(true);
+            footstepController = GetComponentInParent<FootstepController>() ?? entityRoot.GetComponentInChildren<FootstepController>(true);
+            playerEquipment = GetComponentInParent<PlayerEquipment>() ?? entityRoot.GetComponentInChildren<PlayerEquipment>(true);
+        }
+
+        if (playerAbilityHolder == null && enemyAbilityHolder == null)
+        {
+            Debug.LogError($"<color=red>[AnimEvent]</color> Receiver on {gameObject.name} could NOT find an AbilityHolder anywhere on the character!");
+        }
     }
 
     public void AE_OpenHitbox()
@@ -32,8 +52,18 @@ public class AnimationEventReceiver : MonoBehaviour
 
     public void AE_SpawnCastVFX()
     {
-        if (playerAbilityHolder != null) playerAbilityHolder.OnAnimationEventSpawnVFX();
-        else if (enemyAbilityHolder != null) enemyAbilityHolder.OnAnimationEventSpawnVFX();
+        if (playerAbilityHolder != null)
+        {
+            playerAbilityHolder.OnAnimationEventSpawnVFX();
+        }
+        else if (enemyAbilityHolder != null)
+        {
+            enemyAbilityHolder.OnAnimationEventSpawnVFX();
+        }
+        else
+        {
+            Debug.LogError($"<color=red>[AnimEvent]</color> AE_SpawnCastVFX fired, but there is no Player or Enemy Ability Holder attached!");
+        }
     }
 
     public void AE_PlayImpactAudio()
@@ -57,21 +87,27 @@ public class AnimationEventReceiver : MonoBehaviour
 
     private ProceduralWeaponTrail[] GetTrails()
     {
-        // 1. If it's a player, restrict the search ONLY to their active equipment 
-        // (so we don't accidentally turn on trails for swords hidden in their backpack)
-        if (playerEquipment != null)
+        Transform searchRoot = transform;
+
+        CharacterRoot charRoot = GetComponentInParent<CharacterRoot>();
+        if (charRoot != null)
         {
-            ProceduralWeaponTrail activeTrail = playerEquipment.GetComponentInChildren<ProceduralWeaponTrail>(true);
-            if (activeTrail != null) return new ProceduralWeaponTrail[] { activeTrail };
-            return null;
+            searchRoot = charRoot.transform;
+        }
+        else
+        {
+            searchRoot = transform.root;
         }
 
-        // 2. If it's an enemy/NPC, find any trails attached to their body dynamically.
-        // We do this dynamically so it finds weapons that were spawned AFTER Awake().
-        ProceduralWeaponTrail[] trails = GetComponentsInChildren<ProceduralWeaponTrail>(true);
+        // AAA FIX: Search the absolute root of the character. 
+        // Passing 'false' ensures we ONLY grab trails on currently active meshes (weapons in hands),
+        // completely ignoring any inactive weapons hidden in the backpack!
+        ProceduralWeaponTrail[] trails = searchRoot.GetComponentsInChildren<ProceduralWeaponTrail>(false);
+
+        // Absolute fallback just in case the weapon trail component itself was manually disabled
         if (trails == null || trails.Length == 0)
         {
-            if (transform.parent != null) trails = transform.parent.GetComponentsInChildren<ProceduralWeaponTrail>(true);
+            trails = searchRoot.GetComponentsInChildren<ProceduralWeaponTrail>(true);
         }
 
         return trails;
@@ -90,13 +126,12 @@ public class AnimationEventReceiver : MonoBehaviour
         }
         else
         {
-            Debug.LogWarning($"[AnimEvent] AE_StartWeaponTrail fired on {gameObject.name}, but no ProceduralWeaponTrail script was found on the weapon!");
+            Debug.LogWarning($"<color=yellow>[AnimEvent]</color> AE_StartWeaponTrail fired on {gameObject.name}, but no ProceduralWeaponTrail script was found!");
         }
     }
 
     public void AE_StopWeaponTrail()
     {
-        // Use the trails we found when the swing started
         if (cachedTrails != null && cachedTrails.Length > 0)
         {
             foreach (var trail in cachedTrails)
@@ -106,7 +141,7 @@ public class AnimationEventReceiver : MonoBehaviour
         }
         else
         {
-            // Fallback just in case
+            // Fallback lookup
             cachedTrails = GetTrails();
             if (cachedTrails != null)
             {

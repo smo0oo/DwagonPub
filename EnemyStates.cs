@@ -108,7 +108,7 @@ public class IdleState : IEnemyState
     {
         if (enemy.CollectedPatrolPoints.Length > 0 && enemy.NavAgent.isOnNavMesh)
         {
-            enemy.NavAgent.SetDestination(enemy.CollectedPatrolPoints[enemy.CurrentPatrolIndex].transform.position);
+            enemy.MoveTo(enemy.CollectedPatrolPoints[enemy.CurrentPatrolIndex].transform.position);
         }
     }
 }
@@ -208,7 +208,7 @@ public class CombatState : IEnemyState
             }
             else
             {
-                enemy.NavAgent.SetDestination(lastKnownPosition);
+                enemy.MoveTo(lastKnownPosition);
             }
         }
     }
@@ -257,7 +257,7 @@ public class CombatState : IEnemyState
 
         float range = (ability != null) ? ability.range : enemy.meleeAttackRange;
         enemy.NavAgent.stoppingDistance = range * 0.8f;
-        enemy.NavAgent.SetDestination(enemy.currentTarget.position);
+        enemy.MoveTo(enemy.currentTarget.position);
         enemy.SetAIStatus("Combat", "Closing In");
     }
 
@@ -265,7 +265,7 @@ public class CombatState : IEnemyState
     {
         enemy.NavAgent.speed = enemy.OriginalSpeed;
         enemy.NavAgent.stoppingDistance = enemy.meleeAttackRange * 0.8f;
-        enemy.NavAgent.SetDestination(enemy.currentTarget.position);
+        enemy.MoveTo(enemy.currentTarget.position);
         enemy.SetAIStatus("Combat", "Advancing on Dome");
     }
 
@@ -277,8 +277,20 @@ public class CombatState : IEnemyState
 
         Vector3 destination = enemy.AssignedSurroundPoint != null ? enemy.AssignedSurroundPoint.position : enemy.currentTarget.position;
         enemy.NavAgent.stoppingDistance = 0.5f;
-        enemy.NavAgent.SetDestination(destination);
-        enemy.SetAIStatus("Combat", enemy.AssignedSurroundPoint != null ? "Circling" : "Waiting");
+
+        // Anti-Jitter Deadzone check
+        float distanceToDest = Vector3.Distance(enemy.transform.position, destination);
+
+        if (distanceToDest <= 0.4f)
+        {
+            enemy.StopMovement();
+            enemy.SetAIStatus("Combat", "Waiting");
+        }
+        else
+        {
+            enemy.MoveTo(destination);
+            enemy.SetAIStatus("Combat", enemy.AssignedSurroundPoint != null ? "Circling" : "Closing In");
+        }
     }
 
     private void ExecuteRangedMovement(EnemyAI enemy)
@@ -295,12 +307,16 @@ public class CombatState : IEnemyState
             if (distanceToTarget > enemy.preferredCombatRange)
             {
                 Vector3 dest = enemy.currentTarget.position - (enemy.currentTarget.position - enemy.transform.position).normalized * enemy.preferredCombatRange;
-                enemy.NavAgent.SetDestination(dest);
-                enemy.SetAIStatus("Combat", "Advancing");
+                enemy.MoveTo(dest);
+
+                if (!enemy.NavAgent.pathPending && enemy.NavAgent.remainingDistance <= enemy.NavAgent.stoppingDistance + 0.2f)
+                    enemy.SetAIStatus("Combat", "In Range");
+                else
+                    enemy.SetAIStatus("Combat", "Advancing");
             }
             else
             {
-                enemy.NavAgent.ResetPath();
+                enemy.StopMovement();
                 enemy.SetAIStatus("Combat", "In Range");
             }
         }
@@ -311,7 +327,7 @@ public class CombatState : IEnemyState
 public class RetreatState : IEnemyState
 {
     private float timer;
-    private float pathUpdateTimer; // Prevent framerate drops from calculating paths every frame
+    private float pathUpdateTimer;
 
     public void Enter(EnemyAI enemy)
     {
@@ -336,7 +352,7 @@ public class RetreatState : IEnemyState
             if (pathUpdateTimer <= 0f)
             {
                 enemy.RetreatFromTarget();
-                pathUpdateTimer = 0.5f; // Only run the math twice a second
+                pathUpdateTimer = 0.5f;
             }
         }
         else
@@ -360,7 +376,7 @@ public class ReturnState : IEnemyState
         enemy.ResetCombatState();
         enemy.NavAgent.speed = enemy.OriginalSpeed;
         enemy.NavAgent.stoppingDistance = 0.5f;
-        enemy.NavAgent.SetDestination(enemy.StartPosition);
+        enemy.MoveTo(enemy.StartPosition);
     }
 
     public void Execute(EnemyAI enemy)

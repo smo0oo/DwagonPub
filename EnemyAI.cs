@@ -88,8 +88,8 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public bool startDeactivated = true;
     private bool hasBeenActivated = false;
 
-    private string lastState = "";
-    private string lastAction = "";
+    public string lastState { get; private set; } = "";
+    public string lastAction { get; private set; } = "";
     private IEnemyState currentState;
 
     private int velocityXHash;
@@ -102,8 +102,6 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     private bool wasMoving = false;
 
     private Transform _cachedPlayerTransform;
-
-    // --- OPTIMIZATION CACHE ---
     private NavMeshPath cachedRetreatPath;
 
     void Awake()
@@ -198,6 +196,16 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         currentState?.Enter(this);
     }
 
+    public bool IsAnimationLocked()
+    {
+        if (Animator == null) return false;
+        AnimatorStateInfo stateInfo = Animator.GetCurrentAnimatorStateInfo(0);
+
+        bool isTransitioningToAttack = Animator.IsInTransition(0) && Animator.GetNextAnimatorStateInfo(0).IsTag("AttackTrigger");
+
+        return stateInfo.IsTag("AttackTrigger") || isTransitioningToAttack;
+    }
+
     private IEnumerator AIThinkRoutine()
     {
         if (NavAgent != null && NavAgent.isActiveAndEnabled && !NavAgent.isOnNavMesh)
@@ -237,7 +245,10 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
             if (NavAgent != null && NavAgent.isOnNavMesh && NavAgent.isActiveAndEnabled)
             {
-                if (Time.time >= recoveryTimer) currentState?.Execute(this);
+                if (Time.time >= recoveryTimer && !IsAnimationLocked() && !AbilityHolder.IsCasting && !IsInActionSequence)
+                {
+                    currentState?.Execute(this);
+                }
             }
             yield return wait;
         }
@@ -278,17 +289,9 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
 
         HandleRotation();
 
-        bool isAnimationLocked = false;
-        if (Animator != null)
-        {
-            AnimatorStateInfo stateInfo = Animator.GetCurrentAnimatorStateInfo(0);
-            if (stateInfo.IsTag("Attack") || (Animator.IsInTransition(0) && Animator.GetAnimatorTransitionInfo(0).anyState && stateInfo.IsTag("Attack")))
-            {
-                isAnimationLocked = true;
-            }
-        }
+        bool animLocked = IsAnimationLocked();
 
-        if (isAnimationLocked || Time.time < recoveryTimer)
+        if (animLocked || Time.time < recoveryTimer)
         {
             StopMovement();
             if (Animator != null && !IsInActionSequence)
@@ -334,23 +337,53 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             return;
         }
 
+        bool isTacticallyMoving = lastAction == "Circling" || lastAction == "Closing In" ||
+                                  lastAction == "Advancing" || lastAction == "Advancing on Dome" ||
+                                  lastAction == "Fleeing" || lastAction == "Leashing" ||
+                                  lastAction == "Patrolling" || lastAction == "Searching..." ||
+                                  lastAction == "Investigating Attack";
+
         Vector3 worldVelocity = NavAgent.velocity;
-        if (NavAgent.remainingDistance < 0.1f && !NavAgent.isStopped) worldVelocity = Vector3.zero;
+
+        bool isPathing = NavAgent.hasPath || NavAgent.pathPending;
+
+        if (isTacticallyMoving && !NavAgent.isStopped && isPathing)
+        {
+            float currentSpeed = worldVelocity.magnitude;
+
+            if (currentSpeed < (NavAgent.speed * 0.5f))
+            {
+                Vector3 intentDirection = NavAgent.hasPath && NavAgent.desiredVelocity.sqrMagnitude > 0.1f
+                    ? NavAgent.desiredVelocity.normalized
+                    : transform.forward;
+
+                worldVelocity = intentDirection * (NavAgent.speed * 0.5f);
+            }
+        }
+        else if (NavAgent.remainingDistance <= NavAgent.stoppingDistance && !isTacticallyMoving)
+        {
+            worldVelocity = Vector3.zero;
+        }
 
         Vector3 localVelocity = transform.InverseTransformDirection(worldVelocity);
         float speed = NavAgent.speed > 0 ? NavAgent.speed : 3.5f;
 
-        float vX = localVelocity.x / speed;
-        float vZ = localVelocity.z / speed;
+        float targetVx = localVelocity.x / speed;
+        float targetVz = localVelocity.z / speed;
 
-        Animator.SetFloat(velocityXHash, vX, 0.1f, Time.deltaTime);
-        Animator.SetFloat(velocityZHash, vZ, 0.1f, Time.deltaTime);
+        bool isMoving = isTacticallyMoving || worldVelocity.sqrMagnitude > 0.05f;
+        float dampTime = isMoving ? 0.1f : 0.02f;
 
-        bool isMoving = worldVelocity.sqrMagnitude > 0.05f;
+        Animator.SetFloat(velocityXHash, targetVx, dampTime, Time.deltaTime);
+        Animator.SetFloat(velocityZHash, targetVz, dampTime, Time.deltaTime);
+
         if (isMoving != wasMoving)
         {
-            if (isMoving) Animator.SetInteger(walkIndexHash, UnityEngine.Random.Range(0, 2));
-            else Animator.SetInteger(idleIndexHash, UnityEngine.Random.Range(0, 3));
+            if (!IsAnimationLocked() && !AbilityHolder.IsCasting)
+            {
+                if (isMoving) Animator.SetInteger(walkIndexHash, UnityEngine.Random.Range(0, 2));
+                else Animator.SetInteger(idleIndexHash, UnityEngine.Random.Range(0, 3));
+            }
             wasMoving = isMoving;
         }
     }
@@ -371,7 +404,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             else if (distance > preferredCombatRange)
             {
                 NavAgent.speed = OriginalSpeed;
-                NavAgent.SetDestination(currentTarget.position);
+                MoveTo(currentTarget.position);
             }
             else StopMovement();
         }
@@ -389,7 +422,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
             if (distance > meleeAttackRange)
             {
                 NavAgent.speed = OriginalSpeed;
-                NavAgent.SetDestination(currentTarget.position);
+                MoveTo(currentTarget.position);
             }
             else StopMovement();
         }
@@ -401,12 +434,23 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
         AbilityHolder.UseAbility(ability, currentTarget?.gameObject ?? gameObject);
     }
 
+    public void MoveTo(Vector3 destination)
+    {
+        if (isStationary || NavAgent == null || !NavAgent.isActiveAndEnabled || !NavAgent.isOnNavMesh) return;
+
+        if (NavAgent.isStopped || Vector3.Distance(NavAgent.destination, destination) > 0.5f)
+        {
+            NavAgent.isStopped = false;
+            NavAgent.SetDestination(destination);
+        }
+    }
+
     public void StopMovement()
     {
         if (isStationary) return;
         if (NavAgent != null && NavAgent.isActiveAndEnabled && NavAgent.isOnNavMesh)
         {
-            NavAgent.ResetPath();
+            NavAgent.isStopped = true;
             NavAgent.velocity = Vector3.zero;
         }
     }
@@ -436,7 +480,7 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
                 }
             }
         }
-        if (found) NavAgent.SetDestination(bestPoint);
+        if (found) MoveTo(bestPoint);
     }
 
     public bool IsTargetInvalid(Transform target)
@@ -481,7 +525,9 @@ public class EnemyAI : MonoBehaviour, IMovementHandler
     public void SetAIStatus(string state, string action)
     {
         if (lastState == state && lastAction == action) return;
-        lastState = state; lastAction = action;
+        lastState = state;
+        lastAction = action;
+
         enemyHealthUI?.UpdateStatus(state, action);
         if (FloatingTextManager.instance != null) FloatingTextManager.instance.ShowAIStatus(action, transform.position + Vector3.up * 3.5f);
     }

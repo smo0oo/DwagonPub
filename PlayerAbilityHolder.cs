@@ -543,8 +543,11 @@ public class PlayerAbilityHolder : MonoBehaviour
 
     public void OnAnimationEventSpawnVFX()
     {
-        if (currentExecutingAbility == null) return;
-        SpawnCastVFX(currentExecutingAbility, currentAimRotation, currentStyleIndex);
+        // AAA FIX: Check both execution and casting states so the event works on ANY animation frame!
+        Ability activeAbility = currentExecutingAbility != null ? currentExecutingAbility : currentCastingAbility;
+        if (activeAbility == null) return;
+
+        SpawnCastVFX(activeAbility, currentAimRotation, currentStyleIndex);
     }
 
     public void OnAnimationEventPlayAudio()
@@ -596,9 +599,6 @@ public class PlayerAbilityHolder : MonoBehaviour
 
             Vector3 currentTargetPos = initialTargetPos;
 
-            // --- LATEST AIM UPDATE FIX ---
-            // If we are mouse aiming, grab the absolutely freshest mouse coordinate 
-            // right before firing, and aggressively snap the spine to follow it!
             if (target == null && playerMovement != null)
             {
                 currentTargetPos = playerMovement.CurrentGroundTarget;
