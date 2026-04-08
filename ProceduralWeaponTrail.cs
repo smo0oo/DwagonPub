@@ -18,6 +18,14 @@ public class ProceduralWeaponTrail : MonoBehaviour
     [Tooltip("The material applied to the trail. Needs a shader that supports vertex colors and two-sided rendering.")]
     public Material trailMaterial;
 
+    [Header("Smoothing & AAA Processing")]
+    [Tooltip("Subdivides the frames into extra geometric segments to create a perfectly smooth curve. 3 to 5 is ideal.")]
+    [Range(1, 8)] public int smoothingSegments = 3;
+    [Tooltip("Prevents overlapping vertices if the weapon is moving too slowly.")]
+    public float minVertexDistance = 0.02f;
+    [Tooltip("Controls the width of the blade along the length of the trail. Left side (0) is the tail, right side (1) is the head.")]
+    public AnimationCurve widthCurve = AnimationCurve.Linear(0f, 1f, 1f, 1f);
+
     [Header("State")]
     public bool isEmitting = false;
 
@@ -51,43 +59,31 @@ public class ProceduralWeaponTrail : MonoBehaviour
             meshRenderer.material = trailMaterial;
         }
 
-        // --- Shadow Optimization ---
-        // Prevent the 2D ribbon from casting weird barcode shadows on the environment
         meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         meshRenderer.receiveShadows = false;
 
-        // Initialize the dynamic mesh
         trailMesh = new Mesh();
         trailMesh.name = "WeaponTrailMesh";
         meshFilter.mesh = trailMesh;
 
-        // Pre-allocate memory to prevent stuttering during combat
-        vertices = new Vector3[maxFrames * 2];
-        triangles = new int[(maxFrames - 1) * 6];
-        uvs = new Vector2[maxFrames * 2];
-        colors = new Color[maxFrames * 2];
+        int maxPoints = maxFrames * Mathf.Max(1, smoothingSegments);
+        vertices = new Vector3[maxPoints * 2];
+        triangles = new int[(maxPoints - 1) * 6];
+        uvs = new Vector2[maxPoints * 2];
+        colors = new Color[maxPoints * 2];
     }
 
-    /// <summary>
-    /// Turns the trail on. Called by Animation Events.
-    /// </summary>
     public void StartTrail()
     {
         isEmitting = true;
-        ClearTrail(); // Ensure we don't connect a previous swing to this new swing!
+        ClearTrail();
     }
 
-    /// <summary>
-    /// Turns the trail off. Called by Animation Events.
-    /// </summary>
     public void StopTrail()
     {
         isEmitting = false;
     }
 
-    /// <summary>
-    /// Instantly wipes the trail from the screen.
-    /// </summary>
     public void ClearTrail()
     {
         sections.Clear();
@@ -96,30 +92,42 @@ public class ProceduralWeaponTrail : MonoBehaviour
 
     void LateUpdate()
     {
-        // 1. Record a new section if we are actively swinging
         if (isEmitting && basePoint != null && tipPoint != null)
         {
-            sections.Add(new TrailSection
+            bool shouldAdd = true;
+            if (sections.Count > 0)
             {
-                BasePosition = basePoint.position,
-                TipPosition = tipPoint.position,
-                TimeCreated = Time.time
-            });
+                TrailSection lastSec = sections[sections.Count - 1];
+                float distBase = Vector3.Distance(lastSec.BasePosition, basePoint.position);
+                float distTip = Vector3.Distance(lastSec.TipPosition, tipPoint.position);
+
+                if (distBase < minVertexDistance && distTip < minVertexDistance)
+                {
+                    shouldAdd = false;
+                }
+            }
+
+            if (shouldAdd)
+            {
+                sections.Add(new TrailSection
+                {
+                    BasePosition = basePoint.position,
+                    TipPosition = tipPoint.position,
+                    TimeCreated = Time.time
+                });
+            }
         }
 
-        // 2. Remove old sections that have expired past the trailDuration
         while (sections.Count > 0 && Time.time > sections[0].TimeCreated + trailDuration)
         {
             sections.RemoveAt(0);
         }
 
-        // Safety limit: Don't exceed our pre-allocated memory
         while (sections.Count > maxFrames)
         {
             sections.RemoveAt(0);
         }
 
-        // 3. Rebuild the mesh
         UpdateMesh();
     }
 
@@ -127,68 +135,88 @@ public class ProceduralWeaponTrail : MonoBehaviour
     {
         trailMesh.Clear();
 
-        if (sections.Count < 2) return;
+        int validSectionCount = sections.Count;
+        if (validSectionCount < 2) return;
 
         int vertexCount = 0;
         int triangleCount = 0;
 
-        for (int i = 0; i < sections.Count; i++)
+        int totalGeneratedPoints = ((validSectionCount - 1) * smoothingSegments) + 1;
+        int currentPointIndex = 0;
+
+        for (int i = 0; i < validSectionCount - 1; i++)
         {
-            TrailSection currentSection = sections[i];
+            TrailSection p0 = sections[Mathf.Max(0, i - 1)];
+            TrailSection p1 = sections[i];
+            TrailSection p2 = sections[i + 1];
+            TrailSection p3 = sections[Mathf.Min(validSectionCount - 1, i + 2)];
 
-            // Create 2 vertices per section (one at the base, one at the tip)
-            // Convert world space positions to local space so the mesh moves correctly with the weapon root
-            vertices[vertexCount] = transform.InverseTransformPoint(currentSection.BasePosition);
-            vertices[vertexCount + 1] = transform.InverseTransformPoint(currentSection.TipPosition);
+            int limit = (i == validSectionCount - 2) ? smoothingSegments : smoothingSegments - 1;
 
-            // UV Mapping: 
-            // X-axis (u) tracks along the length of the trail (0 at the tail, 1 at the head)
-            // Y-axis (v) tracks across the blade (0 at the base, 1 at the tip)
-            float u = (float)i / (sections.Count - 1);
-            uvs[vertexCount] = new Vector2(u, 0f);
-            uvs[vertexCount + 1] = new Vector2(u, 1f);
-
-            // Vertex Colors: Guarantee 0% alpha at the absolute tail and 100% at the absolute head
-            Color fadeColor = new Color(1f, 1f, 1f, u);
-            colors[vertexCount] = fadeColor;
-            colors[vertexCount + 1] = fadeColor;
-
-            // Generate Triangles (We connect this section to the previous section)
-            if (i > 0)
+            for (int j = 0; j <= limit; j++)
             {
-                int previousBase = vertexCount - 2;
-                int previousTip = vertexCount - 1;
-                int currentBase = vertexCount;
-                int currentTip = vertexCount + 1;
+                float t = (float)j / smoothingSegments;
 
-                // Triangle 1
-                triangles[triangleCount] = previousBase;
-                triangles[triangleCount + 1] = previousTip;
-                triangles[triangleCount + 2] = currentBase;
+                Vector3 interpBase = GetCatmullRomPosition(t, p0.BasePosition, p1.BasePosition, p2.BasePosition, p3.BasePosition);
+                Vector3 interpTip = GetCatmullRomPosition(t, p0.TipPosition, p1.TipPosition, p2.TipPosition, p3.TipPosition);
 
-                // Triangle 2
-                triangles[triangleCount + 3] = currentBase;
-                triangles[triangleCount + 4] = previousTip;
-                triangles[triangleCount + 5] = currentTip;
+                float u = (float)currentPointIndex / (totalGeneratedPoints - 1);
 
-                triangleCount += 6;
+                float widthMultiplier = widthCurve.Evaluate(u);
+                interpTip = Vector3.Lerp(interpBase, interpTip, widthMultiplier);
+
+                vertices[vertexCount] = transform.InverseTransformPoint(interpBase);
+                vertices[vertexCount + 1] = transform.InverseTransformPoint(interpTip);
+
+                uvs[vertexCount] = new Vector2(u, 0f);
+                uvs[vertexCount + 1] = new Vector2(u, 1f);
+
+                Color fadeColor = new Color(1f, 1f, 1f, u);
+                colors[vertexCount] = fadeColor;
+                colors[vertexCount + 1] = fadeColor;
+
+                if (currentPointIndex > 0)
+                {
+                    int prevBase = vertexCount - 2;
+                    int prevTip = vertexCount - 1;
+                    int currBase = vertexCount;
+                    int currTip = vertexCount + 1;
+
+                    triangles[triangleCount] = prevBase;
+                    triangles[triangleCount + 1] = prevTip;
+                    triangles[triangleCount + 2] = currBase;
+
+                    triangles[triangleCount + 3] = currBase;
+                    triangles[triangleCount + 4] = prevTip;
+                    triangles[triangleCount + 5] = currTip;
+
+                    triangleCount += 6;
+                }
+
+                vertexCount += 2;
+                currentPointIndex++;
             }
-
-            vertexCount += 2;
         }
 
-        // Apply data to the mesh
         trailMesh.vertices = vertices;
         trailMesh.uv = uvs;
         trailMesh.colors = colors;
 
-        // Only assign the exact number of triangles we actually used this frame
         int[] activeTriangles = new int[triangleCount];
         System.Array.Copy(triangles, activeTriangles, triangleCount);
         trailMesh.triangles = activeTriangles;
 
-        // Recalculate bounds so Unity knows where the mesh is (prevents frustum culling from hiding it)
         trailMesh.RecalculateBounds();
         trailMesh.RecalculateNormals();
+    }
+
+    private Vector3 GetCatmullRomPosition(float t, Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3)
+    {
+        Vector3 a = 2f * p1;
+        Vector3 b = p2 - p0;
+        Vector3 c = 2f * p0 - 5f * p1 + 4f * p2 - p3;
+        Vector3 d = -p0 + 3f * p1 - 3f * p2 + p3;
+
+        return 0.5f * (a + (b * t) + (c * t * t) + (d * t * t * t));
     }
 }
