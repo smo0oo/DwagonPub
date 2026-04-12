@@ -781,5 +781,28 @@ public class EnemyAbilityHolder : MonoBehaviour
         }
     }
 
+    public Color? GetActiveTrailColor()
+    {
+        if (currentExecutingAbility == null) return null;
+
+        Color? returnColor = null;
+
+        if (currentExecutingAbility.overrideWeaponTrailColor)
+        {
+            returnColor = currentExecutingAbility.weaponTrailColor;
+        }
+
+        if (currentExecutingAbility.styleVFXOverrides != null && currentStyleIndex < currentExecutingAbility.styleVFXOverrides.Count)
+        {
+            var styleOverride = currentExecutingAbility.styleVFXOverrides[currentStyleIndex];
+            if (styleOverride.overrideTrailColor)
+            {
+                returnColor = styleOverride.trailColor;
+            }
+        }
+
+        return returnColor;
+    }
+
     void Update() { if (ActiveBeam != null && ActiveBeam.gameObject == null) ActiveBeam = null; }
 }

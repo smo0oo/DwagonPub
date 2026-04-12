@@ -18,6 +18,12 @@ public class ProceduralWeaponTrail : MonoBehaviour
     [Tooltip("The material applied to the trail. Needs a shader that supports vertex colors and two-sided rendering.")]
     public Material trailMaterial;
 
+    [Header("HDR Dynamic Coloring")]
+    [Tooltip("The exact string name of the HDR color property in your Shader (e.g. '_BaseColor', '_EmissionColor', or '_Color').")]
+    public string shaderColorPropertyName = "_BaseColor";
+    [Tooltip("The default physical color of the trail if an Ability does not override it.")]
+    [ColorUsage(true, true)] public Color defaultTrailColor = Color.white;
+
     [Header("Smoothing & AAA Processing")]
     [Tooltip("Subdivides the frames into extra geometric segments to create a perfectly smooth curve. 3 to 5 is ideal.")]
     [Range(1, 8)] public int smoothingSegments = 3;
@@ -29,10 +35,11 @@ public class ProceduralWeaponTrail : MonoBehaviour
     [Header("State")]
     public bool isEmitting = false;
 
-    // --- Mesh Data ---
+    // --- Mesh & GPU Data ---
     private Mesh trailMesh;
     private MeshFilter meshFilter;
     private MeshRenderer meshRenderer;
+    private MaterialPropertyBlock propBlock;
 
     // --- History Tracking ---
     private class TrailSection
@@ -43,7 +50,7 @@ public class ProceduralWeaponTrail : MonoBehaviour
     }
     private List<TrailSection> sections = new List<TrailSection>();
 
-    // --- Pre-allocated Arrays (Zero Garbage Collection) ---
+    // --- Pre-allocated Arrays ---
     private Vector3[] vertices;
     private int[] triangles;
     private Vector2[] uvs;
@@ -53,11 +60,9 @@ public class ProceduralWeaponTrail : MonoBehaviour
     {
         meshFilter = GetComponent<MeshFilter>();
         meshRenderer = GetComponent<MeshRenderer>();
+        propBlock = new MaterialPropertyBlock();
 
-        if (trailMaterial != null)
-        {
-            meshRenderer.material = trailMaterial;
-        }
+        if (trailMaterial != null) meshRenderer.material = trailMaterial;
 
         meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
         meshRenderer.receiveShadows = false;
@@ -75,8 +80,32 @@ public class ProceduralWeaponTrail : MonoBehaviour
 
     public void StartTrail()
     {
+        ApplyHDRColorToGPU(defaultTrailColor);
         isEmitting = true;
         ClearTrail();
+    }
+
+    public void StartTrail(Color? overrideColor)
+    {
+        ApplyHDRColorToGPU(overrideColor ?? defaultTrailColor);
+        isEmitting = true;
+        ClearTrail();
+    }
+
+    // AAA FIX: Push the HDR color directly to the GPU via PropertyBlock to bypass Vertex clamping limits!
+    private void ApplyHDRColorToGPU(Color hdrColor)
+    {
+        if (meshRenderer != null)
+        {
+            meshRenderer.GetPropertyBlock(propBlock);
+            propBlock.SetColor(shaderColorPropertyName, hdrColor);
+
+            // Fallbacks for standard Unity shaders just in case
+            if (shaderColorPropertyName != "_Color") propBlock.SetColor("_Color", hdrColor);
+            if (shaderColorPropertyName != "_EmissionColor") propBlock.SetColor("_EmissionColor", hdrColor);
+
+            meshRenderer.SetPropertyBlock(propBlock);
+        }
     }
 
     public void StopTrail()
@@ -101,32 +130,17 @@ public class ProceduralWeaponTrail : MonoBehaviour
                 float distBase = Vector3.Distance(lastSec.BasePosition, basePoint.position);
                 float distTip = Vector3.Distance(lastSec.TipPosition, tipPoint.position);
 
-                if (distBase < minVertexDistance && distTip < minVertexDistance)
-                {
-                    shouldAdd = false;
-                }
+                if (distBase < minVertexDistance && distTip < minVertexDistance) shouldAdd = false;
             }
 
             if (shouldAdd)
             {
-                sections.Add(new TrailSection
-                {
-                    BasePosition = basePoint.position,
-                    TipPosition = tipPoint.position,
-                    TimeCreated = Time.time
-                });
+                sections.Add(new TrailSection { BasePosition = basePoint.position, TipPosition = tipPoint.position, TimeCreated = Time.time });
             }
         }
 
-        while (sections.Count > 0 && Time.time > sections[0].TimeCreated + trailDuration)
-        {
-            sections.RemoveAt(0);
-        }
-
-        while (sections.Count > maxFrames)
-        {
-            sections.RemoveAt(0);
-        }
+        while (sections.Count > 0 && Time.time > sections[0].TimeCreated + trailDuration) sections.RemoveAt(0);
+        while (sections.Count > maxFrames) sections.RemoveAt(0);
 
         UpdateMesh();
     }
@@ -171,7 +185,11 @@ public class ProceduralWeaponTrail : MonoBehaviour
                 uvs[vertexCount] = new Vector2(u, 0f);
                 uvs[vertexCount + 1] = new Vector2(u, 1f);
 
-                Color fadeColor = new Color(1f, 1f, 1f, u);
+                // AAA FIX: Set Vertex Color to pure white, but keep the Alpha fade so the tail still vanishes. 
+                // The shader will multiply this transparent white by the brilliant HDR color we pushed to the GPU!
+                Color fadeColor = Color.white;
+                fadeColor.a = u;
+
                 colors[vertexCount] = fadeColor;
                 colors[vertexCount + 1] = fadeColor;
 
@@ -216,7 +234,6 @@ public class ProceduralWeaponTrail : MonoBehaviour
         Vector3 b = p2 - p0;
         Vector3 c = 2f * p0 - 5f * p1 + 4f * p2 - p3;
         Vector3 d = -p0 + 3f * p1 - 3f * p2 + p3;
-
         return 0.5f * (a + (b * t) + (c * t * t) + (d * t * t * t));
     }
 }

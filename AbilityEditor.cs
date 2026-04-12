@@ -20,12 +20,12 @@ public class AbilityEditor : Editor
     private readonly string[] castingProps = { "showCastBar", "canMoveWhileCasting", "castTime", "triggersGlobalCooldown", "telegraphDuration", "telegraphAnimationTrigger", "attackStyleIndex", "overrideTriggerName", "movementLockDuration", "randomizeAttackStyle", "maxRandomVariants" };
     private readonly string[] comboProps = { "nextComboLink", "comboWindow", "bypassGcdOnCombo" }; 
     
-    // AAA UPDATE: Added hitboxScaleCurve
     private readonly string[] payloadProps = { "projectilePrefab", "projectileSpawnDelay", "piercesEnemies", "useCoroutineForProjectiles", "projectileCount", "burstDelay", "spreadAngle", "attackBoxSize", "attackBoxCenter", "hitboxOpenDelay", "hitboxCloseDelay", "useDynamicHitbox", "endAttackBoxSize", "endAttackBoxCenter", "hitboxScaleCurve", "aoeRadius", "placementPrefab", "channeledBeamPrefab", "channeledBeamAnchor", "manaDrain", "tickRate" };
 
+    // AAA UPDATE: Added trail color overrides here
     private readonly string[] visualProps = { 
         "targetingReticleOverride", "castingVFX", "castingVFXAnchor", "castingVFXPositionOffset", "castingVFXRotationOffset", "attachCastingVFX", 
-        "castVFX", "castVFXAnchor", "castVFXPositionOffset", "castVFXRotationOffset", "attachCastVFX", "castVFXDelay", "styleVFXOverrides", 
+        "castVFX", "castVFXAnchor", "castVFXPositionOffset", "castVFXRotationOffset", "attachCastVFX", "castVFXDelay", "overrideWeaponTrailColor", "weaponTrailColor", "styleVFXOverrides", 
         "hitVFX", "hitVFXPositionOffset", "hitVFXRotationOffset", 
         "windupSound", "castSound", "impactSound", "voiceEffort", 
         "screenShakeIntensity", "screenShakeDuration", "screenShakeDelay", "screenShakeEpicenter" 

@@ -266,7 +266,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         LastExecutionTimeMs = (float)_perfWatch.Elapsed.TotalMilliseconds;
     }
 
-    // --- OPTIMIZED UI CHECK ---
     private bool IsPointerOverBlockingUI()
     {
         if (!EventSystem.current.IsPointerOverGameObject()) return false;
@@ -276,7 +275,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
             position = Input.mousePosition
         };
 
-        // Clear the static list instead of creating a new one (Zero Garbage)
         uiRaycastResults.Clear();
         EventSystem.current.RaycastAll(pointerData, uiRaycastResults);
 
@@ -300,7 +298,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         ApplyGenericHeadLook();
     }
 
-    // --- OPTIMIZED HEAD LOOK RAYCAST ---
     private void UpdateHeadLookLogic()
     {
         if (mainCamera == null) return;
@@ -314,7 +311,6 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         }
         else
         {
-            // Only raycast the terrain a few times a second, not every frame. Use cached position between frames.
             if (Time.time >= lastHeadLookRaycastTime + HEAD_LOOK_RAYCAST_COOLDOWN)
             {
                 lastHeadLookRaycastTime = Time.time;
@@ -333,7 +329,10 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
         CurrentLookTarget = targetLookPos;
         CurrentHeadLookPosition = Vector3.Lerp(CurrentHeadLookPosition, CurrentLookTarget, Time.deltaTime * headLookSpeed);
 
-        float targetWeight = (isDodging || (myHealth != null && myHealth.isDowned)) ? 0f : headLookWeight;
+        // --- AAA FIX: Check if an attack is executing and smoothly drop the head look weight to 0 ---
+        bool isAttacking = abilityHolder != null && abilityHolder.IsExecutingAttack;
+        float targetWeight = (isDodging || (myHealth != null && myHealth.isDowned) || isAttacking) ? 0f : headLookWeight;
+
         CurrentHeadLookWeight = Mathf.Lerp(CurrentHeadLookWeight, targetWeight, Time.deltaTime * headWeightBlendSpeed);
     }
 
@@ -419,21 +418,19 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
                 {
                     navMeshAgent.stoppingDistance = 0f;
                     navMeshAgent.SetDestination(hitPoint);
-                    lastPathCalcTime = Time.time; // Reset path calc timer on initial click
+                    lastPathCalcTime = Time.time;
                 }
                 clickLockoutFrames = 2;
             }
         }
     }
 
-    // --- OPTIMIZED HOLD MOVEMENT ---
     private void HandleHoldMovement()
     {
         if (myHealth != null && myHealth.isDowned) return;
         if (clickLockoutFrames > 0) return;
         if (Input.GetKey(KeyCode.LeftControl)) return;
 
-        // ONLY allow NavMesh recalculation 10 times a second, NOT 140 times a second.
         if (Time.time < lastPathCalcTime + PATH_CALC_COOLDOWN) return;
 
         if (abilityHolder != null) abilityHolder.CancelCast(true);
@@ -453,7 +450,7 @@ public class PlayerMovement : MonoBehaviour, IMovementHandler
                 {
                     navMeshAgent.stoppingDistance = 0f;
                     navMeshAgent.SetDestination(hit.point);
-                    lastPathCalcTime = Time.time; // Set the cooldown timestamp
+                    lastPathCalcTime = Time.time;
                 }
             }
         }

@@ -11,7 +11,6 @@ public class AnimationEventReceiver : MonoBehaviour
 
     void Awake()
     {
-        // 1. Try to find the master CharacterRoot script to search the entire prefab
         CharacterRoot charRoot = GetComponentInParent<CharacterRoot>();
 
         if (charRoot != null)
@@ -23,7 +22,6 @@ public class AnimationEventReceiver : MonoBehaviour
         }
         else
         {
-            // 2. Fallback: Search up, then search the absolute root of this object tree
             Transform entityRoot = transform.root;
 
             playerAbilityHolder = GetComponentInParent<PlayerAbilityHolder>() ?? entityRoot.GetComponentInChildren<PlayerAbilityHolder>(true);
@@ -83,8 +81,6 @@ public class AnimationEventReceiver : MonoBehaviour
         if (footstepController != null) footstepController.PlayFootstep();
     }
 
-    // --- AAA WEAPON TRAIL LINKS ---
-
     private ProceduralWeaponTrail[] GetTrails()
     {
         Transform searchRoot = transform;
@@ -99,12 +95,8 @@ public class AnimationEventReceiver : MonoBehaviour
             searchRoot = transform.root;
         }
 
-        // AAA FIX: Search the absolute root of the character. 
-        // Passing 'false' ensures we ONLY grab trails on currently active meshes (weapons in hands),
-        // completely ignoring any inactive weapons hidden in the backpack!
         ProceduralWeaponTrail[] trails = searchRoot.GetComponentsInChildren<ProceduralWeaponTrail>(false);
 
-        // Absolute fallback just in case the weapon trail component itself was manually disabled
         if (trails == null || trails.Length == 0)
         {
             trails = searchRoot.GetComponentsInChildren<ProceduralWeaponTrail>(true);
@@ -117,11 +109,16 @@ public class AnimationEventReceiver : MonoBehaviour
     {
         cachedTrails = GetTrails();
 
+        // Query the active ability holder for the correct color logic based on the active skill
+        Color? activeColor = null;
+        if (playerAbilityHolder != null) activeColor = playerAbilityHolder.GetActiveTrailColor();
+        else if (enemyAbilityHolder != null) activeColor = enemyAbilityHolder.GetActiveTrailColor();
+
         if (cachedTrails != null && cachedTrails.Length > 0)
         {
             foreach (var trail in cachedTrails)
             {
-                if (trail != null) trail.StartTrail();
+                if (trail != null) trail.StartTrail(activeColor);
             }
         }
         else
@@ -141,7 +138,6 @@ public class AnimationEventReceiver : MonoBehaviour
         }
         else
         {
-            // Fallback lookup
             cachedTrails = GetTrails();
             if (cachedTrails != null)
             {

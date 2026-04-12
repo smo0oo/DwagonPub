@@ -155,6 +155,11 @@ public class Ability : ScriptableObject
     public bool attachCastVFX = true;
     public float castVFXDelay = 0f;
 
+    [Header("Weapon Trail Override (AAA)")]
+    [Tooltip("If true, the procedural weapon trail will be recolored during this attack.")]
+    public bool overrideWeaponTrailColor = false;
+    [ColorUsage(true, true)] public Color weaponTrailColor = Color.white;
+
     [Header("Attack Style VFX Overrides")]
     public List<StyleVFXOverride> styleVFXOverrides = new List<StyleVFXOverride>();
 
@@ -198,4 +203,9 @@ public struct StyleVFXOverride
     [Tooltip("The exact string name of the exposed Vector2 property in your VFX Graph (e.g., 'CustomData', 'Scale').")]
     public string propertyName;
     public Vector2 customData;
+
+    [Header("Weapon Trail")]
+    [Tooltip("If true, overrides the base ability weapon trail color just for this combo swing.")]
+    public bool overrideTrailColor;
+    [ColorUsage(true, true)] public Color trailColor;
 }

@@ -104,6 +104,8 @@ public class PlayerAbilityHolder : MonoBehaviour
     public bool IsOnGlobalCooldown() => Time.time < globalCooldownTimer;
     public bool IsAnimationLocked => isAnimationLockedInternal;
 
+    public bool IsExecutingAttack => IsCasting || activeMeleeCoroutine != null || activeProjectileCoroutine != null || activeLockCoroutine != null || ActiveBeam != null;
+
     public bool IsActivityLocked()
     {
         if (isAnimationLockedInternal) return true;
@@ -1001,4 +1003,27 @@ public class PlayerAbilityHolder : MonoBehaviour
     }
 
     public bool IsCorrectWeaponEquipped(List<ItemWeaponStats.WeaponCategory> categories) { if (playerEquipment == null) return false; if (categories == null || categories.Count == 0) return false; if (playerEquipment.equippedItems.TryGetValue(EquipmentType.RightHand, out var rightHandItem) && rightHandItem?.itemData?.stats is ItemWeaponStats rightWeapon && categories.Contains(rightWeapon.weaponCategory)) return true; if (playerEquipment.equippedItems.TryGetValue(EquipmentType.LeftHand, out var leftHandItem) && leftHandItem?.itemData?.stats is ItemWeaponStats leftWeapon && categories.Contains(leftWeapon.weaponCategory)) return true; return false; }
+
+    public Color? GetActiveTrailColor()
+    {
+        if (currentExecutingAbility == null) return null;
+
+        Color? returnColor = null;
+
+        if (currentExecutingAbility.overrideWeaponTrailColor)
+        {
+            returnColor = currentExecutingAbility.weaponTrailColor;
+        }
+
+        if (currentExecutingAbility.styleVFXOverrides != null && currentStyleIndex < currentExecutingAbility.styleVFXOverrides.Count)
+        {
+            var styleOverride = currentExecutingAbility.styleVFXOverrides[currentStyleIndex];
+            if (styleOverride.overrideTrailColor)
+            {
+                returnColor = styleOverride.trailColor;
+            }
+        }
+
+        return returnColor;
+    }
 }
